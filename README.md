@@ -21,6 +21,7 @@ In a hurry? [steps.md](steps.md) is the same end-to-end run as commands only.
   - [Choose Connected or Disconnected](#choose-connected-or-disconnected)
   - [Setup Bare Metal Host](#setup-bare-metal-host-1)
   - [Setup Mirror Registry (disconnected only)](#setup-mirror-registry-disconnected-only)
+  - [Setup MinIO (disconnected only)](#setup-minio-disconnected-only)
   - [Setup Bastion VM (optional)](#setup-bastion-vm-optional)
   - [Choose the Hub's PV Storage](#choose-the-hubs-pv-storage)
   - [Setup Hub Cluster](#setup-hub-cluster)
@@ -459,6 +460,77 @@ ssh root@192.168.122.22 'find /root/mirror/oc-mirror-output -type d -name cluste
 That last directory holds the `ImageDigestMirrorSet` / `ImageTagMirrorSet` /
 `CatalogSource` the hub install stages and applies as day-2 resources; the hub
 install fails with a clear message if it is not there yet.
+
+### Setup MinIO (disconnected only)
+
+**Skip this section entirely when `disconnected_install: false`.** A connected
+lab points OADP at a real S3 bucket; this is its stand-in for one.
+
+OADP has to write the control-plane backup somewhere S3-shaped, and a
+disconnected lab has no route to AWS. This builds a MinIO server on the lab
+network and creates the bucket for OADP to target. Run it **after**
+`setup_bm_host.yaml` - it needs the helper's DNS to resolve
+`minio.<hub_domain>`:
+
+```bash
+ansible-playbook -i inventory/hosts setup_minio.yaml --ask-vault-pass
+```
+
+Like the mirror registry it refuses to run unless `disconnected_install: true`,
+and nothing in the connected flow imports it.
+
+| Tag | Step |
+| --- | --- |
+| `minio-vm` | creates the `minio` VM (`.23`) - a 100G sparse disk expanded from the RHEL9 base image, then defined and booted |
+| `rhsm` | registers it with subscription-manager (hence `org_id` / `activation_key`) |
+| `minio` | installs the MinIO server and the `mc` client, runs MinIO under systemd as `minio-user`, waits for `/minio/health/live`, and creates `minio_bucket_name` |
+
+Before running it:
+
+- `minio_root_user` and `minio_root_password` must be in `vault.yaml` - the
+  playbook asserts both, alongside `org_id` / `activation_key`.
+- `minio_bucket_name` (`adp-backup-disconnected`) is in the START HERE block at
+  the top of `vars.yaml`; the VM's size, memory and ports are in the
+  `setup-minio-vm / setup-minio` block at the bottom.
+
+It ends up serving the S3 API on `http://minio.<hub_domain>:9000`, with the
+console on `:9001`, holding the bucket named by `minio_bucket_name` - kept
+distinct from `oadp_bucket_name` so that switching between the real S3 bucket
+and this one is a visible choice. The disconnected workers can reach it: the
+NAT and egress rules that cut them off match "not to `192.168.122.0/24`", so
+MinIO stays reachable exactly like the mirror registry does.
+
+**Pointing OADP at it is still a manual step.** `setup_oadp.yaml` renders the
+`BackupStorageLocation` for AWS - `oadp_bucket_name`, `oadp_aws_region` and the
+`cloud-credentials` secret, with no `s3Url` - so it targets real S3 as written.
+To back up to MinIO instead, give that backup location MinIO's endpoint and
+root credentials by hand:
+
+```yaml
+    - name: default
+      velero:
+        provider: aws
+        objectStorage:
+          bucket: adp-backup-disconnected     # minio_bucket_name
+          prefix: hcp-backup                  # oadp_backup_prefix
+        config:
+          region: us-east-1                   # MinIO signs with this unless told otherwise
+          s3Url: http://minio.hub.mylab.com:9000
+          s3ForcePathStyle: "true"
+          profile: default
+```
+
+and put `minio_root_user` / `minio_root_password` in the `cloud-credentials`
+secret in place of the AWS keys.
+
+> **The same server can back more than OADP.** The OpenShift observability
+> stack - Loki for logs and network flows, Tempo for traces - is also plain S3,
+> and the
+> [`minio_backends`](https://github.com/sadiquepp/openshift/tree/main/observability/ansible/roles/minio_backends)
+> role in `sadiquepp/openshift` provisions its buckets and least-privilege users
+> on an existing MinIO like this one, as a drop-in replacement for its AWS
+> phase. See
+> [observability/ansible/README.md](https://github.com/sadiquepp/openshift/blob/main/observability/ansible/README.md#disconnected-minio-instead-of-aws-s3).
 
 ### Setup Bastion VM (optional)
 
@@ -2208,6 +2280,7 @@ delegates.
 | ----------------------------- | --------------------------------------------- |
 | `setup_bm_host.yaml`          | Prepare bare metal, create helper VM (DNS/LB) |
 | `setup_mirror_registry.yaml`  | Build the mirror registry VM and fill it with oc-mirror - required first when `disconnected_install: true`, refuses to run otherwise |
+| `setup_minio.yaml`            | Build the MinIO VM and create OADP's bucket - the disconnected lab's stand-in for an S3 bucket, refuses to run unless `disconnected_install: true` |
 | `setup_bastion.yaml`          | Build the 256G bastion VM for container image builds and CVE scanning - optional, nothing else depends on it |
 | `setup_hub_cluster.yaml`      | Deploy the hub (OCP + day-2 operators): hub1, or hubd when `disconnected_install: true` |
 | `setup_hub_cluster2.yaml`     | Deploy the DR replacement hub: hub2, or hub2d when `disconnected_install: true` |
@@ -2235,6 +2308,8 @@ delegates.
 | `setup-lvm-storage` | Installs LVM-Storage (operator + `LVMCluster`) and waits for the `lvms-vg1` default StorageClass. Run by the hub builds (tag `lvm`, outside `acm`) and the SNO's `snostorage` step; skipped when `use_lvm_storage: false` |
 | `setup-hub-acm` | Installs ACM, MetalLB, and OADP operator subscriptions, and creates one single-address MetalLB `IPAddressPool` + `L2Advertisement` per hosted cluster |
 | `setup-oadp`    | Creates the cloud-credentials secret and DataProtectionApplication CR; with `oadp_backup_method=csi` also labels the VolumeSnapshotClass Velero selects CSI snapshot classes by |
+| `setup-minio-vm` | Creates the `minio` VM: expands the prepared RHEL 9 base image into a 100G sparse qcow2, grows its root partition, imports it and reserves its address |
+| `setup-minio`   | The in-guest half: installs the MinIO server and `mc`, runs MinIO under systemd as `minio-user`, waits for its health endpoint and creates `minio_bucket_name` |
 | `setup-bastion-vm` | Creates the bastion VM: preflights free space where the disk will live, expands the prepared RHEL 9 base image into a 256G sparse qcow2, imports it, then discovers its DHCP address and adds it to the in-memory inventory (no reservation, unlike every other VM in this lab) |
 | `setup-bastion` | The in-guest half: build and scan tooling (podman/buildah/skopeo, grype with its db primed, optional trivy), `oc`, the mirror registry's CA and login, and a clone of `sadiquepp/openshift` under `/root/work` |
 | `setup-ceph-vm` | Creates the ceph1-3 + cephadmin VMs and attaches the raw OSD disks |
