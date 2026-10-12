@@ -64,8 +64,8 @@
            'mem_raw': item.status.allocatable.memory,
            'arch': item.status.nodeInfo.architecture | default('unknown'),
            'schedulable': not (item.spec.unschedulable | default(false) | bool),
-           'ready': rhoai_cap_ready == 'True',
-           'usable': (not (item.spec.unschedulable | default(false) | bool)) and rhoai_cap_ready == 'True',
+           'ready': rhoai_cap_ready | bool,
+           'usable': (not (item.spec.unschedulable | default(false) | bool)) and (rhoai_cap_ready | bool),
            'why': item.metadata.name ~ ' is '
                   ~ (rhoai_cap_reasons | join(' and ') | default('fine', true)),
          }] }}
@@ -103,13 +103,23 @@
     # string to a list.
     rhoai_cap_reasons: >-
       {{ (['cordoned'] if item.spec.unschedulable | default(false) | bool else [])
-         + (['Ready=' ~ rhoai_cap_ready] if rhoai_cap_ready != 'True' else []) }}
+         + (['Ready=' ~ rhoai_cap_ready] if not (rhoai_cap_ready | bool) else []) }}
     # 0 for a suffix not in the table, which the assert below turns into a
     # message naming the node rather than a quietly wrong total.
     rhoai_cap_gib_one: >-
       {{ ((item.status.allocatable.memory | regex_replace('[^0-9.].*$', '') | float)
           * (rhoai_cap_units.get(rhoai_cap_mem_sfx, 0) | int)
           / 1073741824) | round(1) }}
+    # The Ready condition's status, as "True" / "False" / "Unknown".
+    #
+    # READ WITH `| bool`, NEVER COMPARED TO THE STRING 'True'. On ansible-core
+    # 2.18 and earlier, a template whose whole value renders True is converted
+    # to a Python bool, so `rhoai_cap_ready == 'True'` is False on exactly the
+    # nodes that are Ready - while `~` still prints it as True, so the error
+    # message reads "master1 is Ready=True" and looks like nonsense. On 2.19
+    # and later it stays a string and the comparison works, which is a good
+    # way to ship a bug that only appears on somebody else's machine.
+    # `| bool` is right on both.
     rhoai_cap_ready: >-
       {{ item.status.conditions | default([], true)
          | selectattr('type', 'eq', 'Ready') | map(attribute='status')

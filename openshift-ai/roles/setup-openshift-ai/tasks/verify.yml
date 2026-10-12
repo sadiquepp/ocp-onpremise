@@ -59,7 +59,7 @@
   ansible.builtin.assert:
     that:
       - rhoai_vf_dsc.stdout_lines | length > 0
-      - rhoai_vf_dsc_fields[1] == 'Ready' or rhoai_vf_dsc_fields[2] == 'True'
+      - rhoai_vf_dsc_fields[1] == 'Ready' or rhoai_vf_dsc_fields[2] | bool
       - rhoai_vf_dsc_fields[3] == 'Managed'
     fail_msg: >-
       DataScienceCluster is
@@ -110,7 +110,10 @@
   ansible.builtin.assert:
     that:
       - rhoai_vf_runtime_image | length > 0
-      - rhoai_vf_isvc_ready == 'True'
+      # | bool, not == 'True': rhoai_vf_isvc_ready comes from a template, and
+      # ansible-core 2.18 and earlier turn a rendered True into a Python bool -
+      # see the comment on rhoai_cap_ready in capacity.yml.
+      - rhoai_vf_isvc_ready | bool
       - "'Running/True' in rhoai_vf_pods"
     fail_msg: >-
       ServingRuntime image '{{ rhoai_vf_runtime_image }}', InferenceService
@@ -142,7 +145,7 @@
     success_msg: >-
       the model answers. /v1/models: {{ rhoai_probe_models }}
       -- asked "{{ rhoai_chatbot_demo_prompt | trim }}", answered:
-      "{{ rhoai_probe_answer | truncate(300) }}"
+      "{{ rhoai_probe_answer | string | truncate(300) }}"
 
 ## ---------------------------------------------------------------------------
 ## 5. the app, through its Route - which is the point of the whole lab

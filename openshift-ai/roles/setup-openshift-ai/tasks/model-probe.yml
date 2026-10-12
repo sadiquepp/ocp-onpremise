@@ -118,14 +118,30 @@
 # A reply that is not JSON at all - an HTML error page from a proxy, or curl's
 # own message - must not take the run down with a templating error, so the
 # parse is guarded rather than assumed.
+#
+# AND THE REPLY MAY ALREADY BE A DICT. rhoai_probe_json holds the model's
+# answer as text, but a set_fact whose whole value renders as something that
+# looks like a Python literal is converted to that type on ansible-core 2.18
+# and earlier - and a JSON object does look like one. So on those versions
+# this is a dict already, while on 2.19 and later it is still a string, and
+# indexing it as a string there fails with "dict object has no element 0".
+# Both are handled; neither is assumed.
 - name: Read the reply out of it
   ansible.builtin.set_fact:
     rhoai_probe_answer: >-
-      {{ ((rhoai_probe_json | from_json).choices | default([{}], true))[0].message.content
-         | default('', true) | trim
-         if (rhoai_probe_json | length > 0 and rhoai_probe_json[0] == '{')
-         else '' }}
+      {{ (rhoai_probe_choice.message | default({}, true)).content
+         | default('', true) | string | trim }}
+  vars:
+    rhoai_probe_obj: >-
+      {{ rhoai_probe_json if rhoai_probe_json is mapping
+         else (rhoai_probe_json | from_json
+               if (rhoai_probe_json | string | trim) is match('^\{')
+               else {}) }}
+    rhoai_probe_choice: >-
+      {{ rhoai_probe_obj.choices | default([], true) | first | default({}, true) }}
 
+# | string before | length, because an answer of "42" or "True" would itself
+# be native-converted to an int or a bool, which have no length.
 - name: Judge it
   ansible.builtin.set_fact:
-    rhoai_probe_ok: "{{ rhoai_probe_answer | length > 0 }}"
+    rhoai_probe_ok: "{{ rhoai_probe_answer | string | length > 0 }}"

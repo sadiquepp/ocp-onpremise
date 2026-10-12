@@ -16,6 +16,7 @@ ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml --tags preflight 
 
 - [0. "Attempting to decrypt but no vault secrets found"](#0-attempting-to-decrypt-but-no-vault-secrets-found)
 - [0b. "No node ... can run a pod" on a healthy cluster](#0b-no-node--can-run-a-pod-on-a-healthy-cluster)
+- [0c. A message that contradicts itself ("is Ready=True" in a failure)](#0c-a-message-that-contradicts-itself-is-readytrue-in-a-failure)
 - [1. Operands sit Pending for ever](#1-operands-sit-pending-for-ever)
 - [2. The operator installs, and nothing happens](#2-the-operator-installs-and-nothing-happens)
 - [3. The DSCInitialization goes to Error about Service Mesh](#3-the-dscinitialization-goes-to-error-about-service-mesh)
@@ -115,6 +116,52 @@ capacity:  5 of 6 node(s) can run a pod, with 157.5 allocatable cores
            and 219.5 GiB allocatable memory in total (amd64) [...]
            Not counted: worker3.hub.mylab.com.
 ```
+
+## 0c. A message that contradicts itself ("is Ready=True" in a failure)
+
+**Looks like**: a failure whose own text says everything is fine:
+
+```
+fatal: [localhost]: FAILED! => "No node on hub can run a pod (6 node(s) seen):
+  master1 is Ready=True; master2 is Ready=True; [...]"
+```
+
+**If you see this, update this directory** - it is fixed in the repository.
+
+**The cause is worth knowing**, because it can be written again anywhere in
+this repository. On **ansible-core 2.18 and earlier**, a template whose whole
+value renders as something that looks like a Python literal is converted to
+that type. So this:
+
+```yaml
+rhoai_cap_ready: "{{ ...status of the Ready condition... }}"   # renders True
+```
+
+is a Python **bool** on 2.18, and a **string** on 2.19 and later. Which means
+`rhoai_cap_ready == 'True'` is False on exactly the nodes that are Ready -
+while `~` still prints it as `True`, so the message reads like nonsense.
+
+The same conversion turns a rendered JSON object back into a dict, so
+indexing the model's reply as a string fails with "dict object has no element
+0" on 2.18 and works on 2.21.
+
+Two rules, for anything set by a `set_fact` or a task-level `vars` rather than
+read from a registered `.stdout`:
+
+| Instead of | Write |
+| --- | --- |
+| `myvar == 'True'` | `myvar \| bool` |
+| `myvar \| length` on text that might be `42` or `True` | `myvar \| string \| length` |
+| `myjson[0] == '{'` to test for JSON | `myjson is mapping` first, then `\| from_json` |
+
+A value read straight off a registered result - `result.stdout`,
+`result.stdout_lines` - is a genuine string and needs none of this. So is a
+list element: a template rendering a list keeps its elements' types.
+
+`roles/setup-openshift-ai/tasks/capacity.yml` and `tasks/model-probe.yml`
+carry comments at the places this bit, and the repository's offline test suite
+now runs on both an older and a newer ansible-core so a difference between
+them cannot hide again.
 
 ## 1. Operands sit Pending for ever
 
