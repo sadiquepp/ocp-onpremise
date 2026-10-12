@@ -63,17 +63,26 @@ because each is a way this install fails late and confusingly.
 
 ### Is the cluster reachable, and are you cluster-admin
 
+Reachable, and which OpenShift this is:
+
 ```bash
 oc get clusterversion version -o jsonpath='{.status.desired.version}'; echo
+```
+
+Then the four things the lab has to be allowed to create. These are the ones
+the preflight phase asks about, and **each prints `yes` or `no`**:
+
+```bash
 oc auth can-i create subscriptions.operators.coreos.com --all-namespaces
 oc auth can-i create operatorgroups.operators.coreos.com --all-namespaces
+oc auth can-i create namespaces
 oc auth can-i create customresourcedefinitions.apiextensions.k8s.io
 ```
 
 All four want `yes`. Installing an operator writes a cluster-scoped
 OperatorGroup and the DataScienceCluster is cluster-scoped too, so a
-kubeconfig that is only a project admin gets through the reads and then fails
-half way.
+kubeconfig that is only a project admin gets through every read in this step
+and then fails half way through the next one.
 
 ### Is OpenShift AI in the catalog, and on what channel
 
