@@ -10,47 +10,159 @@
 # and then leave half the operands Pending - which looks like a broken
 # operator and is not.
 #
-# So: add up what the schedulable nodes say is allocatable, compare against
-# rhoai_min_cpu_cores / rhoai_min_memory_gib, and say what was found either
-# way. Allocatable, not capacity: what is already running on the cluster is
-# NOT subtracted, so this is a floor, not a promise.
+# So: add up what the nodes that can actually run a pod say is allocatable,
+# compare against rhoai_min_cpu_cores / rhoai_min_memory_gib, and say what was
+# found either way. Allocatable, not capacity: what is already running on the
+# cluster is NOT subtracted, so this is a floor, not a promise.
+#
+# WHY THIS READS JSON RATHER THAN USING A JSONPATH FILTER. The obvious
+# expression - .items[?(@.spec.unschedulable!=true)] - matches NOTHING, on
+# every cluster. A schedulable node has no spec.unschedulable key at all (its
+# spec is often literally `{}`), and a kubectl jsonpath filter whose left-hand
+# side resolves to no value skips that item rather than treating it as "not
+# true". So the filter excludes exactly the nodes it is meant to keep, and the
+# phase failed with "No schedulable node" on a healthy six-node hub. Reading
+# the nodes as JSON and deciding here costs one `| from_json` and makes
+# "schedulable" and "Ready" testable.
 #
 # Sets:
-#   rhoai_cap_cores, rhoai_cap_gib, rhoai_cap_ok, rhoai_cap_summary
+#   rhoai_cap_nodes    one dict per node: name, cores, gib, arch,
+#                      schedulable, ready, usable
+#   rhoai_cap_usable   the subset that can run a pod
+#   rhoai_cap_cores, rhoai_cap_gib, rhoai_cap_arches
+#   rhoai_cap_ok, rhoai_cap_summary
 #   rhoai_cpu_flags_known, rhoai_has_avx512, rhoai_cpu_summary
 
-- name: Read every schedulable node's allocatable CPU and memory
+- name: Read the nodes
   ansible.builtin.command:
-    cmd: >-
-      oc get nodes
-      -o 'jsonpath={range .items[?(@.spec.unschedulable!=true)]}{.metadata.name}{" "}{.status.allocatable.cpu}{" "}{.status.allocatable.memory}{" "}{.status.nodeInfo.architecture}{"\n"}{end}'
-  register: rhoai_cap_nodes
+    cmd: oc get nodes -o json
+  register: rhoai_cap_json
   changed_when: false
+  retries: 3
+  delay: 5
+  until: rhoai_cap_json.rc == 0
 
-- name: Fail if no node is schedulable
+- name: Start with no nodes
+  ansible.builtin.set_fact:
+    rhoai_cap_nodes: []
+
+# One pass per node, so a node with a shape this does not expect names itself
+# in the error instead of taking the whole expression down.
+#
+# cpu is either whole cores ("32") or millicores ("31500m"); memory is a
+# Kubernetes quantity, in Ki on every kubelet but run through human_to_bytes
+# so a Mi or Gi one would still be right. A node that has been cordoned has
+# spec.unschedulable: true; one that is NotReady has allocatable capacity it
+# cannot lend anybody, so neither counts.
+- name: Note what each node has, and whether it can run a pod
+  ansible.builtin.set_fact:
+    rhoai_cap_nodes: >-
+      {{ rhoai_cap_nodes + [{
+           'name': item.metadata.name,
+           'cores': rhoai_cap_cpu | float,
+           'gib': rhoai_cap_gib_one | float,
+           'mem_raw': item.status.allocatable.memory,
+           'arch': item.status.nodeInfo.architecture | default('unknown'),
+           'schedulable': not (item.spec.unschedulable | default(false) | bool),
+           'ready': rhoai_cap_ready == 'True',
+           'usable': (not (item.spec.unschedulable | default(false) | bool)) and rhoai_cap_ready == 'True',
+           'why': item.metadata.name ~ ' is '
+                  ~ (rhoai_cap_reasons | join(' and ') | default('fine', true)),
+         }] }}
+  loop: "{{ (rhoai_cap_json.stdout | from_json)['items'] }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  vars:
+    rhoai_cap_cpu: >-
+      {{ (item.status.allocatable.cpu | regex_replace('m$', '') | float / 1000)
+         if item.status.allocatable.cpu is search('m$')
+         else item.status.allocatable.cpu | float }}
+    # Every suffix a Kubernetes quantity can carry, done here rather than with
+    # the human_to_bytes filter, because the two disagree: Kubernetes means
+    # 1000 by 'K' and 1024 by 'Ki', while human_to_bytes reads a bare 'K' as
+    # 1024 and rejects 'Ki' outright. A node's allocatable memory is Ki on
+    # every kubelet, so the filter would have been wrong only on a value
+    # Kubernetes does not emit - but silently, and by 2.4%.
+    rhoai_cap_units:
+      '': 1
+      B: 1
+      K: 1000
+      Ki: 1024
+      M: 1000000
+      Mi: 1048576
+      G: 1000000000
+      Gi: 1073741824
+      T: 1000000000000
+      Ti: 1099511627776
+      P: 1000000000000000
+      Pi: 1125899906842624
+    rhoai_cap_mem_sfx: "{{ item.status.allocatable.memory | regex_replace('^[0-9.]+', '') }}"
+    # Why this node does not count, if it does not. Its own var because the
+    # list has to be complete before `join` is applied to it - inline, the
+    # filter binds to the last operand only and Jinja then refuses to add a
+    # string to a list.
+    rhoai_cap_reasons: >-
+      {{ (['cordoned'] if item.spec.unschedulable | default(false) | bool else [])
+         + (['Ready=' ~ rhoai_cap_ready] if rhoai_cap_ready != 'True' else []) }}
+    # 0 for a suffix not in the table, which the assert below turns into a
+    # message naming the node rather than a quietly wrong total.
+    rhoai_cap_gib_one: >-
+      {{ ((item.status.allocatable.memory | regex_replace('[^0-9.].*$', '') | float)
+          * (rhoai_cap_units.get(rhoai_cap_mem_sfx, 0) | int)
+          / 1073741824) | round(1) }}
+    rhoai_cap_ready: >-
+      {{ item.status.conditions | default([], true)
+         | selectattr('type', 'eq', 'Ready') | map(attribute='status')
+         | first | default('Unknown', true) }}
+
+- name: Fail if a node reports memory in units this does not know
   ansible.builtin.assert:
-    that: rhoai_cap_nodes.stdout_lines | length > 0
+    that: rhoai_cap_nodes | selectattr('gib', 'le', 0.0) | list | length == 0
     fail_msg: >-
-      No schedulable node on {{ rhoai_c.name }}. `oc get nodes` first - every
+      Could not read the allocatable memory of
+      {{ rhoai_cap_nodes | selectattr('gib', 'le', 0.0)
+         | map(attribute='name') | join(', ') }}:
+      {{ rhoai_cap_nodes | selectattr('gib', 'le', 0.0)
+         | map(attribute='mem_raw') | join(', ') }}.
+      A Kubernetes quantity's suffix should be one of
+      {{ rhoai_cap_units.keys() | reject('eq', '') | join(', ') }} - add it to
+      rhoai_cap_units in roles/setup-openshift-ai/tasks/capacity.yml if
+      something new has turned up.
+  vars:
+    rhoai_cap_units:
+      B: 1
+      K: 1000
+      Ki: 1024
+      M: 1000000
+      Mi: 1048576
+      G: 1000000000
+      Gi: 1073741824
+      T: 1000000000000
+      Ti: 1099511627776
+      P: 1000000000000000
+      Pi: 1125899906842624
+
+- name: Keep the ones that can
+  ansible.builtin.set_fact:
+    rhoai_cap_usable: "{{ rhoai_cap_nodes | selectattr('usable') | list }}"
+
+# Named, with the reason, because "No schedulable node" on a cluster whose
+# nodes are plainly there is not a diagnosis.
+- name: Fail if no node can run a pod
+  ansible.builtin.assert:
+    that: rhoai_cap_usable | length > 0
+    fail_msg: >-
+      No node on {{ rhoai_c.name }} can run a pod
+      ({{ rhoai_cap_nodes | length }} node(s) seen):
+      {{ rhoai_cap_nodes | rejectattr('usable') | map(attribute='why') | join('; ') }}.
+      `oc get nodes`, then `oc adm uncordon <node>` for a cordoned one. Every
       pod this lab creates would stay Pending.
 
-# Allocatable CPU is either plain cores ("8") or millicores ("7500m"), and
-# allocatable memory is a Kubernetes quantity in Ki. Normalise both to cores
-# and GiB.
 - name: Add it up
   ansible.builtin.set_fact:
-    rhoai_cap_cores: >-
-      {{ (rhoai_cap_nodes.stdout_lines
-          | map('split') | map(attribute=1)
-          | map('regex_replace', '^(.*)m$', '\1e-3')
-          | map('float') | sum) | round(1) }}
-    rhoai_cap_gib: >-
-      {{ (rhoai_cap_nodes.stdout_lines
-          | map('split') | map(attribute=2)
-          | map('regex_replace', 'Ki$', '')
-          | map('int') | sum / 1048576) | round(1) }}
-    rhoai_cap_arches: >-
-      {{ rhoai_cap_nodes.stdout_lines | map('split') | map(attribute=3) | unique | list }}
+    rhoai_cap_cores: "{{ (rhoai_cap_usable | map(attribute='cores') | map('float') | sum) | round(1) }}"
+    rhoai_cap_gib: "{{ (rhoai_cap_usable | map(attribute='gib') | map('float') | sum) | round(1) }}"
+    rhoai_cap_arches: "{{ rhoai_cap_usable | map(attribute='arch') | unique | list }}"
 
 - name: Judge it
   ansible.builtin.set_fact:
@@ -58,22 +170,25 @@
       {{ (rhoai_cap_cores | float) >= (rhoai_min_cpu_cores | float)
          and (rhoai_cap_gib | float) >= (rhoai_min_memory_gib | float) }}
     rhoai_cap_summary: >-
-      {{ rhoai_cap_nodes.stdout_lines | length }} schedulable node(s),
-      {{ rhoai_cap_cores }} allocatable cores and {{ rhoai_cap_gib }} GiB
-      allocatable memory in total ({{ rhoai_cap_arches | join(', ') }}); this
-      lab wants at least {{ rhoai_min_cpu_cores }} cores and
-      {{ rhoai_min_memory_gib }} GiB.
+      {{ rhoai_cap_usable | length }} of {{ rhoai_cap_nodes | length }} node(s)
+      can run a pod, with {{ rhoai_cap_cores }} allocatable cores and
+      {{ rhoai_cap_gib }} GiB allocatable memory in total
+      ({{ rhoai_cap_arches | join(', ') }}); this lab wants at least
+      {{ rhoai_min_cpu_cores }} cores and {{ rhoai_min_memory_gib }} GiB.{{
+        ' Not counted: '
+        ~ (rhoai_cap_nodes | rejectattr('usable') | map(attribute='name') | join(', '))
+        ~ '.' if rhoai_cap_usable | length < rhoai_cap_nodes | length else '' }}
 
 # vLLM's CPU backend on x86-64 is built for AVX-512; llama.cpp needs nothing
-# beyond AVX2. Read the flags off one node rather than guessing from the
-# instance type. `oc debug node/` wants cluster-admin and a schedulable node,
+# beyond AVX2. Read the flags off a node that can actually run a pod rather
+# than guessing from the instance type. `oc debug node/` wants cluster-admin,
 # and it is the only way to see /proc/cpuinfo without Node Feature Discovery
 # installed - so when it does not work, say the flags are unknown rather than
 # claiming anything about them.
 - name: Read one node's CPU flags
   ansible.builtin.command:
     cmd: >-
-      oc debug node/{{ (rhoai_cap_nodes.stdout_lines | first).split()[0] }}
+      oc debug node/{{ (rhoai_cap_usable | first).name }}
       --quiet -- chroot /host grep -m1 '^flags' /proc/cpuinfo
   register: rhoai_cap_flags
   changed_when: false

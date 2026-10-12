@@ -15,6 +15,7 @@ ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml --tags preflight 
 ## Contents
 
 - [0. "Attempting to decrypt but no vault secrets found"](#0-attempting-to-decrypt-but-no-vault-secrets-found)
+- [0b. "No node ... can run a pod" on a healthy cluster](#0b-no-node--can-run-a-pod-on-a-healthy-cluster)
 - [1. Operands sit Pending for ever](#1-operands-sit-pending-for-ever)
 - [2. The operator installs, and nothing happens](#2-the-operator-installs-and-nothing-happens)
 - [3. The DSCInitialization goes to Error about Service Mesh](#3-the-dscinitialization-goes-to-error-about-service-mesh)
@@ -68,6 +69,51 @@ case:
 ```bash
 ./build-lab.sh --cluster hub --only preflight
 ./build-lab.sh --cluster hub --no-vault --only preflight
+```
+
+## 0b. "No node ... can run a pod" on a healthy cluster
+
+**Looks like**: `preflight` fails although `oc get nodes` shows every node
+`Ready`:
+
+```
+TASK [setup-openshift-ai : Fail if no node is schedulable]
+fatal: [localhost]: FAILED! => "No schedulable node on hub."
+```
+
+**If you are seeing the message above verbatim, update this directory** - that
+wording is from a version with a bug in it, and the fix is in the repository.
+The task filtered the node list with a kubectl jsonpath filter:
+
+```
+.items[?(@.spec.unschedulable!=true)]
+```
+
+which matches **nothing on any cluster**. A schedulable node has no
+`spec.unschedulable` key at all - its `spec` is often literally `{}` - and a
+jsonpath filter whose left-hand side resolves to no value skips that item
+rather than treating it as "not true". So the filter dropped every node it was
+meant to keep. `capacity.yml` now reads `oc get nodes -o json` and decides in
+Ansible.
+
+**If you are on the current version**, the message names each node and why it
+does not count:
+
+```
+No node on hub can run a pod (2 node(s) seen): a is cordoned; b is Ready=Unknown.
+```
+
+- `cordoned` → `oc adm uncordon <node>`
+- `Ready=False` / `Ready=Unknown` → `oc describe node <node>`, and the kubelet
+  on it
+
+A node that is cordoned or NotReady is excluded from the capacity total too,
+and the summary line says which ones:
+
+```
+capacity:  5 of 6 node(s) can run a pod, with 157.5 allocatable cores
+           and 219.5 GiB allocatable memory in total (amd64) [...]
+           Not counted: worker3.hub.mylab.com.
 ```
 
 ## 1. Operands sit Pending for ever

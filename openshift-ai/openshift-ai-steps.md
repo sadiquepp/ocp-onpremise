@@ -118,15 +118,29 @@ model's PVC sits `Pending` for ever and the model pod never starts.
 ### Has the cluster the room, and the right CPU
 
 ```bash
-# allocatable CPU and memory per schedulable node
-oc get nodes -o 'jsonpath={range .items[?(@.spec.unschedulable!=true)]}{.metadata.name}{"\t"}{.status.allocatable.cpu}{"\t"}{.status.allocatable.memory}{"\t"}{.status.nodeInfo.architecture}{"\n"}{end}'
+# allocatable CPU and memory, and whether each node can run a pod at all
+oc get nodes -o custom-columns=\
+'NAME:.metadata.name,CPU:.status.allocatable.cpu,MEM:.status.allocatable.memory,ARCH:.status.nodeInfo.architecture,CORDONED:.spec.unschedulable'
+oc get nodes      # the READY column
 
 # and the CPU's instruction sets, which decide which runtime can work
 oc debug node/"$(oc get nodes -o jsonpath='{.items[0].metadata.name}')" \
   --quiet -- chroot /host grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep -E '^(avx2|avx512f)$'
 ```
 
-The lab's floor is 12 cores and 40 GiB across the cluster. For the CPU flags:
+The lab's floor is 12 cores and 40 GiB across the cluster, counting only
+nodes that are both Ready and not cordoned.
+
+Do **not** try to filter those out in jsonpath. The obvious expression,
+`.items[?(@.spec.unschedulable!=true)]`, matches **nothing on any cluster**: a
+schedulable node has no `spec.unschedulable` key at all - its `spec` is often
+literally `{}` - and a kubectl jsonpath filter whose left-hand side resolves
+to no value skips that item rather than treating it as "not true". So the
+filter drops exactly the nodes it is meant to keep. `custom-columns` prints
+`<none>` for the missing key instead, which is why it is used above; the
+playbook reads `oc get nodes -o json` and decides in Ansible.
+
+For the CPU flags:
 
 | What you see | What it means |
 | --- | --- |
