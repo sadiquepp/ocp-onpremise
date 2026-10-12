@@ -39,6 +39,15 @@ page shows - because an unquoted `<<EOF` expands `$`, backticks and `\` in the
 YAML before `cat` sees them, and reading the markdown would never show it.
 Step 6 needs `<<'EOF'` for exactly that reason.
 
+**Where a manifest carries a value you have to supply, the `oc apply` is a
+step of its own** - steps 1, 2, 3 and 4. Each of those has a line marked
+`# <-`, pointing at something read off your cluster earlier (the operator's
+channel and catalog, the CRD's apiVersion, the StorageClass), and pasting the
+write and the apply together would put the placeholder on the cluster before
+you had looked at it. Where there is nothing to change - steps 6, 7 and 9 -
+the two stay in one block. The test above enforces that split, so it cannot
+quietly erode.
+
 `$KUBECONFIG` matters for the by-hand route: every `oc` below goes wherever it
 points, and on this lab's hypervisor that is usually the hub whether you meant
 it or not. The playbook sets it per run from `rhoai_clusters` and refuses to
@@ -218,6 +227,14 @@ spec:
   sourceNamespace: openshift-marketplace
   installPlanApproval: Automatic
 EOF
+```
+
+**Check the two marked lines before you apply it.** `channel` and `source`
+are what step 0 read off this cluster's catalog, not what is printed here -
+a Subscription on a channel the package does not offer sits there with no
+InstallPlan and nothing much to say about why.
+
+```bash
 oc apply -f "$M/01-operator.yaml"
 ```
 
@@ -307,6 +324,14 @@ spec:
     managementState: Managed
     customCABundle: ""
 EOF
+```
+
+**Check the `apiVersion` before you apply it.** It is whatever the command
+above printed for the installed CRD, which is not necessarily the `v2` shown
+here - and the fields differ between versions, so a stale one is rejected or,
+worse, quietly pruned.
+
+```bash
 oc apply -f "$M/02-dsci.yaml"
 ```
 
@@ -379,13 +404,19 @@ spec:
     trainingoperator:     {managementState: Removed}
     trustyai:             {managementState: Removed}
 EOF
+```
+
+**Check the `apiVersion` and the component list before you apply it.** Both
+come from the command above: use the version it printed, drop any component
+it did not list, and add any it listed that is missing here (`feastoperator`
+and `llamastackoperator` appear in newer releases).
+
+```bash
 oc apply -f "$M/03-dsc.yaml"
 ```
 
-Drop any component from that list that your CRD does not have, and add any it
-has that is missing here (`feastoperator` and `llamastackoperator` appear in
-newer releases). **If a DataScienceCluster already exists**, patch instead -
-leave somebody else's components alone:
+**If a DataScienceCluster already exists**, patch instead - leave somebody
+else's components alone:
 
 ```bash
 oc patch datasciencecluster <name> --type=merge -p '{"spec":{"components":{
@@ -451,6 +482,13 @@ spec:
       storage: 20Gi
   storageClassName: lvms-vg1     # <- from step 0
 EOF
+```
+
+**Check `storageClassName` before you apply it.** It is the default class
+step 0 found - `lvms-vg1` on this lab, something else on yours - and a PVC's
+class cannot be changed afterwards, only deleted and recreated.
+
+```bash
 oc apply -f "$M/10-project.yaml"
 ```
 

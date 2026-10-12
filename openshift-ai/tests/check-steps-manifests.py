@@ -26,18 +26,25 @@ import pathlib, re, subprocess, sys, tempfile, yaml
 HERE = pathlib.Path(__file__).resolve().parent.parent
 md = (HERE / 'openshift-ai-steps.md').read_text()
 
-# every bash block that writes a manifest and applies it
-blocks = re.findall(r'```bash\n(cat > "\$M/[^\n]+\n.*?\nEOF\noc apply -f "\$M/[^\n]+"\n)```',
-                    md, re.S)
+# Every block that writes a manifest. The `oc apply` may be in the same block,
+# or - where the reader has to edit a value first, so pasting both at once
+# would apply the placeholder - in a block of its own further down. Both
+# shapes are accepted; what is checked is that an apply for the file exists
+# somewhere after it.
+blocks = re.findall(r'```bash\n(cat > "\$M/[^\n]+\n.*?\nEOF\n)', md, re.S)
 if not blocks:
-    sys.exit("no write-and-apply blocks found - has the format changed?")
-print(f"found {len(blocks)} write-and-apply blocks in openshift-ai-steps.md\n")
+    sys.exit("no manifest blocks found - has the format changed?")
+print(f"found {len(blocks)} manifest blocks in openshift-ai-steps.md\n")
 fail = 0
 with tempfile.TemporaryDirectory() as d:
     for b in blocks:
         fname = re.search(r'cat > "\$M/([^"]+)"', b).group(1)
         quoted = "<<'EOF'" in b.splitlines()[0]
-        # run only the cat part; oc is not here
+        # is it ever applied? a manifest the walkthrough writes and never
+        # applies is a step the reader cannot finish
+        where = md.index(b)
+        applied = f'oc apply -f "$M/{fname}"' in md[where:]
+        # oc is not here, so run only the cat
         cat_part = b.split('\nEOF\n')[0] + '\nEOF\n'
         r = subprocess.run(['bash', '-c', f'set -eu\nexport M={d}\n{cat_part}'],
                            capture_output=True, text=True)
@@ -51,11 +58,28 @@ with tempfile.TemporaryDirectory() as d:
             print(f"  {fname:28} INVALID YAML: {e}"); fail = 1; continue
         # 2. does it match the document byte for byte? (the expansion check)
         shown = b.split('\n', 1)[1].rsplit('\nEOF\n', 1)[0] + '\n'
+        body_shown = shown
         same = written == shown
         kinds = ", ".join(f"{x.get('kind')}/{x.get('metadata',{}).get('name')}" for x in docs)
         flag = "<<'EOF'" if quoted else "<<EOF  "
+        # Is the apply in the same block, or split into one of its own? Split
+        # is deliberate wherever the reader has to edit a value first.
+        after = md[where + len(b):]
+        shape = "cat+apply" if after.startswith(f'oc apply -f "$M/{fname}"') else "apply split out"
         print(f"  {fname:28} {flag} {len(docs)} doc(s)  "
-              f"{'unchanged' if same else 'DIFFERS FROM DOC'}  {kinds[:52]}")
+              f"{'unchanged' if same else 'DIFFERS FROM DOC'}  "
+              f"{'applied' if applied else 'NEVER APPLIED'}  {shape:15} {kinds[:34]}")
+        if not applied:
+            fail = 1
+        # A manifest carrying a value the reader must take from an earlier
+        # step ("# <-") must have its apply in a block of its own: pasting
+        # cat-and-apply together would apply the placeholder. And one with
+        # nothing to edit should stay a single paste.
+        edits = sum(1 for l in body_shown.splitlines() if '# <-' in l)
+        if (edits > 0) != (shape == "apply split out"):
+            print(f"      WRONG SHAPE: {edits} value(s) marked '# <-' but the apply is "
+                  f"{'in the same block' if shape == 'cat+apply' else 'split out'}")
+            fail = 1
         if not same:
             fail = 1
             for a, bl in zip(shown.splitlines(), written.splitlines()):
