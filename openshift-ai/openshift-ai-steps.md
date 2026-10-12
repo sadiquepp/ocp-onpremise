@@ -18,7 +18,26 @@ cd openshift-ai
 export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
 PB="ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml \
     --vault-password-file ~/.vault_pass -e rhoai_cluster=hub"
+mkdir -p ~/rhoai-byhand && export M=~/rhoai-byhand
 ```
+
+**Every manifest is a file.** Each block below writes into `$M` - under the
+same name the playbook renders it as, so you can diff yours against its - then
+applies it. Between the two you can look at what you are about to create, and
+ask the API for its verdict without changing anything:
+
+```text
+cat "$M/01-operator.yaml"
+oc apply --dry-run=server -f "$M/01-operator.yaml"
+diff -u "$M/01-operator.yaml" /var/lib/libvirt/images/openshift-ai/hub/01-operator.yaml
+```
+
+Every block here is checked by
+[`tests/check-steps-manifests.py`](tests/check-steps-manifests.py), which runs
+each one in a real shell and compares what lands on disk against what this
+page shows - because an unquoted `<<EOF` expands `$`, backticks and `\` in the
+YAML before `cat` sees them, and reading the markdown would never show it.
+Step 6 needs `<<'EOF'` for exactly that reason.
 
 `$KUBECONFIG` matters for the by-hand route: every `oc` below goes wherever it
 points, and on this lab's hypervisor that is usually the hub whether you meant
@@ -168,7 +187,8 @@ $PB --tags operator
 Three objects. The channel comes from step 0; `redhat-operators` is the
 catalog on a connected cluster.
 
-```yaml
+```bash
+cat > "$M/01-operator.yaml" <<EOF
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -197,11 +217,8 @@ spec:
   source: redhat-operators   # <- the CatalogSource, from step 0
   sourceNamespace: openshift-marketplace
   installPlanApproval: Automatic
-```
-
-```bash
-oc apply -f -   # paste the above, or:
-oc apply -f /var/lib/libvirt/images/openshift-ai/hub/01-operator.yaml   # what the playbook rendered
+EOF
+oc apply -f "$M/01-operator.yaml"
 ```
 
 ### Did it work
@@ -270,7 +287,8 @@ why it never writes a field the installed operator does not know.
 
 ### Then apply it
 
-```yaml
+```bash
+cat > "$M/02-dsci.yaml" <<EOF
 apiVersion: dscinitialization.opendatahub.io/v2   # <- from the command above
 kind: DSCInitialization
 metadata:
@@ -288,6 +306,8 @@ spec:
   trustedCABundle:
     managementState: Managed
     customCABundle: ""
+EOF
+oc apply -f "$M/02-dsci.yaml"
 ```
 
 **If one already exists**, do not apply a second. Patch the one field:
@@ -326,7 +346,8 @@ Then switch on the three this lab needs and switch everything else off - each
 of the others is more pods than a lab hub has room for, and none is on the
 path from "install the operator" to "a chat bot answers":
 
-```yaml
+```bash
+cat > "$M/03-dsc.yaml" <<EOF
 apiVersion: datasciencecluster.opendatahub.io/v2   # <- from the command above
 kind: DataScienceCluster
 metadata:
@@ -357,6 +378,8 @@ spec:
     ray:                  {managementState: Removed}
     trainingoperator:     {managementState: Removed}
     trustyai:             {managementState: Removed}
+EOF
+oc apply -f "$M/03-dsc.yaml"
 ```
 
 Drop any component from that list that your CRD does not have, and add any it
@@ -397,7 +420,8 @@ check is what that was for. `oc -n redhat-ods-applications describe pod
 $PB --tags project
 ```
 
-```yaml
+```bash
+cat > "$M/10-project.yaml" <<EOF
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -426,6 +450,8 @@ spec:
     requests:
       storage: 20Gi
   storageClassName: lvms-vg1     # <- from step 0
+EOF
+oc apply -f "$M/10-project.yaml"
 ```
 
 ### Did it work
@@ -540,7 +566,14 @@ oc -n rhoai-chatbot exec holder -- sh -c \
 the product's vLLM runtimes are accelerator builds, and its CPU vLLM runtime
 is for ppc64le/s390x/ARM rather than x86-64.
 
-```yaml
+Note the **quoted** `<<'EOF'` here, where every other block in this
+walkthrough leaves it bare. This container's command is a shell script - full
+of `$(...)`, `"$gguf"` and backslash continuations - and an unquoted heredoc
+would have the shell expand all of it before `cat` ever saw it, leaving a
+ServingRuntime that looks fine and starts nothing.
+
+```bash
+cat > "$M/21-runtime.yaml" <<'EOF'
 apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
@@ -615,6 +648,8 @@ spec:
   volumes:
     - name: scratch
       emptyDir: {sizeLimit: 2Gi}
+EOF
+oc apply -f "$M/21-runtime.yaml"
 ```
 
 Two notes if you are writing your own:
@@ -669,7 +704,8 @@ is what uses it.
 
 "Serve **these** weights with **that** runtime."
 
-```yaml
+```bash
+cat > "$M/22-inferenceservice.yaml" <<EOF
 apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
@@ -682,10 +718,10 @@ metadata:
     # would change mode if somebody flipped the cluster default, and in
     # Serverless mode this one would never start - the lab has no Knative.
     serving.kserve.io/deploymentMode: RawDeployment
-    # No external Route. The chat bot dials the Service from inside the
-    # cluster; 'exposed' publishes an unauthenticated LLM endpoint on the
-    # lab's wildcard instead.
-    networking.kserve.io/visibility: cluster-local
+    # NO networking.kserve.io/visibility annotation is what keeps the model
+    # in-cluster: the chat bot dials the Service from inside. Setting it to
+    # 'exposed' is the switch OpenShift AI's odh-model-controller acts on, and
+    # publishes an unauthenticated LLM endpoint on the lab's wildcard.
 spec:
   predictor:
     minReplicas: 1
@@ -702,6 +738,8 @@ spec:
       resources:
         requests: {cpu: "2", memory: 4Gi}
         limits:   {cpu: "4", memory: 8Gi}
+EOF
+oc apply -f "$M/22-inferenceservice.yaml"
 ```
 
 ### Did it work
@@ -780,13 +818,136 @@ The app is a single standard-library Python file -
 No image is built: it goes into a ConfigMap and is mounted into the UBI python
 image, so there is nothing to push to a registry and no wheel to mirror.
 
-```bash
-# the code
-oc -n rhoai-chatbot create configmap rhoai-chatbot-code \
-  --from-file=roles/setup-openshift-ai/files/chatbot.py
+First the code, as a ConfigMap - from the file in this repository, so what
+runs is what you can read:
 
-# the Deployment, Service and Route the playbook renders
-oc apply -f /var/lib/libvirt/images/openshift-ai/hub/30-chatbot.yaml
+```bash
+oc -n rhoai-chatbot create configmap rhoai-chatbot-code \\
+  --from-file=roles/setup-openshift-ai/files/chatbot.py
+```
+
+Then the Deployment, Service and Route:
+
+```bash
+cat > "$M/30-chatbot.yaml" <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chatbot
+  namespace: rhoai-chatbot
+  labels:
+    app: chatbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chatbot
+  template:
+    metadata:
+      labels:
+        app: chatbot
+    spec:
+      containers:
+        - name: chatbot
+          image: registry.access.redhat.com/ubi9/python-311:latest
+          command: ["python3", "-u", "/app/chatbot.py"]
+          env:
+            - name: MODEL_ENDPOINT
+              value: http://qwen2-5-0-5b-instruct-predictor.rhoai-chatbot.svc.cluster.local:8080
+            - name: MODEL_NAME
+              value: qwen2-5-0-5b-instruct
+            - name: SYSTEM_PROMPT
+              value: "You are a concise assistant running on a CPU-only OpenShift AI cluster. Answer in at most three sentences."
+            - name: DEMO_PROMPT
+              value: "In two sentences, what is Red Hat OpenShift AI?"
+            - name: MAX_TOKENS
+              value: "256"
+            - name: TEMPERATURE
+              value: "0.2"
+            - name: REQUEST_TIMEOUT
+              value: "300"
+            - name: PORT
+              value: "8080"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: app
+              mountPath: /app
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: app
+          configMap:
+            name: rhoai-chatbot-code
+            defaultMode: 0444
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chatbot
+  namespace: rhoai-chatbot
+  labels:
+    app: chatbot
+spec:
+  selector:
+    app: chatbot
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: chatbot
+  namespace: rhoai-chatbot
+  labels:
+    app: chatbot
+spec:
+  to:
+    kind: Service
+    name: chatbot
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+EOF
+oc apply -f "$M/30-chatbot.yaml"
+```
+
+The playbook's copy of this carries one extra thing: a `rhoai/code-checksum`
+annotation on the pod template, holding a hash of `chatbot.py`. A ConfigMap
+change is not a pod change, so without it edited code sits in the ConfigMap
+while the old process keeps running. By hand, after replacing the ConfigMap:
+
+```bash
+oc -n rhoai-chatbot rollout restart deployment/chatbot
 ```
 
 The parts of that Deployment worth knowing:
