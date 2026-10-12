@@ -257,6 +257,26 @@ oc get crd datascienceclusters.datasciencecluster.opendatahub.io -o json \
 The lab's own error message prints that list too. It never writes a fixed
 apiVersion or a fixed field list for exactly this reason.
 
+**By hand, compare the two lists** rather than reading them - this prints the
+components a manifest names that the cluster has no field for, which are the
+lines to delete:
+
+```bash
+oc get crd datascienceclusters.datasciencecluster.opendatahub.io -o json \
+  | python3 -c 'import json,sys; v=[x for x in json.load(sys.stdin)["spec"]["versions"] if x["storage"]][0]; print("\n".join(sorted(v["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]["components"]["properties"])))' \
+  | sort > /tmp/dsc-cluster.txt
+sed -n 's/^    \([a-z][a-z0-9]*\):.*/\1/p' "$M/03-dsc.yaml" | sort > /tmp/dsc-manifest.txt
+comm -23 /tmp/dsc-manifest.txt /tmp/dsc-cluster.txt
+```
+
+How far apart the versions are: a 2.x cluster has `codeflare`,
+`datasciencepipelines` and `modelmeshserving`; a 3.x one has none of those and
+carries `aigateway`, `aipipelines`, `mcplifecycleoperator`, `mlflowoperator`,
+`ogx`, `sparkoperator` and `trainer` instead. `dashboard`, `workbenches` and
+`kserve` - the three this lab needs - are in both.
+`openshift-ai-steps.md` step 3 has a one-liner that writes the whole
+component block from the CRD, so there is nothing to compare.
+
 ## 5. The model PVC stays Pending
 
 **Looks like**: `oc -n rhoai-chatbot get pvc` shows `Pending`.

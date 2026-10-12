@@ -377,6 +377,9 @@ Then switch on the three this lab needs and switch everything else off - each
 of the others is more pods than a lab hub has room for, and none is on the
 path from "install the operator" to "a chat bot answers":
 
+Switch on the three this lab needs, and leave every other component out -
+which is the one list that is right on every version:
+
 ```bash
 cat > "$M/03-dsc.yaml" <<EOF
 apiVersion: datasciencecluster.opendatahub.io/v2   # <- from the command above
@@ -401,25 +404,97 @@ spec:
       # The Knative half of KServe, off because RawDeployment does not use it.
       serving:
         managementState: Removed
-    codeflare:            {managementState: Removed}
-    datasciencepipelines: {managementState: Removed}
-    kueue:                {managementState: Removed}
-    modelmeshserving:     {managementState: Removed}
-    modelregistry:        {managementState: Removed}
-    ray:                  {managementState: Removed}
-    trainingoperator:     {managementState: Removed}
-    trustyai:             {managementState: Removed}
 EOF
 ```
 
-**Check the `apiVersion` and the component list before you apply it.** Both
-come from the command above: use the version it printed, drop any component
-it did not list, and add any it listed that is missing here (`feastoperator`
-and `llamastackoperator` appear in newer releases).
+**Check the `apiVersion`** - it is whatever the command above printed - and
+then apply:
 
 ```bash
 oc apply -f "$M/03-dsc.yaml"
 ```
+
+### What about every other component
+
+Naming only three leaves the rest at whatever the operator defaults them to.
+Read the applied object back to see what that turned out to be - the API
+server fills in the defaults, so this shows the real spec, not your file:
+
+```bash
+oc get datasciencecluster default-dsc \
+  -o 'jsonpath={range .spec.components.*}{.managementState}{"\n"}{end}'
+oc get datasciencecluster default-dsc -o yaml | sed -n '/^  components:/,/^  [a-z]/p'
+```
+
+Anything that came back `Managed` and that you do not want is worth adding to
+the file explicitly. **To see which components this cluster even has**, and
+what a manifest does and does not mention, compare the two lists:
+
+```bash
+# every component this cluster's CRD knows
+oc get crd datascienceclusters.datasciencecluster.opendatahub.io -o json \
+  | python3 -c 'import json,sys; v=[x for x in json.load(sys.stdin)["spec"]["versions"] if x["storage"]][0]; print("\n".join(sorted(v["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]["components"]["properties"])))' \
+  | sort > /tmp/dsc-cluster.txt
+
+# every component the manifest names
+sed -n 's/^    \([a-z][a-z0-9]*\):.*/\1/p' "$M/03-dsc.yaml" | sort > /tmp/dsc-manifest.txt
+
+echo "--- in the manifest but NOT on this cluster: delete these lines"
+comm -23 /tmp/dsc-manifest.txt /tmp/dsc-cluster.txt
+
+echo "--- on this cluster but not mentioned: these take the operator default"
+comm -13 /tmp/dsc-manifest.txt /tmp/dsc-cluster.txt
+```
+
+The first list is the one that matters: a component the CRD has no field for
+is either rejected outright or quietly pruned, and the component names have
+moved more than once - a 2.x cluster has `codeflare`,
+`datasciencepipelines` and `modelmeshserving`, a 3.x one has `aipipelines`,
+`trainer`, `sparkoperator`, `aigateway` and others instead.
+
+### Or generate the whole thing from the cluster
+
+To be explicit about every component rather than relying on defaults - which
+is what the playbook does - write the file from the CRD itself. Nothing to
+edit, and nothing to delete:
+
+```bash
+oc get crd datascienceclusters.datasciencecluster.opendatahub.io -o json \
+  | python3 -c '
+import json, sys
+MANAGED = {"dashboard", "workbenches", "kserve"}
+crd = json.load(sys.stdin)
+v = [x for x in crd["spec"]["versions"] if x["storage"]][0]
+comps = v["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]["components"]["properties"]
+ks = comps.get("kserve", {}).get("properties", {})
+missing = MANAGED - set(comps)
+if missing:
+    sys.exit("this CRD has no %s - pick from: %s" % (", ".join(sorted(missing)), ", ".join(sorted(comps))))
+print("apiVersion: %s/%s" % (crd["spec"]["group"], v["name"]))
+print("kind: DataScienceCluster")
+print("metadata:\n  name: default-dsc")
+print("spec:\n  components:")
+for name in sorted(comps):
+    print("    %s:" % name)
+    print("      managementState: %s" % ("Managed" if name in MANAGED else "Removed"))
+    if name == "kserve":
+        if "defaultDeploymentMode" in ks:
+            print("      defaultDeploymentMode: RawDeployment")
+        if "rawDeploymentServiceConfig" in ks:
+            print("      rawDeploymentServiceConfig: Headed")
+        if "serving" in ks:
+            print("      serving:\n        managementState: Removed")
+' > "$M/03-dsc.yaml"
+
+cat "$M/03-dsc.yaml"
+oc apply -f "$M/03-dsc.yaml"
+```
+
+That is `tasks/dsc.yml` and `templates/dsc.yaml.j2` in about twenty lines: it
+reads the storage version and the component list off the installed CRD, sets
+the three this lab needs to `Managed` and everything else to `Removed`, and
+only writes the kserve fields that version's schema actually has.
+
 
 **If a DataScienceCluster already exists**, patch instead - leave somebody
 else's components alone:
