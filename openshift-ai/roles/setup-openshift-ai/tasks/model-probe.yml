@@ -1,0 +1,131 @@
+---
+# Ask the model, from inside the cluster, through the same Service the chat bot
+# uses. Included by the model and verify phases.
+#
+# One short-lived pod running curl twice: GET /v1/models to see what the server
+# thinks it is serving, and POST /v1/chat/completions with rhoai_probe_prompt.
+# It is the only check that proves the whole path - KServe's Service, the
+# runtime, the weights on the PVC and the chat template inside the model -
+# rather than just that a pod is Running.
+#
+# THE REQUEST BODY IS PASSED BASE64-ENCODED. It is built here with to_json,
+# handed to the pod as one base64 argument and decoded inside, so a prompt
+# containing a quote, an apostrophe or a newline cannot break out of the shell
+# command - which is what would happen if the JSON were interpolated into the
+# `sh -c` string.
+#
+# The pod is run, waited for, read and deleted rather than attached to with
+# `oc run --attach`, which can miss output printed before the attach is
+# established.
+#
+# In:
+#   rhoai_probe_prompt  what to ask
+# Out:
+#   rhoai_probe_models  what /v1/models answered, truncated
+#   rhoai_probe_answer  the assistant's reply, or '' if there was none
+#   rhoai_probe_ok      true when the model returned a non-empty reply
+#   rhoai_probe_log     everything the pod printed, for error messages
+
+- name: Build the request body
+  ansible.builtin.set_fact:
+    rhoai_probe_body_b64: >-
+      {{ {
+           'model': rhoai_model_name,
+           'messages': [
+             {'role': 'system', 'content': rhoai_chatbot_system_prompt | trim},
+             {'role': 'user', 'content': rhoai_probe_prompt | trim},
+           ],
+           'max_tokens': rhoai_chatbot_max_tokens | int,
+           'temperature': rhoai_chatbot_temperature | float,
+           'stream': false,
+         } | to_json | b64encode }}
+    rhoai_probe_url: >-
+      http://{{ rhoai_model_name }}-predictor.{{ rhoai_project_namespace }}.svc.cluster.local:8080
+    # A random suffix, so a pod left behind by an interrupted run cannot make
+    # this one fail with AlreadyExists.
+    rhoai_probe_pod: "rhoai-probe-{{ 100000000 | random }}"
+    # Overwritten below if the pod gets as far as printing anything. Defined
+    # here so every task after this one can read it unconditionally.
+    rhoai_probe_log: ""
+
+- name: Start the probe pod
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_project_namespace }} run {{ rhoai_probe_pod }}
+      --restart=Never --quiet
+      --image={{ rhoai_fetch_image }}
+      --command -- /bin/sh -c
+      'set -u;
+       printf "MODELS%s\n" "$(curl -sS -m 30 {{ rhoai_probe_url }}/v1/models | tr -d "\n")";
+       echo {{ rhoai_probe_body_b64 }} | base64 -d > /tmp/body.json;
+       printf "ANSWER%s\n" "$(curl -sS -m {{ rhoai_chatbot_timeout }} -X POST
+         -H "Content-Type: application/json" -d @/tmp/body.json
+         {{ rhoai_probe_url }}/v1/chat/completions | tr -d "\n")"'
+  register: rhoai_probe_start
+  changed_when: false
+  failed_when: false
+
+- name: Read the answer back, and delete the pod either way
+  when: rhoai_probe_start.rc == 0
+  block:
+    - name: Wait for it to finish
+      ansible.builtin.command:
+        cmd: >-
+          oc -n {{ rhoai_project_namespace }} get pod {{ rhoai_probe_pod }}
+          -o jsonpath={.status.phase}
+      register: rhoai_probe_phase
+      retries: "{{ ((rhoai_chatbot_timeout | int + 120) / 5) | round | int }}"
+      delay: 5
+      until: rhoai_probe_phase.stdout in ['Succeeded', 'Failed']
+      changed_when: false
+      failed_when: false
+
+    - name: Read what it printed
+      ansible.builtin.command:
+        cmd: oc -n {{ rhoai_project_namespace }} logs pod/{{ rhoai_probe_pod }}
+      register: rhoai_probe_out
+      changed_when: false
+      failed_when: false
+
+    - name: Keep it
+      ansible.builtin.set_fact:
+        rhoai_probe_log: "{{ rhoai_probe_out.stdout | default('', true) }}"
+  always:
+    - name: Delete the probe pod
+      ansible.builtin.command:
+        cmd: >-
+          oc -n {{ rhoai_project_namespace }} delete pod {{ rhoai_probe_pod }}
+          --ignore-not-found --wait=false
+      changed_when: false
+      failed_when: false
+
+- name: Say so if the pod could not even be started
+  ansible.builtin.set_fact:
+    rhoai_probe_log: >-
+      could not start the probe pod {{ rhoai_probe_pod }}:
+      {{ rhoai_probe_start.stderr | default('') | trim }}
+  when: rhoai_probe_start.rc != 0
+
+- name: Pick the two answers out of it
+  ansible.builtin.set_fact:
+    rhoai_probe_models: >-
+      {{ (rhoai_probe_log.splitlines() | select('match', '^MODELS')
+          | first | default('MODELS'))[6:] | truncate(300) }}
+    rhoai_probe_json: >-
+      {{ (rhoai_probe_log.splitlines() | select('match', '^ANSWER')
+          | first | default('ANSWER'))[6:] }}
+
+# A reply that is not JSON at all - an HTML error page from a proxy, or curl's
+# own message - must not take the run down with a templating error, so the
+# parse is guarded rather than assumed.
+- name: Read the reply out of it
+  ansible.builtin.set_fact:
+    rhoai_probe_answer: >-
+      {{ ((rhoai_probe_json | from_json).choices | default([{}], true))[0].message.content
+         | default('', true) | trim
+         if (rhoai_probe_json | length > 0 and rhoai_probe_json[0] == '{')
+         else '' }}
+
+- name: Judge it
+  ansible.builtin.set_fact:
+    rhoai_probe_ok: "{{ rhoai_probe_answer | length > 0 }}"

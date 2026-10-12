@@ -1,0 +1,68 @@
+---
+# Which StorageClass the model PVC uses. Reads only. Included by the
+# preflight, project and model phases, so all three reach the same answer
+# from the same cluster state.
+#
+# The expected answer on this lab is the default class, lvms-vg1: the base hub
+# and SNO builds install LVM Storage whenever use_lvm_storage is true. There
+# is no local-PV fallback here - unlike the SPIRE server's 1 GiB of state, a
+# model PVC is tens of GiB and pinning it to one node by hand is not something
+# to do silently.
+#
+# A PVC that already exists keeps the class it was created with: a PVC's
+# storageClassName is immutable, so re-rendering it against a different class
+# would be rejected by the API server.
+#
+# Sets:
+#   rhoai_sc            the class name written into the PVC
+#   rhoai_sc_summary    one line for reports
+
+- name: Find the cluster's default StorageClass
+  ansible.builtin.command:
+    cmd: >-
+      oc get storageclass
+      -o 'jsonpath={range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}'
+  register: rhoai_sd_default
+  changed_when: false
+
+- name: List every StorageClass, for the message if there is no default
+  ansible.builtin.command:
+    cmd: oc get storageclass -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}'
+  register: rhoai_sd_all
+  changed_when: false
+
+- name: Read the class an existing model PVC was created with
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_project_namespace }} get pvc {{ rhoai_model_pvc_name }}
+      -o jsonpath={.spec.storageClassName}
+  register: rhoai_sd_existing
+  changed_when: false
+  failed_when: false
+
+- name: Fail if there is no class to put the model on
+  ansible.builtin.assert:
+    that: >-
+      (rhoai_sd_existing.rc == 0 and rhoai_sd_existing.stdout | length > 0)
+      or rhoai_storage_class != 'auto'
+      or rhoai_sd_default.stdout_lines | length > 0
+    fail_msg: >-
+      rhoai_storage_class is 'auto' and this cluster has no default
+      StorageClass, so the model PVC would sit Pending forever. The base build
+      installs LVM Storage (lvms-vg1, default) when use_lvm_storage is true -
+      re-run the cluster build with --tags lvm, or name a class with
+      -e rhoai_storage_class=<name>. Classes on the cluster:
+      {{ rhoai_sd_all.stdout_lines | join(', ') | default('none', true) }}.
+
+- name: Settle on the StorageClass
+  ansible.builtin.set_fact:
+    rhoai_sc: >-
+      {{ rhoai_sd_existing.stdout if (rhoai_sd_existing.rc == 0 and rhoai_sd_existing.stdout | length > 0)
+         else (rhoai_sd_default.stdout_lines[0] if rhoai_storage_class == 'auto' else rhoai_storage_class) }}
+    rhoai_sc_summary: >-
+      {{ 'StorageClass ' ~ rhoai_sd_existing.stdout ~ ', as the existing PVC '
+         ~ rhoai_model_pvc_name ~ ' was created'
+         if (rhoai_sd_existing.rc == 0 and rhoai_sd_existing.stdout | length > 0)
+         else ('the default StorageClass, ' ~ rhoai_sd_default.stdout_lines[0]
+               if rhoai_storage_class == 'auto'
+               else 'StorageClass ' ~ rhoai_storage_class ~ ', as set') }}

@@ -1,0 +1,68 @@
+---
+# Find the Red Hat OpenShift AI operator in this cluster's catalog. Included
+# by the preflight and operator phases; sets rhoai_pkg and rhoai_chan.
+#
+# The package name is looked up rather than assumed, and this is the check the
+# lab turns on: if the catalog on this cluster does not carry OpenShift AI,
+# there is nothing to install and the run stops here with the catalog's own
+# package list in the message. Modelled on
+# spiffe-spire/roles/setup-spiffe-spire/tasks/catalog.yml.
+
+- name: List the packages in {{ rhoai_catalog_source }}
+  ansible.builtin.command:
+    cmd: >-
+      oc get packagemanifests -n {{ rhoai_catalog_namespace }}
+      -l catalog={{ rhoai_catalog_source }}
+      -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.defaultChannel}{"\n"}{end}'
+  register: rhoai_catalog_list
+  changed_when: false
+  retries: 6
+  delay: 10
+  until: rhoai_catalog_list.rc == 0
+
+- name: Pick out the OpenShift AI operator
+  ansible.builtin.set_fact:
+    rhoai_catalog_matches: >-
+      {{ rhoai_catalog_list.stdout_lines
+         | select('search', '^' ~ (rhoai_operator_package if rhoai_operator_package else rhoai_operator_package_match) ~ ' ')
+         | map('split') | list }}
+
+- name: Fail if the operator is not in the catalog
+  ansible.builtin.assert:
+    that: rhoai_catalog_matches | length == 1
+    fail_msg: >-
+      {{ 'No package named' if rhoai_catalog_matches | length == 0 else 'More than one package named' }}
+      '{{ rhoai_operator_package if rhoai_operator_package else rhoai_operator_package_match }}'
+      in catalog {{ rhoai_catalog_source }} ({{ rhoai_catalog_list.stdout_lines | length }} packages listed).
+      {{ 'Matches: ' ~ (rhoai_catalog_matches | map('first') | join(', ')) ~ ' - set rhoai_operator_package to one.'
+         if rhoai_catalog_matches | length > 1 else
+         'Red Hat OpenShift AI self-managed is the rhods-operator package in redhat-operators.
+         On a connected cluster, check the catalog pod in ' ~ rhoai_catalog_namespace ~ ' is healthy
+         (oc -n ' ~ rhoai_catalog_namespace ~ ' get catalogsource,pods). On a disconnected one, the
+         operator has to be in the ImageSetConfiguration oc-mirror ran with - see README.md,
+         "Disconnected".' }}
+
+- name: Settle on the package and channel
+  ansible.builtin.set_fact:
+    rhoai_pkg: "{{ rhoai_catalog_matches[0][0] }}"
+    rhoai_chan: "{{ rhoai_operator_channel if rhoai_operator_channel else rhoai_catalog_matches[0][1] }}"
+
+- name: Read the channels the package offers
+  ansible.builtin.command:
+    cmd: >-
+      oc get packagemanifests -n {{ rhoai_catalog_namespace }}
+      -l catalog={{ rhoai_catalog_source }}
+      -o 'jsonpath={range .items[?(@.metadata.name=="{{ rhoai_pkg }}")].status.channels[*]}{.name}{" "}{.currentCSV}{"\n"}{end}'
+  register: rhoai_catalog_channels
+  changed_when: false
+
+- name: Fail if the chosen channel does not exist
+  ansible.builtin.assert:
+    that: rhoai_chan in (rhoai_catalog_channels.stdout_lines | map('split') | map('first') | list)
+    fail_msg: >-
+      Channel '{{ rhoai_chan }}' is not offered by {{ rhoai_pkg }}. It has:
+      {{ rhoai_catalog_channels.stdout_lines | join('; ') }}
+    success_msg: >-
+      {{ rhoai_pkg }} from {{ rhoai_catalog_source }}, channel {{ rhoai_chan }}
+      ({{ (rhoai_catalog_channels.stdout_lines | select('match', rhoai_chan ~ ' ') | first | default('')).split() | last }}).
+      Channels: {{ rhoai_catalog_channels.stdout_lines | map('split') | map('first') | join(', ') }}

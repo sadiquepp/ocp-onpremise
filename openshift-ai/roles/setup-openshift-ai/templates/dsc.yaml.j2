@@ -1,0 +1,44 @@
+## Rendered by tasks/dsc.yml into {{ rhoai_manifest_dir }}/03-dsc.yaml, and
+## applied only when the cluster has no DataScienceCluster at all. An existing
+## one is PATCHED with just the components this lab needs, so a cluster that
+## already runs OpenShift AI with pipelines or Ray switched on keeps them -
+## see tasks/dsc.yml.
+##
+## The component list is not written down here: it is read out of the
+## installed CRD's schema ({{ rhoai_dsc_group }}/{{ rhoai_dsc_version }}) and
+## every component that version knows about appears below, Managed if it is in
+## rhoai_components_managed and Removed if it is not. That way a newer
+## operator that renames or adds a component gets an explicit Removed rather
+## than a default this lab never chose.
+apiVersion: {{ rhoai_dsc_group }}/{{ rhoai_dsc_version }}
+kind: DataScienceCluster
+metadata:
+  name: {{ rhoai_dsc_name }}
+spec:
+  components:
+{% for c in rhoai_dsc_components %}
+    {{ c }}:
+      managementState: {{ 'Managed' if c in rhoai_components_managed else 'Removed' }}
+{% if c == 'kserve' and c in rhoai_components_managed %}
+{% if 'defaultDeploymentMode' in rhoai_dsc_kserve_props %}
+      ## Plain Kubernetes Deployments and Services for every
+      ## InferenceService. The alternative, Serverless, needs the OpenShift
+      ## Serverless and Service Mesh operators as well; this lab has neither
+      ## and does not want the three extra control planes on a lab hub. The
+      ## cost is scale-to-zero and Knative's traffic splitting, neither of
+      ## which helps a single CPU-served model that takes a minute to load.
+      defaultDeploymentMode: {{ rhoai_kserve_deployment_mode }}
+{% endif %}
+{% if 'rawDeploymentServiceConfig' in rhoai_dsc_kserve_props %}
+      ## An ordinary ClusterIP Service for the predictor, which is what the
+      ## chat bot dials by name. Some versions default this to Headless.
+      rawDeploymentServiceConfig: {{ rhoai_kserve_service_config }}
+{% endif %}
+{% if 'serving' in rhoai_dsc_kserve_props %}
+      ## The Knative half of KServe, Removed because
+      ## {{ rhoai_kserve_deployment_mode }} does not use it.
+      serving:
+        managementState: Removed
+{% endif %}
+{% endif %}
+{% endfor %}

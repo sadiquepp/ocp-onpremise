@@ -1,0 +1,326 @@
+## ===========================================================================
+## openshift-ai/vars.yaml - Red Hat OpenShift AI on a GPU-less lab cluster
+## ===========================================================================
+##
+## Every variable this use case owns lives here, and every one is prefixed
+## rhoai_. Nothing OpenShift AI specific goes into the root vars.yaml.
+##
+## Loaded AFTER ../vars.yaml by the playbook in this directory:
+##
+##   vars_files:
+##     - ../vars.yaml          # base (and, for now, everyone else's)
+##     - vars.yaml             # this file
+##     - ../vault.yaml         # optional - only a gated model needs it
+##
+## so anything below may refer to base variables (hub_install_folder,
+## sno_install_folder, base_domain, ...) - Ansible templates lazily, at the
+## moment a variable is used, by which time all three files are loaded.
+##
+## No addresses here, and none needed: everything this lab serves, it serves
+## through the cluster's own *.apps wildcard, which the helper already answers
+## for.
+
+## ---------------------------------------------------------------------------
+## Which cluster
+## ---------------------------------------------------------------------------
+## Select one with -e rhoai_cluster=hub|hub2|sno. Each phase runs against
+## exactly one cluster; the lab is per-cluster throughout - there is no
+## cross-cluster phase.
+##
+## OpenShift AI is a big operator on a small lab. The hub (3 masters +
+## 3 workers) is the cluster it is written for; a SNO works if the node has
+## the headroom (see rhoai_min_* below), which on this lab's default SNO
+## sizing it does not.
+rhoai_clusters:
+  hub:
+    name: hub
+    kubeconfig: "{{ hub_install_folder }}/auth/kubeconfig"
+    apps_domain: "apps.{{ hub_domain }}"
+  hub2:
+    name: hub2
+    kubeconfig: "{{ hub2_install_folder }}/auth/kubeconfig"
+    apps_domain: "apps.{{ hub2_domain }}"
+  ## The key is literal: Ansible does not template dict keys. sno_name only
+  ## has to agree with it for the domain below to read naturally.
+  sno:
+    name: sno
+    kubeconfig: "{{ sno_install_folder }}/auth/kubeconfig"
+    apps_domain: "apps.{{ sno_name }}.{{ base_domain }}"
+
+## Where the rendered manifests are written - one directory per cluster, so a
+## hub run and a SNO run never overwrite each other's and both are there to
+## read after the fact. Everything this lab applies is `oc apply -f` of a file
+## that stays on disk.
+rhoai_manifest_dir: "{{ download_dir }}/openshift-ai/{{ rhoai_c.name | default('unknown') }}"
+
+## ---------------------------------------------------------------------------
+## The operator
+## ---------------------------------------------------------------------------
+## Red Hat OpenShift AI self-managed ships as 'rhods-operator' in
+## redhat-operators. The package NAME is not hardcoded: the preflight and
+## operator phases look it up in the catalog by the fragment below and fail
+## with the catalog's own package list if there is no match - which is the
+## check for "is OpenShift AI available on this cluster at all". Set
+## rhoai_operator_package to skip the lookup.
+rhoai_operator_package_match: rhods-operator
+rhoai_operator_package: ""
+## "" = the package's defaultChannel, read from the catalog at run time. An
+## operator that is ALREADY installed keeps the channel it was installed from
+## regardless of this: moving channels is an upgrade, and that is a decision,
+## not a side effect of a re-run.
+rhoai_operator_channel: ""
+
+## Connected: redhat-operators. Disconnected: the CatalogSource oc-mirror
+## generated, named as the base roles name it - and an acm_catalog_source set
+## in the root vars.yaml is followed, so this lab and the base build can never
+## resolve against different catalogs. Same expression as
+## roles/setup-lvm-storage/defaults/main.yml.
+rhoai_mirror_catalog_source: "cs-{{ (mirror_catalog_index | default('')) | regex_replace('^.*/', '') | regex_replace('[:.]', '-') }}"
+rhoai_catalog_source: >-
+  {{ acm_catalog_source if acm_catalog_source is defined
+     else (rhoai_mirror_catalog_source if disconnected_install | bool else 'redhat-operators') }}
+rhoai_catalog_namespace: openshift-marketplace
+
+## The operator's own namespace, and the namespace its operands (dashboard,
+## KServe controller, the ServingRuntime templates) land in. Both are the
+## product defaults; the dashboard Route is in the applications namespace.
+rhoai_operator_namespace: redhat-ods-operator
+rhoai_applications_namespace: redhat-ods-applications
+rhoai_monitoring_namespace: redhat-ods-monitoring
+
+## ---------------------------------------------------------------------------
+## The DataScienceCluster - which components are switched on
+## ---------------------------------------------------------------------------
+## The component names under DataScienceCluster .spec.components have been
+## reorganised between the v1, v2 and v3 shapes of the CR, so this lab does
+## not write a fixed list: the dsc phase reads the component names out of the
+## INSTALLED CRD's schema, sets every one it finds to Managed if it is named
+## below and to Removed if it is not, and fails naming the schema's own list
+## if something below is not in it. A newer operator with a renamed component
+## therefore gives a readable error instead of a silently ignored field.
+##
+## Three is the minimum for this lab: the dashboard to look at, workbenches
+## for a notebook to poke the model from, and kserve to serve it. Everything
+## else - the pipelines, Ray, Kueue, CodeFlare, the training operator,
+## TrustyAI, the model registry, ModelMesh - is off, because each one is more
+## pods than a lab hub has room for and none of them are on the path from
+## "install the operator" to "a chat bot answers".
+rhoai_components_managed:
+  - dashboard
+  - workbenches
+  - kserve
+
+## KServe has two deployment modes, and this lab uses RawDeployment:
+## InferenceServices become plain Kubernetes Deployments and Services. The
+## other mode, Serverless, needs OpenShift Serverless (Knative) and Service
+## Mesh installed as well - three more operators, their control planes, and a
+## mesh the rest of this repository's labs do not expect. RawDeployment needs
+## none of them, which is why kserve.serving (the Knative half) is Removed and
+## the DSCInitialization's serviceMesh is Removed too.
+##
+## The cost is the Serverless features: no scale-to-zero, no canary traffic
+## split, no Knative revisions. For a lab with one 0.5B model on a CPU, none
+## of that is missed - and a model that takes a minute to load is better off
+## not scaling to zero.
+rhoai_kserve_deployment_mode: RawDeployment
+## 'Headed' gives the predictor an ordinary ClusterIP Service, which is what
+## the chat bot dials. Some operator versions default this to Headless; the
+## field is only written when the installed CRD has it.
+rhoai_kserve_service_config: Headed
+
+## The operator rolls the dashboard, the KServe controller and the webhooks;
+## allow it the time a lab hub takes to pull those images.
+rhoai_wait_retries: 90
+rhoai_wait_delay: 10
+
+## ---------------------------------------------------------------------------
+## The cluster has to be big enough
+## ---------------------------------------------------------------------------
+## Checked by the preflight phase, against the sum of the schedulable nodes'
+## allocatable capacity. These are not product requirements - they are what
+## this lab's own objects need with room to roll a deployment: the operator
+## and its operands, plus one model server holding a small model in memory.
+## Lower them with -e if you know what you are doing; the preflight says what
+## it found either way.
+rhoai_min_cpu_cores: 12
+rhoai_min_memory_gib: 40
+## The model server's own request/limit. A 0.5B model at Q4 is ~400 MiB of
+## weights; the rest is the KV cache, the runtime and the context window.
+rhoai_model_cpu_request: "2"
+rhoai_model_cpu_limit: "4"
+rhoai_model_memory_request: 4Gi
+rhoai_model_memory_limit: 8Gi
+
+## ---------------------------------------------------------------------------
+## Storage for the model
+## ---------------------------------------------------------------------------
+## The model is downloaded once into a PVC and served from it, which is the
+## shape the product documents (a model on a PVC, an InferenceService whose
+## storageUri is pvc://<claim>/<path>) and the only one that does not need an
+## S3 endpoint in the lab.
+##
+## 'auto' = the cluster's default StorageClass, which on this lab is lvms-vg1
+## from the base build (use_lvm_storage: true). Name one explicitly to
+## override. The preflight fails if there is no default class and none is
+## named, because a PVC with no class would sit Pending forever.
+rhoai_storage_class: auto
+rhoai_model_pvc_name: rhoai-models
+rhoai_model_pvc_size: 20Gi
+
+## ---------------------------------------------------------------------------
+## The model, and what serves it
+## ---------------------------------------------------------------------------
+## NO GPU. That is the constraint everything below follows from, and it rules
+## out most of what OpenShift AI's own ServingRuntime templates are tuned for:
+## the vLLM runtimes that ship with the product are CUDA or ROCm builds, and
+## the one CPU vLLM runtime Red Hat ships is supported on IBM Power (ppc64le),
+## IBM Z (s390x) and ARM - not on the x86-64 this lab runs on, where a CPU
+## vLLM build also wants AVX-512.
+##
+## So the default runtime here is a CUSTOM ServingRuntime - which is itself a
+## documented OpenShift AI feature - around llama.cpp's OpenAI-compatible
+## server. It is a plain x86-64 CPU build with no instruction-set demands
+## beyond AVX2, it loads one GGUF file, and it answers
+## /v1/chat/completions, which is the only thing the chat bot needs.
+##
+##   llamacpp   (default) llama.cpp's server, one GGUF file, any x86-64 CPU.
+##   vllm-cpu            the product's CPU vLLM runtime, from a full Hugging
+##                       Face snapshot. Set this on ppc64le/s390x/aarch64, or
+##                       on an x86-64 host with AVX-512 - the preflight reads
+##                       the nodes' CPU flags and says which you have.
+rhoai_runtime: llamacpp
+
+## The model format the ServingRuntime advertises and the InferenceService
+## asks for. KServe matches the two to pick a runtime; the string itself is
+## arbitrary, it just has to agree on both sides.
+rhoai_model_format: "{{ 'gguf' if rhoai_runtime == 'llamacpp' else 'vLLM' }}"
+
+## What the dashboard shows this runtime as, under Settings -> Serving runtimes.
+rhoai_runtime_display_name: >-
+  {{ 'llama.cpp CPU runtime (OpenAI API, GGUF)' if rhoai_runtime == 'llamacpp'
+     else 'vLLM CPU runtime (OpenAI API)' }}
+
+## "" = look for llama-server where the known llama.cpp images keep it. Set a
+## path if you build your own image and put it somewhere else.
+rhoai_llamacpp_binary: ""
+
+## A Route to the model's own OpenAI API, outside the cluster. Off by default:
+## the chat bot dials the Service from inside the cluster, and an
+## unauthenticated LLM endpoint on the lab's *.apps wildcard is not something
+## to publish without being asked. The chat bot's own Route is separate and is
+## always created.
+rhoai_model_expose_route: false
+
+## The ServingRuntime objects this lab creates, one per runtime above. Named
+## in the project namespace, not cluster-wide, so they sit beside the
+## product's own templates rather than competing with them.
+rhoai_runtime_name: "{{ 'llamacpp-cpu-runtime' if rhoai_runtime == 'llamacpp' else 'vllm-cpu-runtime' }}"
+
+## The image each runtime runs. Pinned by digest-less tag because that is what
+## the upstream projects publish; bump them deliberately.
+rhoai_llamacpp_image: ghcr.io/ggml-org/llama.cpp:server
+## "" = read the image out of the product's own vLLM CPU ServingRuntime
+## template on the cluster, so it matches the installed OpenShift AI version
+## rather than a tag written down here. Set it to pin one.
+rhoai_vllm_cpu_image: ""
+## The fallback if the cluster carries no CPU vLLM template and no image is
+## pinned above. quay.io/modh/vllm's CPU tags follow the RHOAI release.
+rhoai_vllm_cpu_image_fallback: "quay.io/modh/vllm:rhoai-2.25-cpu"
+
+## WHICH MODEL. Small on purpose: on a CPU, every parameter is latency, and
+## the point of this lab is a chat bot that answers in a few seconds, not a
+## good one. Qwen2.5-0.5B-Instruct is instruction-tuned, Apache-2.0, and both
+## of its forms below are public - no Hugging Face token needed.
+##
+## GGUF, for the llamacpp runtime: a repository and a fragment to match in its
+## file list. The exact file name is NOT hardcoded - the fetch job lists the
+## repository through the Hugging Face API and picks the first .gguf whose
+## name contains rhoai_model_file_match - because quantisation file names
+## differ per repository and change when a repository is re-uploaded.
+rhoai_model_gguf_repo: Qwen/Qwen2.5-0.5B-Instruct-GGUF
+rhoai_model_file_match: q4_k_m
+
+## Safetensors, for the vllm-cpu runtime: the whole snapshot, minus the GGUF
+## and PyTorch duplicates of the same weights.
+rhoai_model_hf_repo: Qwen/Qwen2.5-0.5B-Instruct
+
+## The name the model answers under - in the InferenceService, in
+## /v1/models, and in the chat bot's requests. Kept separate from the
+## repository so the served name stays stable if the repository moves.
+rhoai_model_name: qwen2-5-0-5b-instruct
+
+## Where on the PVC the weights land: <mount>/<rhoai_model_dir>. One
+## directory per runtime, because the two want different files and a
+## half-populated directory is worse than two full ones.
+rhoai_model_dir: "{{ rhoai_model_name }}-{{ rhoai_runtime }}"
+
+## Hugging Face needs no credentials for either repository above. A GATED
+## repository does: put hf_token in ../vault.yaml and it is passed to the
+## fetch job as a Secret. Left empty, no Secret is created and no token is
+## sent.
+rhoai_hf_token: "{{ hf_token | default('') }}"
+## Where the token is kept on the cluster, and the ConfigMap the fetch script
+## is mounted from. Both live in the project namespace.
+rhoai_hf_secret_name: rhoai-hf-token
+rhoai_fetch_script_cm: rhoai-model-fetch-script
+
+## huggingface.co, or a mirror of it. The fetch job is the ONE thing in this
+## lab that reaches the internet; on a disconnected cluster, point this at
+## something inside it (see README.md, "Disconnected").
+rhoai_hf_endpoint: https://huggingface.co
+## The fetch job pulls a few hundred MiB over one connection; a slow link
+## needs the time, and a job that is killed half way leaves a partial file
+## the next run re-downloads.
+rhoai_fetch_image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+rhoai_fetch_timeout: 3600
+
+## Context window the server is started with. 4096 is plenty for a chat demo
+## and keeps the KV cache inside rhoai_model_memory_limit.
+rhoai_model_context_length: 4096
+
+## ---------------------------------------------------------------------------
+## The project, and the chat bot
+## ---------------------------------------------------------------------------
+## One namespace holds the model and the app. It carries
+## opendatahub.io/dashboard: "true" so OpenShift AI's dashboard lists it as a
+## data science project and the model shows up under Model Serving.
+rhoai_project_namespace: rhoai-chatbot
+rhoai_project_display_name: "CPU chat bot"
+
+## The test app: a single-file, standard-library-only Python server. A browser
+## gets a chat page; /api/demo makes the app generate a prompt of its own and
+## return the model's answer, which is what the verify phase asserts on - so
+## the demo passes or fails without a browser in the loop.
+rhoai_chatbot_name: chatbot
+## The ConfigMap the app's single Python file is mounted from.
+rhoai_chatbot_cm: rhoai-chatbot-code
+rhoai_chatbot_image: registry.access.redhat.com/ubi9/python-311:latest
+rhoai_chatbot_replicas: 1
+## The prompt /api/demo sends. Short, and its answer is checked only for being
+## a non-empty string - a 0.5B model on a CPU is not held to a right answer.
+rhoai_chatbot_demo_prompt: >-
+  In two sentences, what is Red Hat OpenShift AI?
+rhoai_chatbot_system_prompt: >-
+  You are a concise assistant running on a CPU-only OpenShift AI cluster.
+  Answer in at most three sentences.
+## Generation limits the app sends with every request. Small, because on a CPU
+## every token is wall-clock time.
+rhoai_chatbot_max_tokens: 256
+rhoai_chatbot_temperature: 0.2
+## How long the app waits for the model. A cold 0.5B model on a lab CPU
+## answers a short prompt in seconds; this is the ceiling, not the target.
+rhoai_chatbot_timeout: 300
+
+## ---------------------------------------------------------------------------
+## Cleanup
+## ---------------------------------------------------------------------------
+## What `--tags cleanup` removes. Both can be flipped per run with -e.
+##
+## true  = keep the project namespace and the model PVC, so a rebuild does not
+##         re-download the weights. Everything else in the namespace still
+##         goes.
+rhoai_cleanup_keep_models: false
+## false = leave OpenShift AI installed and remove only this lab's own
+##         objects. Use it on a cluster somebody else is also using OpenShift
+##         AI on.
+rhoai_cleanup_operator: true

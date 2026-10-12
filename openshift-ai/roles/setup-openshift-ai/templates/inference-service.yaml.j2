@@ -1,0 +1,62 @@
+## Rendered by tasks/model.yml into {{ rhoai_manifest_dir }}/22-inferenceservice.yaml.
+## The model itself: an InferenceService is "serve THIS model with THAT
+## runtime", and in {{ rhoai_kserve_deployment_mode }} mode KServe turns it
+## into an ordinary Deployment plus a Service named
+## {{ rhoai_model_name }}-predictor.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: {{ rhoai_model_name }}
+  namespace: {{ rhoai_project_namespace }}
+  labels:
+    opendatahub.io/dashboard: "true"
+  annotations:
+    openshift.io/display-name: {{ rhoai_model_name | to_json }}
+    ## Said explicitly, not inherited. The DataScienceCluster's
+    ## defaultDeploymentMode is already {{ rhoai_kserve_deployment_mode }}, but
+    ## an InferenceService that does not say so would silently change mode if
+    ## somebody later flipped the cluster default - and in Serverless mode
+    ## this one would never start, because the lab has no Knative.
+    serving.kserve.io/deploymentMode: {{ rhoai_kserve_deployment_mode }}
+{% if rhoai_model_expose_route | bool %}
+    ## A Route of its own, so the OpenAI API can be called from outside the
+    ## cluster. This annotation is what OpenShift AI's odh-model-controller
+    ## acts on; it is the same switch as the dashboard's "make deployed models
+    ## available through an external route".
+    ##
+    ## Off by default: the chat bot dials the Service from inside the cluster,
+    ## and an unauthenticated LLM endpoint on the lab's *.apps wildcard is not
+    ## something to publish without being asked.
+    networking.kserve.io/visibility: exposed
+{% else %}
+    ## No networking.kserve.io/visibility annotation, which is what keeps the
+    ## model in-cluster: the chat bot reaches it at
+    ## {{ rhoai_model_name }}-predictor.{{ rhoai_project_namespace }}.svc.cluster.local:8080
+    ## and nothing outside the cluster can. Set rhoai_model_expose_route=true
+    ## to publish it as well.
+{% endif %}
+spec:
+  predictor:
+    ## One replica, and no autoscaling. The model PVC is ReadWriteOnce, so a
+    ## second replica on another node could not mount it; and a model that
+    ## takes minutes to load is not a thing to scale on request rate.
+    minReplicas: 1
+    maxReplicas: 1
+    model:
+      modelFormat:
+        name: {{ rhoai_model_format }}
+      ## Named, not auto-selected: see the autoSelect comment in
+      ## serving-runtime.yaml.j2.
+      runtime: {{ rhoai_runtime_name }}
+      ## pvc://<claim>/<path> - KServe mounts the claim at /mnt/models with
+      ## this path as the subPath, so no storage-initializer runs and nothing
+      ## is copied. The weights are read off the PVC where the fetch Job left
+      ## them.
+      storageUri: pvc://{{ rhoai_model_pvc_name }}/{{ rhoai_model_dir }}
+      resources:
+        requests:
+          cpu: {{ rhoai_model_cpu_request | to_json }}
+          memory: {{ rhoai_model_memory_request }}
+        limits:
+          cpu: {{ rhoai_model_cpu_limit | to_json }}
+          memory: {{ rhoai_model_memory_limit }}

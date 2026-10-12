@@ -1,0 +1,127 @@
+---
+# Everything this lab needs from the cluster, checked before anything is
+# installed. Reads only - no object is created, changed or deleted by this
+# phase, so it is safe to run against a cluster you have not decided to use
+# yet.
+#
+# It answers five questions:
+#   1. is the cluster reachable with this kubeconfig, and as cluster-admin
+#   2. is the OpenShift AI operator in the catalog, and on what channel
+#   3. is anything of it installed already
+#   4. is there a StorageClass for the model PVC
+#   5. has the cluster the CPU and memory, and do its CPUs suit the runtime
+
+- name: Read the cluster version
+  ansible.builtin.command:
+    cmd: oc get clusterversion version -o jsonpath={.status.desired.version}
+  register: rhoai_pf_version
+  changed_when: false
+  retries: 3
+  delay: 5
+  until: rhoai_pf_version.rc == 0
+
+# Installing an operator means writing a Subscription and a cluster-scoped
+# OperatorGroup, and the DataScienceCluster is cluster-scoped too. A
+# kubeconfig without cluster-admin gets through the reads above and then fails
+# half way through the operator phase.
+- name: Check this kubeconfig can do what the lab needs
+  ansible.builtin.command:
+    cmd: oc auth can-i create {{ item }} --all-namespaces
+  loop:
+    - subscriptions.operators.coreos.com
+    - operatorgroups.operators.coreos.com
+    - namespaces
+    - customresourcedefinitions.apiextensions.k8s.io
+  register: rhoai_pf_authz
+  changed_when: false
+  failed_when: false
+
+- name: Fail if it cannot
+  ansible.builtin.assert:
+    that: rhoai_pf_authz.results | selectattr('stdout', 'search', 'no') | list | length == 0
+    fail_msg: >-
+      {{ rhoai_c.kubeconfig }} is not cluster-admin on {{ rhoai_c.name }}: it
+      cannot create
+      {{ rhoai_pf_authz.results | selectattr('stdout', 'search', 'no')
+         | map(attribute='item') | join(', ') }}.
+      Use the kubeadmin kubeconfig the cluster build wrote.
+    success_msg: "cluster-admin on {{ rhoai_c.name }}, OpenShift {{ rhoai_pf_version.stdout }}"
+
+- name: Look the operator up in the catalog
+  ansible.builtin.include_tasks: catalog.yml
+
+- name: Read what is installed already
+  ansible.builtin.command:
+    cmd: "{{ item.cmd }}"
+  loop:
+    - key: csv
+      cmd: >-
+        oc -n {{ rhoai_operator_namespace }} get subscriptions.operators.coreos.com
+        {{ rhoai_pkg }} -o jsonpath={.status.installedCSV}
+    - key: dsci
+      cmd: oc get dscinitialization -o 'jsonpath={range .items[*]}{.metadata.name}{"="}{.status.phase}{" "}{end}'
+    - key: dsc
+      cmd: oc get datasciencecluster -o 'jsonpath={range .items[*]}{.metadata.name}{"="}{.status.phase}{" "}{end}'
+    - key: isvc
+      cmd: >-
+        oc -n {{ rhoai_project_namespace }} get inferenceservice {{ rhoai_model_name }}
+        -o jsonpath={.status.modelStatus.states.activeModelState}
+  loop_control:
+    label: "{{ item.key }}"
+  register: rhoai_pf_installed
+  changed_when: false
+  failed_when: false
+
+- name: Check the storage
+  ansible.builtin.include_tasks: storage-decide.yml
+
+- name: Check the size of the cluster, and its CPUs
+  ansible.builtin.include_tasks: capacity.yml
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      {{ [
+        'cluster:   ' ~ rhoai_c.name ~ ', OpenShift ' ~ rhoai_pf_version.stdout,
+        'operator:  ' ~ rhoai_pkg ~ ' from ' ~ rhoai_catalog_source ~ ', channel ' ~ rhoai_chan,
+        'installed: ' ~ ((rhoai_pf_installed.results | selectattr('item.key', 'eq', 'csv')
+                          | map(attribute='stdout') | first | default('', true) | trim)
+                         | default('nothing yet', true)),
+        'DSCI/DSC:  ' ~ (((rhoai_pf_installed.results | selectattr('item.key', 'eq', 'dsci')
+                           | map(attribute='stdout') | first | default('', true) | trim)
+                          ~ ' / ' ~
+                          (rhoai_pf_installed.results | selectattr('item.key', 'eq', 'dsc')
+                           | map(attribute='stdout') | first | default('', true) | trim)) | trim),
+        'model:     ' ~ rhoai_model_name ~ ' (' ~ ((rhoai_pf_installed.results
+                          | selectattr('item.key', 'eq', 'isvc') | map(attribute='stdout')
+                          | first | default('', true) | trim) | default('no InferenceService yet', true)) ~ ')',
+        'storage:   ' ~ rhoai_sc_summary,
+        'capacity:  ' ~ rhoai_cap_summary,
+        'cpu:       ' ~ rhoai_cpu_summary,
+      ] }}
+
+- name: Fail if the cluster is too small
+  ansible.builtin.assert:
+    that: rhoai_cap_ok | bool
+    fail_msg: >-
+      {{ rhoai_cap_summary }} OpenShift AI's own operands plus one model
+      server do not fit, and the usual result is a Subscription that installs
+      its CSV and then leaves operands Pending for ever. Give the cluster more
+      nodes or more RAM, or - if you have measured it yourself and disagree -
+      lower the floor with
+      -e rhoai_min_cpu_cores=<n> -e rhoai_min_memory_gib=<n>.
+    success_msg: "{{ rhoai_cap_summary }} That fits."
+
+# 'amd64' - that is what a node reports in .status.nodeInfo.architecture (Go's
+# GOARCH), not the 'x86_64' uname says. The AVX-512 question only applies
+# there: the CPU vLLM runtime on ppc64le, s390x or arm64 is the build Red Hat
+# supports, and has no such requirement.
+- name: Fail if the runtime cannot run on these CPUs
+  ansible.builtin.assert:
+    that: >-
+      rhoai_runtime != 'vllm-cpu'
+      or 'amd64' not in rhoai_cap_arches
+      or not (rhoai_cpu_flags_known | bool)
+      or rhoai_has_avx512 | bool
+    fail_msg: "{{ rhoai_cpu_summary }}"
+    success_msg: "{{ rhoai_cpu_summary }}"

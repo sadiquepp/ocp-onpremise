@@ -1,0 +1,108 @@
+---
+# Is the cluster big enough, and do its CPUs suit the chosen runtime? Reads
+# only. Included by the preflight phase.
+#
+# OpenShift AI is not a small operator: the dashboard, the KServe controller,
+# the workbench controller, the webhooks and the monitoring stack are a couple
+# of GiB of RAM and a core or so before a single model is served, and the
+# model server then wants rhoai_model_memory_request on top. A lab hub that is
+# already running ACM has been seen to take the Subscription, install the CSV,
+# and then leave half the operands Pending - which looks like a broken
+# operator and is not.
+#
+# So: add up what the schedulable nodes say is allocatable, compare against
+# rhoai_min_cpu_cores / rhoai_min_memory_gib, and say what was found either
+# way. Allocatable, not capacity: what is already running on the cluster is
+# NOT subtracted, so this is a floor, not a promise.
+#
+# Sets:
+#   rhoai_cap_cores, rhoai_cap_gib, rhoai_cap_ok, rhoai_cap_summary
+#   rhoai_cpu_flags_known, rhoai_has_avx512, rhoai_cpu_summary
+
+- name: Read every schedulable node's allocatable CPU and memory
+  ansible.builtin.command:
+    cmd: >-
+      oc get nodes
+      -o 'jsonpath={range .items[?(@.spec.unschedulable!=true)]}{.metadata.name}{" "}{.status.allocatable.cpu}{" "}{.status.allocatable.memory}{" "}{.status.nodeInfo.architecture}{"\n"}{end}'
+  register: rhoai_cap_nodes
+  changed_when: false
+
+- name: Fail if no node is schedulable
+  ansible.builtin.assert:
+    that: rhoai_cap_nodes.stdout_lines | length > 0
+    fail_msg: >-
+      No schedulable node on {{ rhoai_c.name }}. `oc get nodes` first - every
+      pod this lab creates would stay Pending.
+
+# Allocatable CPU is either plain cores ("8") or millicores ("7500m"), and
+# allocatable memory is a Kubernetes quantity in Ki. Normalise both to cores
+# and GiB.
+- name: Add it up
+  ansible.builtin.set_fact:
+    rhoai_cap_cores: >-
+      {{ (rhoai_cap_nodes.stdout_lines
+          | map('split') | map(attribute=1)
+          | map('regex_replace', '^(.*)m$', '\1e-3')
+          | map('float') | sum) | round(1) }}
+    rhoai_cap_gib: >-
+      {{ (rhoai_cap_nodes.stdout_lines
+          | map('split') | map(attribute=2)
+          | map('regex_replace', 'Ki$', '')
+          | map('int') | sum / 1048576) | round(1) }}
+    rhoai_cap_arches: >-
+      {{ rhoai_cap_nodes.stdout_lines | map('split') | map(attribute=3) | unique | list }}
+
+- name: Judge it
+  ansible.builtin.set_fact:
+    rhoai_cap_ok: >-
+      {{ (rhoai_cap_cores | float) >= (rhoai_min_cpu_cores | float)
+         and (rhoai_cap_gib | float) >= (rhoai_min_memory_gib | float) }}
+    rhoai_cap_summary: >-
+      {{ rhoai_cap_nodes.stdout_lines | length }} schedulable node(s),
+      {{ rhoai_cap_cores }} allocatable cores and {{ rhoai_cap_gib }} GiB
+      allocatable memory in total ({{ rhoai_cap_arches | join(', ') }}); this
+      lab wants at least {{ rhoai_min_cpu_cores }} cores and
+      {{ rhoai_min_memory_gib }} GiB.
+
+# vLLM's CPU backend on x86-64 is built for AVX-512; llama.cpp needs nothing
+# beyond AVX2. Read the flags off one node rather than guessing from the
+# instance type. `oc debug node/` wants cluster-admin and a schedulable node,
+# and it is the only way to see /proc/cpuinfo without Node Feature Discovery
+# installed - so when it does not work, say the flags are unknown rather than
+# claiming anything about them.
+- name: Read one node's CPU flags
+  ansible.builtin.command:
+    cmd: >-
+      oc debug node/{{ (rhoai_cap_nodes.stdout_lines | first).split()[0] }}
+      --quiet -- chroot /host grep -m1 '^flags' /proc/cpuinfo
+  register: rhoai_cap_flags
+  changed_when: false
+  failed_when: false
+  timeout: 300
+
+- name: Note what the flags say
+  ansible.builtin.set_fact:
+    rhoai_cpu_flags_known: "{{ rhoai_cap_flags.rc == 0 and 'flags' in rhoai_cap_flags.stdout }}"
+    rhoai_has_avx512: "{{ rhoai_cap_flags.rc == 0 and 'avx512f' in rhoai_cap_flags.stdout }}"
+
+- name: Say what that means for the chosen runtime
+  ansible.builtin.set_fact:
+    rhoai_cpu_summary: >-
+      {{ ('runtime ' ~ rhoai_runtime ~ ': ' ~
+          (('the nodes have avx512f, so either runtime works'
+            if rhoai_runtime == 'llamacpp' else
+            'the nodes have avx512f, which is what the CPU vLLM build wants')
+           if rhoai_has_avx512 | bool else
+           ('no avx512f on this CPU - which llama.cpp does not need'
+            if rhoai_runtime == 'llamacpp' else
+            'NO avx512f on this CPU. The CPU vLLM build is compiled for it and'
+            ~ ' will almost certainly die on an illegal instruction or refuse to'
+            ~ ' start. Use the default runtime instead (-e rhoai_runtime=llamacpp),'
+            ~ ' or pass the host CPU through to the nodes - a libvirt guest with a'
+            ~ ' masked CPU model hides flags the host has.')))
+         if rhoai_cpu_flags_known | bool else
+         ('could not read /proc/cpuinfo through `oc debug node/` ('
+          ~ (rhoai_cap_flags.stderr | default('') | trim | truncate(160))
+          ~ '), so the CPU flags are unknown. Not fatal for the default'
+          ~ ' llamacpp runtime, which needs nothing special; for vllm-cpu on'
+          ~ ' x86-64, check avx512f yourself before trusting it.') }}

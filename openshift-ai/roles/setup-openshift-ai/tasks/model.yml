@@ -1,0 +1,281 @@
+---
+# The model: fetched onto the PVC, then served on CPU through KServe.
+#
+# Three objects and one Job, in this order, because each needs the one before:
+#   1. a Job that downloads the weights onto the PVC
+#   2. a ServingRuntime - how to serve them
+#   3. an InferenceService - serve THESE weights with THAT runtime
+# and then a wait until the model answers.
+#
+# NO GPU anywhere. What that costs, and why the runtime is a custom one rather
+# than one of the product's templates, is in templates/serving-runtime.yaml.j2
+# and in README.md.
+
+- name: Work out which StorageClass the PVC is on
+  ansible.builtin.include_tasks: storage-decide.yml
+
+- name: Fail if the project phase has not run
+  ansible.builtin.command:
+    cmd: oc -n {{ rhoai_project_namespace }} get pvc {{ rhoai_model_pvc_name }} -o name
+  register: rhoai_md_pvc
+  changed_when: false
+  failed_when: false
+
+- name: Say so
+  ansible.builtin.assert:
+    that: rhoai_md_pvc.rc == 0
+    fail_msg: >-
+      There is no PVC {{ rhoai_model_pvc_name }} in
+      {{ rhoai_project_namespace }}. Run --tags project first.
+
+- name: Settle on what this runtime needs
+  ansible.builtin.set_fact:
+    rhoai_runtime_image: >-
+      {{ rhoai_llamacpp_image if rhoai_runtime == 'llamacpp'
+         else (rhoai_vllm_cpu_image if rhoai_vllm_cpu_image else '') }}
+
+## ---------------------------------------------------------------------------
+## The image for the CPU vLLM runtime, read off the cluster when it can be
+## ---------------------------------------------------------------------------
+## OpenShift AI ships its own vLLM ServingRuntime templates, and their image
+## tags follow the installed release (quay.io/modh/vllm:rhoai-<x.y>-cpu). That
+## is a better answer than a tag written down in vars.yaml a year ago, so look
+## for a CPU one on the cluster and use its image. There may be none - the CPU
+## template is only shipped for some architectures - in which case the pinned
+## fallback is used and the run says so.
+- name: Find the product's own CPU vLLM template
+  when:
+    - rhoai_runtime == 'vllm-cpu'
+    - not rhoai_vllm_cpu_image
+  block:
+    - name: Read the ServingRuntime templates the operator installed
+      ansible.builtin.command:
+        cmd: >-
+          oc -n {{ rhoai_applications_namespace }} get templates
+          -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.objects[0].spec.containers[0].image}{"\n"}{end}'
+      register: rhoai_md_templates
+      changed_when: false
+      failed_when: false
+
+    - name: Pick the one whose image is a CPU build
+      ansible.builtin.set_fact:
+        rhoai_md_cpu_templates: >-
+          {{ rhoai_md_templates.stdout_lines | default([])
+             | select('search', 'vllm') | select('search', 'cpu') | map('split') | list }}
+
+    - name: Settle on the image
+      ansible.builtin.set_fact:
+        rhoai_runtime_image: >-
+          {{ rhoai_md_cpu_templates[0][1] if rhoai_md_cpu_templates | length > 0
+             else rhoai_vllm_cpu_image_fallback }}
+
+    - name: Say where it came from
+      ansible.builtin.debug:
+        msg: >-
+          {{ ('CPU vLLM image ' ~ rhoai_runtime_image ~ ' taken from the template '
+              ~ rhoai_md_cpu_templates[0][0] ~ ' this OpenShift AI installed.')
+             if rhoai_md_cpu_templates | length > 0 else
+             ('This OpenShift AI installed no CPU vLLM template, so falling back to the'
+              ~ ' pinned ' ~ rhoai_runtime_image ~ '. If that tag does not exist, set'
+              ~ ' rhoai_vllm_cpu_image to one that does - or use the default runtime'
+              ~ ' (-e rhoai_runtime=llamacpp), which needs no such image.') }}
+
+- name: Fail if there is no image to serve with
+  ansible.builtin.assert:
+    that: rhoai_runtime_image | length > 0
+    fail_msg: >-
+      No image for runtime '{{ rhoai_runtime }}'. Set
+      {{ 'rhoai_llamacpp_image' if rhoai_runtime == 'llamacpp' else 'rhoai_vllm_cpu_image' }}.
+
+## ---------------------------------------------------------------------------
+## Fetch the weights
+## ---------------------------------------------------------------------------
+
+# The script is kept as a file in the role and turned into a ConfigMap
+# manifest with --dry-run, so what is applied is exactly the file on disk -
+# the same arrangement as the SPIFFE lab's demo app.
+- name: Render the fetch script as a ConfigMap manifest
+  ansible.builtin.shell:
+    cmd: >-
+      oc create configmap {{ rhoai_fetch_script_cm }} -n {{ rhoai_project_namespace }}
+      --from-file={{ role_path }}/files/fetch-model.sh
+      --dry-run=client -o yaml > {{ rhoai_manifest_dir }}/20-fetch-script.yaml
+  changed_when: false
+
+# A Job's spec is immutable, so the name has to change when what it downloads
+# changes - otherwise `oc apply` is rejected on the second model. Hashing the
+# inputs gives a name that is stable for a given model and different for a
+# different one.
+- name: Name the fetch Job after what it fetches
+  ansible.builtin.set_fact:
+    rhoai_fetch_hash: >-
+      {{ [rhoai_runtime, rhoai_model_dir, rhoai_model_file_match, rhoai_hf_endpoint,
+          (rhoai_model_gguf_repo if rhoai_runtime == 'llamacpp' else rhoai_model_hf_repo)]
+         | join('|') | hash('sha1') | truncate(10, true, '') }}
+
+- name: Settle on the Job's name
+  ansible.builtin.set_fact:
+    rhoai_fetch_job: "rhoai-fetch-{{ rhoai_fetch_hash }}"
+
+- name: Render the Secret and the fetch Job
+  ansible.builtin.template:
+    src: model-fetch.yaml.j2
+    dest: "{{ rhoai_manifest_dir }}/20-model-fetch.yaml"
+    mode: '0644'
+
+- name: Apply them
+  ansible.builtin.command:
+    cmd: oc apply -f {{ rhoai_manifest_dir }}/{{ item }}
+  loop:
+    - 20-fetch-script.yaml
+    - 20-model-fetch.yaml
+  register: rhoai_md_fetch_apply
+  changed_when: rhoai_md_fetch_apply.stdout_lines | reject('search', ' unchanged$') | list | length > 0
+
+- name: Wait for the fetch Job
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_project_namespace }} get job {{ rhoai_fetch_job }}
+      -o 'jsonpath={.status.succeeded}|{.status.failed}'
+  register: rhoai_md_fetch
+  retries: "{{ (rhoai_fetch_timeout | int / 10) | round | int }}"
+  delay: 10
+  until: rhoai_md_fetch.rc == 0 and rhoai_md_fetch.stdout.split('|')[0] | length > 0
+  changed_when: false
+  failed_when: false
+
+- name: Read the Job's log, which says exactly what it did or could not do
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_project_namespace }} logs job/{{ rhoai_fetch_job }} --tail=40
+  register: rhoai_md_fetch_log
+  changed_when: false
+  failed_when: false
+
+- name: Fail if the weights were not downloaded
+  ansible.builtin.assert:
+    that: rhoai_md_fetch.stdout.split('|')[0] | default('0', true) | int > 0
+    fail_msg: >-
+      The fetch Job {{ rhoai_fetch_job }} did not succeed
+      (succeeded|failed = '{{ rhoai_md_fetch.stdout | default('', true) }}').
+      Its log:
+      {{ rhoai_md_fetch_log.stdout | default('(none)') }}
+      -- This Job is the one thing in this lab that reaches the internet. On a
+      disconnected cluster, point rhoai_hf_endpoint at a mirror or put the
+      weights on the PVC by hand - see README.md, "Disconnected".
+    success_msg: >-
+      {{ rhoai_model_dir }} is on the PVC.
+      {{ rhoai_md_fetch_log.stdout_lines | default([]) | select('search', '^ *[a-z0-9]') | last | default('') }}
+
+## ---------------------------------------------------------------------------
+## Serve them
+## ---------------------------------------------------------------------------
+
+- name: Render the ServingRuntime and the InferenceService
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ rhoai_manifest_dir }}/{{ item.dest }}"
+    mode: '0644'
+  loop:
+    - {src: serving-runtime.yaml.j2, dest: 21-runtime.yaml}
+    - {src: inference-service.yaml.j2, dest: 22-inferenceservice.yaml}
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Apply them
+  ansible.builtin.command:
+    cmd: oc apply -f {{ rhoai_manifest_dir }}/{{ item }}
+  loop:
+    - 21-runtime.yaml
+    - 22-inferenceservice.yaml
+  register: rhoai_md_serve_apply
+  changed_when: rhoai_md_serve_apply.stdout_lines | reject('search', ' unchanged$') | list | length > 0
+
+# KServe's own Deployment for the predictor. Waiting on the rollout first
+# gives a better error than waiting on the InferenceService: a pod that cannot
+# pull its image or cannot find its weights says so here, while the
+# InferenceService just stays not-Ready.
+- name: Wait for the predictor to roll out
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_project_namespace }} rollout status
+      deployment/{{ rhoai_model_name }}-predictor
+      --timeout={{ (rhoai_wait_retries | int) * (rhoai_wait_delay | int) }}s
+  register: rhoai_md_rollout
+  changed_when: false
+  failed_when: false
+  retries: 10
+  delay: 10
+  until: rhoai_md_rollout.rc == 0 or 'NotFound' not in rhoai_md_rollout.stderr
+
+- name: Read the predictor pod's state, if it did not roll out
+  ansible.builtin.command:
+    cmd: "{{ item }}"
+  loop:
+    - >-
+      oc -n {{ rhoai_project_namespace }} get pods
+      -l serving.kserve.io/inferenceservice={{ rhoai_model_name }}
+      -o 'jsonpath={range .items[*]}{.metadata.name}={.status.phase}
+      {range .status.containerStatuses[*]}{.name}:ready={.ready} {.state}{"\n"}{end}{end}'
+    - >-
+      oc -n {{ rhoai_project_namespace }} logs
+      -l serving.kserve.io/inferenceservice={{ rhoai_model_name }}
+      -c kserve-container --tail=30
+  register: rhoai_md_why
+  changed_when: false
+  failed_when: false
+  when: rhoai_md_rollout.rc != 0
+
+- name: Fail if the predictor did not roll out
+  ansible.builtin.assert:
+    that: rhoai_md_rollout.rc == 0
+    fail_msg: >-
+      deployment/{{ rhoai_model_name }}-predictor did not become available.
+      {{ rhoai_md_why.results | default([], true) | selectattr('stdout', 'defined')
+         | map(attribute='stdout') | select() | join(' | ') }}
+      {{ 'A pod Pending with "Insufficient memory" wants more than the cluster has free -
+         lower rhoai_model_memory_request. A container killed with signal 4 (illegal
+         instruction) is the CPU vLLM build on a CPU without AVX-512: use
+         -e rhoai_runtime=llamacpp.' }}
+    success_msg: "{{ rhoai_model_name }}-predictor is available"
+
+- name: Wait for the InferenceService to be Ready
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_project_namespace }} get inferenceservice {{ rhoai_model_name }}
+      -o 'jsonpath={range .status.conditions[?(@.type=="Ready")]}{.status}{end}|{.status.modelStatus.states.activeModelState}'
+  register: rhoai_md_isvc
+  retries: "{{ rhoai_wait_retries }}"
+  delay: "{{ rhoai_wait_delay }}"
+  until: rhoai_md_isvc.rc == 0 and rhoai_md_isvc.stdout.split('|')[0] == 'True'
+  changed_when: false
+  failed_when: false
+
+- name: Fail if it is not
+  ansible.builtin.assert:
+    that: rhoai_md_isvc.stdout.split('|')[0] == 'True'
+    fail_msg: >-
+      InferenceService {{ rhoai_model_name }} is not Ready
+      (Ready|activeModelState = '{{ rhoai_md_isvc.stdout | default('', true) }}')
+      although its predictor rolled out. `oc -n {{ rhoai_project_namespace }}
+      describe inferenceservice {{ rhoai_model_name }}`.
+    success_msg: >-
+      InferenceService {{ rhoai_model_name }} is Ready, served by
+      {{ rhoai_runtime_name }} ({{ rhoai_runtime_image }})
+
+- name: Ask the model what it is serving
+  ansible.builtin.include_tasks: model-probe.yml
+  vars:
+    rhoai_probe_prompt: "{{ rhoai_chatbot_demo_prompt }}"
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      {{ [
+        'model:    ' ~ rhoai_model_name ~ ' (' ~ rhoai_model_dir ~ ')',
+        'runtime:  ' ~ rhoai_runtime_name ~ ' -> ' ~ rhoai_runtime_image,
+        'endpoint: http://' ~ rhoai_model_name ~ '-predictor.' ~ rhoai_project_namespace
+                  ~ '.svc.cluster.local:8080/v1/chat/completions',
+        '/v1/models says: ' ~ (rhoai_probe_models | default('(not read)')),
+        'first answer:    ' ~ (rhoai_probe_answer | default('(none)')),
+      ] }}

@@ -1,0 +1,41 @@
+## Rendered by tasks/dsc.yml into {{ rhoai_manifest_dir }}/02-dsci.yaml, and
+## applied only when the cluster has no DSCInitialization at all - an existing
+## one is patched instead, never replaced, because applicationsNamespace is
+## effectively immutable once the operands are deployed.
+##
+## apiVersion comes from the installed CRD's storage version
+## ({{ rhoai_dsci_version }}), and every field below is written only if that
+## version's schema has it - see tasks/crd-shape.yml for why.
+apiVersion: {{ rhoai_dsci_group }}/{{ rhoai_dsci_version }}
+kind: DSCInitialization
+metadata:
+  name: {{ rhoai_dsci_name }}
+spec:
+{% if 'applicationsNamespace' in rhoai_dsci_props %}
+  applicationsNamespace: {{ rhoai_applications_namespace }}
+{% endif %}
+{% if 'monitoring' in rhoai_dsci_props %}
+  monitoring:
+    managementState: Managed
+{% if 'namespace' in rhoai_dsci_monitoring_props %}
+    namespace: {{ rhoai_monitoring_namespace }}
+{% endif %}
+{% endif %}
+{% if 'serviceMesh' in rhoai_dsci_props %}
+  ## Removed on purpose. Service Mesh is a dependency of KServe's SERVERLESS
+  ## mode only, and this lab runs KServe in {{ rhoai_kserve_deployment_mode }}
+  ## - see rhoai_kserve_deployment_mode in ../vars.yaml. Leaving it Managed
+  ## would have the operator demand the Service Mesh operator and stand up an
+  ## istio control plane this lab never routes through.
+  serviceMesh:
+    managementState: Removed
+{% endif %}
+{% if 'trustedCABundle' in rhoai_dsci_props %}
+  ## Managed with an empty bundle: the operator still injects the cluster's
+  ## own trust bundle into its namespaces, which is what lets the model fetch
+  ## job out through a corporate TLS-inspecting proxy if there is one. Add PEM
+  ## blocks to customCABundle if your mirror registry has a private CA.
+  trustedCABundle:
+    managementState: Managed
+    customCABundle: ""
+{% endif %}

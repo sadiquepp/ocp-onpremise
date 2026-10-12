@@ -1,0 +1,59 @@
+---
+# Read the shape of an installed CRD, so the CR this lab writes matches the
+# operator that is actually there. Reads only.
+#
+# WHY THIS EXISTS. The DataScienceCluster and DSCInitialization CRs have been
+# reorganised more than once: the served API has gone v1 -> v2 -> v3, the
+# component names under .spec.components have moved between those versions,
+# and fields like kserve's rawDeploymentServiceConfig or the DSCI's
+# serviceMesh exist in some versions and not others. A playbook that writes a
+# fixed apiVersion and a fixed field list works until the day the lab's
+# OpenShift AI channel moves, and then fails with "unknown field" - or worse,
+# succeeds while the API server prunes the field it did not recognise.
+#
+# So: ask the CRD. Every CR this lab applies is rendered against the storage
+# version of the INSTALLED CRD, and only ever names fields that version's
+# schema has.
+#
+# In:
+#   rhoai_crd_name       the CRD to read
+# Out:
+#   rhoai_crd_group      its API group, for the apiVersion
+#   rhoai_crd_version    its storage version's name
+#   rhoai_crd_spec       that version's .spec schema node, so the caller can
+#                        index into it: rhoai_crd_spec.properties.components...
+#   rhoai_crd_spec_props the property names directly under .spec, sorted
+
+- name: Read {{ rhoai_crd_name }}
+  ansible.builtin.command:
+    cmd: oc get crd {{ rhoai_crd_name }} -o json
+  register: rhoai_crd_json
+  changed_when: false
+
+- name: Pick out the storage version
+  ansible.builtin.set_fact:
+    rhoai_crd_obj: "{{ rhoai_crd_json.stdout | from_json }}"
+
+- name: Fail unless it has exactly one storage version with a schema
+  ansible.builtin.assert:
+    that:
+      - rhoai_crd_stored | length == 1
+      - rhoai_crd_stored[0].schema.openAPIV3Schema.properties.spec is defined
+    fail_msg: >-
+      {{ rhoai_crd_name }} declares
+      {{ rhoai_crd_stored | length }} storage version(s) with a spec schema,
+      which should be exactly one. `oc get crd {{ rhoai_crd_name }} -o yaml`
+      and look at .spec.versions.
+  vars:
+    rhoai_crd_stored: "{{ rhoai_crd_obj.spec.versions | selectattr('storage', 'defined') | selectattr('storage') | list }}"
+
+- name: Note the group, the version and the spec schema
+  ansible.builtin.set_fact:
+    rhoai_crd_group: "{{ rhoai_crd_obj.spec.group }}"
+    rhoai_crd_version: "{{ rhoai_crd_stored[0].name }}"
+    rhoai_crd_spec: "{{ rhoai_crd_stored[0].schema.openAPIV3Schema.properties.spec }}"
+    rhoai_crd_spec_props: >-
+      {{ (rhoai_crd_stored[0].schema.openAPIV3Schema.properties.spec.properties | default({}, true))
+         | dict2items | map(attribute='key') | list | sort }}
+  vars:
+    rhoai_crd_stored: "{{ rhoai_crd_obj.spec.versions | selectattr('storage', 'defined') | selectattr('storage') | list }}"

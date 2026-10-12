@@ -1,0 +1,166 @@
+---
+# Remove what this lab created, in the reverse of the order it was created -
+# the app, then the model, then the project, then (unless told otherwise) the
+# DataScienceCluster, the DSCInitialization and the operator.
+#
+# Two switches:
+#   -e rhoai_cleanup_keep_models=true   keep the project namespace and the
+#                                       model PVC, so a rebuild does not
+#                                       re-download the weights. Everything
+#                                       else in the namespace still goes.
+#   -e rhoai_cleanup_operator=false     leave OpenShift AI installed and only
+#                                       remove this lab's own objects. Use
+#                                       this on a cluster where somebody else
+#                                       is using OpenShift AI too.
+#
+# Idempotent and tolerant: every delete passes --ignore-not-found, so running
+# this on a cluster where only half the lab was ever built is not an error.
+#
+# WHAT IT DOES NOT REMOVE: the CustomResourceDefinitions. Deleting a CRD
+# deletes every CR of that kind across the cluster, and the OpenShift AI CRDs
+# are shared with anything else that was ever installed from the same
+# operator. Deleting the Subscription and the CSV is what uninstalling means;
+# the CRDs are left, as OLM leaves them. `oc get crd | grep -E
+# 'opendatahub|kserve'` lists them if you want them gone by hand.
+
+- name: Say what is about to be removed
+  ansible.builtin.debug:
+    msg: >-
+      {{ [
+        'cluster: ' ~ rhoai_c.name ~ ' (' ~ rhoai_c.kubeconfig ~ ')',
+        'the app and the model in namespace ' ~ rhoai_project_namespace,
+        ('keeping the PVC ' ~ rhoai_model_pvc_name ~ ' and the namespace'
+         if rhoai_cleanup_keep_models | bool else
+         'and the namespace itself, PVC included - the weights go with it'),
+        ('and OpenShift AI: the DataScienceCluster, the DSCInitialization, the '
+         ~ 'Subscription, the CSV and the ' ~ rhoai_operator_namespace ~ ' / '
+         ~ rhoai_applications_namespace ~ ' namespaces'
+         if rhoai_cleanup_operator | bool else
+         'leaving OpenShift AI itself installed (rhoai_cleanup_operator=false)'),
+        'CRDs are left alone either way - see the comment at the top of cleanup.yml.',
+      ] }}
+
+## ---------------------------------------------------------------------------
+## The app and the model
+## ---------------------------------------------------------------------------
+
+# Named objects rather than `delete all`, so nothing in the namespace that
+# this lab did not create is taken with them.
+- name: Remove the app, the model and the fetch job
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_project_namespace }} delete {{ item }}
+      --ignore-not-found --wait=false
+  loop:
+    - deployment/{{ rhoai_chatbot_name }}
+    - service/{{ rhoai_chatbot_name }}
+    - route/{{ rhoai_chatbot_name }}
+    - configmap/{{ rhoai_chatbot_cm }}
+    - inferenceservice/{{ rhoai_model_name }}
+    - servingruntime/{{ rhoai_runtime_name }}
+    - configmap/{{ rhoai_fetch_script_cm }}
+    - secret/{{ rhoai_hf_secret_name }}
+  register: rhoai_cl_objects
+  changed_when: "'deleted' in rhoai_cl_objects.stdout"
+  failed_when: false
+
+# Every fetch Job this lab has ever run in this namespace, whatever model it
+# was for: they are named rhoai-fetch-<hash of the model>, and a namespace
+# that is being kept should not keep a pile of them.
+- name: Remove every fetch Job
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_project_namespace }} delete job
+      -l app=rhoai-model-fetch --ignore-not-found --wait=false
+  register: rhoai_cl_jobs
+  changed_when: "'deleted' in rhoai_cl_jobs.stdout"
+  failed_when: false
+
+- name: Remove any probe pod a stopped run left behind
+  ansible.builtin.shell:
+    cmd: >-
+      oc -n {{ rhoai_project_namespace }} get pods -o name
+      | grep '^pod/rhoai-probe-' | xargs -r oc -n {{ rhoai_project_namespace }} delete --wait=false
+  register: rhoai_cl_probes
+  changed_when: "'deleted' in rhoai_cl_probes.stdout"
+  failed_when: false
+
+- name: Remove the project namespace, the model PVC with it
+  ansible.builtin.command:
+    cmd: oc delete namespace {{ rhoai_project_namespace }} --ignore-not-found --wait=false
+  register: rhoai_cl_ns
+  changed_when: "'deleted' in rhoai_cl_ns.stdout"
+  when: not rhoai_cleanup_keep_models | bool
+
+## ---------------------------------------------------------------------------
+## OpenShift AI itself
+## ---------------------------------------------------------------------------
+
+- name: Remove OpenShift AI
+  when: rhoai_cleanup_operator | bool
+  block:
+    # The DataScienceCluster goes FIRST and is waited for: it owns the
+    # dashboard, the KServe controller and the webhooks, and deleting the
+    # operator while they still exist leaves them with no controller to remove
+    # them - and a KServe webhook with no backend makes every later
+    # InferenceService create hang.
+    - name: Remove the DataScienceCluster, and wait for it
+      ansible.builtin.command:
+        cmd: oc delete datasciencecluster --all --ignore-not-found --timeout=600s
+      register: rhoai_cl_dsc
+      changed_when: "'deleted' in rhoai_cl_dsc.stdout"
+      failed_when: false
+
+    - name: Remove the DSCInitialization
+      ansible.builtin.command:
+        cmd: oc delete dscinitialization --all --ignore-not-found --timeout=300s
+      register: rhoai_cl_dsci
+      changed_when: "'deleted' in rhoai_cl_dsci.stdout"
+      failed_when: false
+
+    - name: Find the operator's Subscription and CSV
+      ansible.builtin.command:
+        cmd: >-
+          oc -n {{ rhoai_operator_namespace }} get {{ item }} -o name
+      loop:
+        - subscriptions.operators.coreos.com
+        - csv
+      register: rhoai_cl_olm
+      changed_when: false
+      failed_when: false
+
+    - name: Remove them
+      ansible.builtin.command:
+        cmd: oc -n {{ rhoai_operator_namespace }} delete {{ item }} --ignore-not-found
+      loop: >-
+        {{ rhoai_cl_olm.results | map(attribute='stdout_lines') | flatten | select() | list }}
+      register: rhoai_cl_olm_deleted
+      changed_when: "'deleted' in rhoai_cl_olm_deleted.stdout"
+      failed_when: false
+
+    - name: Remove the namespaces OpenShift AI used
+      ansible.builtin.command:
+        cmd: oc delete namespace {{ item }} --ignore-not-found --wait=false
+      loop:
+        - "{{ rhoai_applications_namespace }}"
+        - "{{ rhoai_monitoring_namespace }}"
+        - "{{ rhoai_operator_namespace }}"
+      register: rhoai_cl_ns_rhoai
+      changed_when: "'deleted' in rhoai_cl_ns_rhoai.stdout"
+      failed_when: false
+
+- name: Remove the rendered manifests for this cluster
+  ansible.builtin.file:
+    path: "{{ rhoai_manifest_dir }}"
+    state: absent
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      {{ [
+        'Removed. Namespaces delete in the background - `oc get ns | grep -E '
+          ~ '"' ~ rhoai_project_namespace ~ '|' ~ rhoai_operator_namespace ~ '"` to watch them go.',
+        'A namespace that stays Terminating has an object with a finalizer in it;'
+          ~ ' `oc get all,inferenceservice,servingruntime -n <ns>` finds it.',
+        'The CRDs are still there on purpose - see the comment at the top of cleanup.yml.',
+      ] }}

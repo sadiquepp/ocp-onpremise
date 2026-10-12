@@ -1,0 +1,40 @@
+## Rendered by tasks/project.yml into {{ rhoai_manifest_dir }}/10-project.yaml.
+## The namespace the model and the chat bot share, and the PVC the model's
+## weights are downloaded into.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ rhoai_project_namespace }}
+  labels:
+    ## What makes this an OpenShift AI "data science project" rather than an
+    ## ordinary namespace: the dashboard lists namespaces carrying this label,
+    ## so the model below shows up under Model Serving with a UI to poke it
+    ## from. Nothing on the serving path depends on it.
+    opendatahub.io/dashboard: "true"
+    ## Lets the odh-model-controller inject the ServingRuntime's ConfigMap and
+    ## the predictor's monitoring into this namespace.
+    modelmesh-enabled: "false"
+  annotations:
+    openshift.io/display-name: {{ rhoai_project_display_name | to_json }}
+    openshift.io/description: >-
+      Created by openshift-ai/setup_openshift_ai.yaml. One CPU-served language
+      model and a chat bot that talks to it.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ rhoai_model_pvc_name }}
+  namespace: {{ rhoai_project_namespace }}
+spec:
+  accessModes:
+    ## ReadWriteOnce, not ReadWriteMany: the lab's default StorageClass
+    ## (lvms-vg1, from LVM Storage) is block storage on one node and offers
+    ## nothing else. It is enough here because the fetch Job and the model
+    ## server never run at the same time - the Job finishes before the
+    ## InferenceService is created - but it does mean both land on the same
+    ## node, and that a second replica of the predictor could not start.
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ rhoai_model_pvc_size }}
+  storageClassName: {{ rhoai_sc }}

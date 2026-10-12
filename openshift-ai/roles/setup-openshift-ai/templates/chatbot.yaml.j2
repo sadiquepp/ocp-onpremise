@@ -1,0 +1,131 @@
+## Rendered by tasks/chatbot.yml into {{ rhoai_manifest_dir }}/30-chatbot.yaml.
+## The test app: a Deployment, a Service and a Route. The app's code is a
+## separate ConfigMap, made from roles/setup-openshift-ai/files/chatbot.py so
+## that what runs is exactly the file in the repository.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ rhoai_chatbot_name }}
+  namespace: {{ rhoai_project_namespace }}
+  labels:
+    app: {{ rhoai_chatbot_name }}
+spec:
+  replicas: {{ rhoai_chatbot_replicas }}
+  selector:
+    matchLabels:
+      app: {{ rhoai_chatbot_name }}
+  template:
+    metadata:
+      labels:
+        app: {{ rhoai_chatbot_name }}
+      annotations:
+        ## Roll the pods when the code changes. A ConfigMap update is not a
+        ## pod update, so without this a changed chatbot.py would sit in the
+        ## ConfigMap while the old one kept running.
+        rhoai/code-checksum: "{{ rhoai_chatbot_code_checksum }}"
+    spec:
+      containers:
+        - name: {{ rhoai_chatbot_name }}
+          image: {{ rhoai_chatbot_image }}
+          ## The image's own entrypoint expects an application to build; this
+          ## is one file, run directly. -u so the log is not buffered behind a
+          ## generation that takes a minute.
+          command: ["python3", "-u", "/app/chatbot.py"]
+          env:
+            ## The predictor Service KServe created for the InferenceService.
+            ## In-cluster and by name - the model needs no Route for this, and
+            ## by default has none.
+            - name: MODEL_ENDPOINT
+              value: http://{{ rhoai_model_name }}-predictor.{{ rhoai_project_namespace }}.svc.cluster.local:8080
+            - name: MODEL_NAME
+              value: {{ rhoai_model_name }}
+            - name: SYSTEM_PROMPT
+              value: {{ rhoai_chatbot_system_prompt | trim | to_json }}
+            - name: DEMO_PROMPT
+              value: {{ rhoai_chatbot_demo_prompt | trim | to_json }}
+            - name: MAX_TOKENS
+              value: {{ rhoai_chatbot_max_tokens | string | to_json }}
+            - name: TEMPERATURE
+              value: {{ rhoai_chatbot_temperature | string | to_json }}
+            - name: REQUEST_TIMEOUT
+              value: {{ rhoai_chatbot_timeout | string | to_json }}
+            - name: PORT
+              value: "8080"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          ## Both probes hit /healthz, which answers as soon as the process is
+          ## up and says nothing about the model. A probe that went through to
+          ## the model would restart this pod for the whole of the model's cold
+          ## start, which is the one time you want to be able to read the app's
+          ## /api/health and see why.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: app
+              mountPath: /app
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: app
+          configMap:
+            name: {{ rhoai_chatbot_cm }}
+            defaultMode: 0444
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ rhoai_chatbot_name }}
+  namespace: {{ rhoai_project_namespace }}
+  labels:
+    app: {{ rhoai_chatbot_name }}
+spec:
+  selector:
+    app: {{ rhoai_chatbot_name }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ rhoai_chatbot_name }}
+  namespace: {{ rhoai_project_namespace }}
+  labels:
+    app: {{ rhoai_chatbot_name }}
+spec:
+  ## No host: the ingress controller names it
+  ## {{ rhoai_chatbot_name }}-{{ rhoai_project_namespace }}.{{ rhoai_c.apps_domain }},
+  ## which resolves through the helper's existing *.apps wildcard - so this
+  ## lab adds no DNS record anywhere.
+  to:
+    kind: Service
+    name: {{ rhoai_chatbot_name }}
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

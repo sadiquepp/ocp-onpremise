@@ -1,0 +1,172 @@
+## Red Hat OpenShift AI on a lab cluster with NO GPU: the operator, a
+## DataScienceCluster, one small language model served on CPU through KServe,
+## and a chat bot that talks to it.
+##
+## WHAT IT BUILDS, end to end:
+##
+##   the rhods-operator Subscription in redhat-ods-operator
+##     -> a DSCInitialization (applications namespace, Service Mesh Removed)
+##     -> a DataScienceCluster with dashboard + workbenches + kserve, KServe
+##        in RawDeployment mode so neither Serverless nor Service Mesh is
+##        needed
+##     -> a data science project namespace with a PVC
+##     -> a Job that downloads Qwen2.5-0.5B-Instruct into that PVC
+##     -> a custom CPU ServingRuntime and an InferenceService on it
+##     -> a chat bot Deployment, Service and Route that calls the model's
+##        /v1/chat/completions
+##
+## WHAT THIS DOES TO THE EXISTING LAB: nothing outside the objects it creates.
+## No base role is run or changed, no VM is added, no DNS record is added -
+## the dashboard and the chat bot are both Routes under the cluster's existing
+## *.apps wildcard. It adds one operator (in its own namespace, with an
+## AllNamespaces OperatorGroup), the three namespaces OpenShift AI uses, and
+## one project namespace. `--tags cleanup` removes all of it.
+##
+## It does need room: OpenShift AI's own operands plus a model server are
+## several GiB of RAM and a few cores. The preflight phase adds up the
+## cluster's allocatable capacity and says whether it fits before anything is
+## installed.
+##
+## Run from inside openshift-ai/ (ansible.cfg is read from the working
+## directory). build-lab.sh runs every phase in order; by hand:
+##
+##   cd openshift-ai
+##   PB="ansible-playbook setup_openshift_ai.yaml --ask-vault-pass -e rhoai_cluster=hub"
+##
+##   $PB --tags preflight   is the operator in the catalog, what channel, is
+##                          there a default StorageClass, has the cluster the
+##                          CPU and memory for it, do the nodes' CPU flags
+##                          suit the chosen runtime. Changes nothing.
+##   $PB --tags operator    Namespace, OperatorGroup, Subscription; waits for
+##                          the CSV and the CRDs.
+##   $PB --tags dsc         DSCInitialization and DataScienceCluster; waits
+##                          for both to be Ready and reports the dashboard
+##                          Route.
+##   $PB --tags project     the data science project namespace and the model
+##                          PVC.
+##   $PB --tags model       the fetch Job, the ServingRuntime and the
+##                          InferenceService; waits for the model to answer
+##                          /v1/models.
+##   $PB --tags chatbot     the chat bot: ConfigMap, Deployment, Service,
+##                          Route.
+##   $PB --tags verify      assert only: the operator is Succeeded, the DSC is
+##                          Ready, the model completes a chat request, and the
+##                          app's own /api/demo prompt comes back answered.
+##   $PB --tags cleanup     remove everything above from that cluster.
+##
+## Every phase is `tags: [<phase>, never]`: it runs only when named. A bare
+## run does nothing but the kubeconfig check, deliberately - the same shape as
+## spiffe-spire/setup_spiffe_spire.yaml.
+
+- name: Red Hat OpenShift AI, CPU only, on one cluster
+  hosts: localhost
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../vars.yaml          # base (and, for now, everyone else's)
+    - vars.yaml             # this use case - may refer to base variables freely
+    - ["../vault.yaml", "vars.yaml"]   # optional: only a gated model reads hf_token
+  vars:
+    # The selected cluster. Guarded with a default so the assert below, not a
+    # templating error, is what reports a missing or misspelt -e rhoai_cluster.
+    rhoai_c: "{{ rhoai_clusters[rhoai_cluster | default('')] | default({}) }}"
+  environment:
+    KUBECONFIG: "{{ rhoai_c.kubeconfig | default('/nonexistent') }}"
+  pre_tasks:
+    - name: Fail unless -e rhoai_cluster names a cluster
+      ansible.builtin.assert:
+        that:
+          - rhoai_cluster is defined
+          - rhoai_cluster in rhoai_clusters
+        fail_msg: >-
+          Pass -e rhoai_cluster=<{{ rhoai_clusters.keys() | join('|') }}>.
+          Every phase runs against exactly one cluster; this lab has no
+          cross-cluster phase.
+      tags: &rhoai_phase_tags [preflight, operator, dsc, project, model, chatbot, verify, cleanup]
+
+    - name: Fail unless the chosen runtime is one this lab knows
+      ansible.builtin.assert:
+        that: rhoai_runtime in ['llamacpp', 'vllm-cpu']
+        fail_msg: >-
+          rhoai_runtime is '{{ rhoai_runtime }}'. It is llamacpp (the default -
+          llama.cpp's server on a GGUF file, any x86-64 CPU) or vllm-cpu (the
+          product's CPU vLLM runtime, which wants AVX-512 on x86-64). See
+          vars.yaml.
+      tags: *rhoai_phase_tags
+
+    - name: Look for the selected cluster's kubeconfig
+      ansible.builtin.stat:
+        path: "{{ rhoai_c.kubeconfig }}"
+      register: rhoai_kubeconfig_stat
+      tags: *rhoai_phase_tags
+
+    # Same guard as the SPIFFE and UDN labs': without it every `oc` below
+    # talks to whatever the ambient KUBECONFIG is, which on this host is
+    # usually the hub - so a SNO run would install OpenShift AI on the hub and
+    # look like it worked.
+    - name: Say which kubeconfig is missing rather than letting oc say nothing
+      ansible.builtin.assert:
+        that: rhoai_kubeconfig_stat.stat.exists
+        fail_msg: >-
+          rhoai_cluster is '{{ rhoai_cluster }}', whose kubeconfig should be at
+          {{ rhoai_c.kubeconfig }} - and there is no file there. Build the
+          cluster first (setup_hub_cluster.yaml / setup_hub_cluster2.yaml /
+          setup_sno.yaml in the repository root).
+        success_msg: "Cluster '{{ rhoai_cluster }}' -> {{ rhoai_c.kubeconfig }}"
+      tags: *rhoai_phase_tags
+
+    - name: Create the manifest directory for this cluster
+      ansible.builtin.file:
+        path: "{{ rhoai_manifest_dir }}"
+        state: directory
+        mode: '0755'
+      tags: *rhoai_phase_tags
+
+  tasks:
+    - name: Pre-flight - changes nothing
+      ansible.builtin.import_role:
+        name: setup-openshift-ai
+        tasks_from: preflight.yml
+      tags: [preflight, never]
+
+    - name: The Red Hat OpenShift AI operator
+      ansible.builtin.import_role:
+        name: setup-openshift-ai
+        tasks_from: operator.yml
+      tags: [operator, never]
+
+    - name: DSCInitialization and DataScienceCluster
+      ansible.builtin.import_role:
+        name: setup-openshift-ai
+        tasks_from: dsc.yml
+      tags: [dsc, never]
+
+    - name: The data science project and the model PVC
+      ansible.builtin.import_role:
+        name: setup-openshift-ai
+        tasks_from: project.yml
+      tags: [project, never]
+
+    - name: The model - fetched, then served on CPU through KServe
+      ansible.builtin.import_role:
+        name: setup-openshift-ai
+        tasks_from: model.yml
+      tags: [model, never]
+
+    - name: The chat bot
+      ansible.builtin.import_role:
+        name: setup-openshift-ai
+        tasks_from: chatbot.yml
+      tags: [chatbot, never]
+
+    - name: Verify - asserts only
+      ansible.builtin.import_role:
+        name: setup-openshift-ai
+        tasks_from: verify.yml
+      tags: [verify, never]
+
+    - name: Remove everything this lab created on the cluster
+      ansible.builtin.import_role:
+        name: setup-openshift-ai
+        tasks_from: cleanup.yml
+      tags: [cleanup, never]

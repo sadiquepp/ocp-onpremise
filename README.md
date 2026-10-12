@@ -61,6 +61,7 @@ In a hurry? [steps.md](steps.md) is the same end-to-end run as commands only.
   - [Verifying](#verifying-1)
   - [Notes and constraints](#notes-and-constraints-1)
 - [Three-node compact cluster](#three-node-compact-cluster)
+- [Red Hat OpenShift AI on CPU (no GPU)](#red-hat-openshift-ai-on-cpu-no-gpu)
 - [UDN over BGP, VRF-Lite and EVPN (containerlab fabric)](#udn-over-bgp-vrf-lite-and-evpn-containerlab-fabric)
   - [Can this be simulated on this lab? Yes - here is the honest shape of it](#can-this-be-simulated-on-this-lab-yes---here-is-the-honest-shape-of-it)
   - [The one idea to drop first: you do not move a UDN's default gateway](#the-one-idea-to-drop-first-you-do-not-move-a-udns-default-gateway)
@@ -2084,6 +2085,60 @@ cd compact-cluster
 ansible-playbook -i ../inventory/hosts setup_compact_cluster.yaml --ask-vault-pass
 ```
 
+## Red Hat OpenShift AI on CPU (no GPU)
+
+**Lives in [`openshift-ai/`](openshift-ai/).** Red Hat OpenShift AI on one of
+this repository's clusters, a small language model served on **CPU** through
+KServe, and a chat bot in front of it. The last phase asserts that the app
+generated a prompt of its own and the model answered it, over the Route.
+
+No GPU is the constraint the design follows from: KServe runs in
+RawDeployment mode, so neither OpenShift Serverless nor Service Mesh is
+needed, and the model is served by a custom CPU ServingRuntime around
+llama.cpp - the product's own vLLM runtimes are accelerator builds, and its
+CPU vLLM runtime is supported on ppc64le, s390x and ARM rather than x86-64.
+
+| Document | What it covers |
+| --- | --- |
+| [openshift-ai/README.md](openshift-ai/README.md) | What it builds, the no-GPU problem, the phases, the variables, the traps |
+| [openshift-ai/openshift-ai-steps.md](openshift-ai/openshift-ai-steps.md) | Every step by hand, with the `oc` commands and the YAML |
+| [openshift-ai/troubleshooting.md](openshift-ai/troubleshooting.md) | Each way it has failed, and what the failure looks like |
+
+Additive like the labs below: it shares `vars.yaml`, `vault.yaml`,
+`inventory/hosts` and `roles/`, but nothing in the hub, hosted-cluster, OADP
+or Ceph flows reads it. It adds one operator, four namespaces and one 20Gi
+PVC, no VM and no DNS record - both Routes are under the cluster's existing
+`*.apps` wildcard. Run it from inside the directory:
+
+```bash
+cd openshift-ai
+./build-lab.sh --cluster hub            # everything, in order
+./build-lab.sh --cluster hub --list     # what the steps are
+```
+
+or one phase at a time:
+
+```bash
+cd openshift-ai
+ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml \
+  --tags preflight -e rhoai_cluster=hub
+```
+
+It needs a cluster that already exists (`setup_hub_cluster.yaml`,
+`setup_sno.yaml`), a default StorageClass - `lvms-vg1` from the base build -
+and, for the one Job that downloads the weights, egress to `huggingface.co`
+from the cluster or a mirror of it. The preflight phase checks all of that,
+plus whether the cluster has the 12 cores and 40 GiB these objects need,
+before anything is installed.
+
+Nothing in `cleanup.yaml` touches it - it creates no VM, so it is removed from
+inside the cluster instead:
+
+```bash
+cd openshift-ai
+./build-lab.sh --cluster hub --only cleanup
+```
+
 ## UDN over BGP, VRF-Lite and EVPN (containerlab fabric)
 
 **Moved to [`udn-bgp-evpn/`](udn-bgp-evpn/).** The whole lab - the two roles,
@@ -2156,6 +2211,7 @@ delegates.
 | `setup_ceph_odf.yaml`         | Install ODF and attach that Ceph cluster to a hub in external mode |
 | `cleanup-ceph.yaml`           | Destroy the Ceph VMs and their OSD disks - also the DR demo's deliberate storage-loss step |
 | `udn-bgp-evpn/setup_udn_bgp_lab.yaml` | Build the containerlab BGP/EVPN provider fabric and wire a cluster into it. Phase-tagged: `--tags fabric\|preflight\|default\|shared\|vrflite\|evpn` |
+| `openshift-ai/setup_openshift_ai.yaml` | Install Red Hat OpenShift AI on a cluster and serve a small language model on CPU, with a chat bot in front of it. Phase-tagged, and every phase runs only when named: `--tags preflight\|operator\|dsc\|project\|model\|chatbot\|verify\|cleanup`, plus `-e rhoai_cluster=hub\|hub2\|sno` |
 
 
 
@@ -2177,6 +2233,7 @@ delegates.
 | `setup-ceph-odf-consumer` | Installs the ODF operator and extracts its exporter script (stage `install`), then creates the external-cluster secret and `StorageCluster` (stage `create`) |
 | `udn-bgp-evpn/roles/setup-clab-fabric` | Creates the isolated fabric bridge (virbr1), adds a second NIC to each OCP node VM, optionally builds the containerlab VM, and deploys the FRR topology (single border leaf, or leaf/spine/leaf for EVPN) |
 | `udn-bgp-evpn/roles/setup-udn-bgp` | The cluster half: enables FRR + route advertisements, addresses the fabric NICs via NMState, creates the tenant CUDNs and workloads, and applies the phase's `FRRConfiguration`/`RouteAdvertisements`. Discovers each node's live UDN VRF before writing any VRF-Lite policy |
+| `openshift-ai/roles/setup-openshift-ai` | Installs the OpenShift AI operator, then a DSCInitialization and DataScienceCluster rendered against the INSTALLED CRD's storage version and component list (the CR has gone v1 -> v2 -> v3), with KServe in RawDeployment so neither Serverless nor Service Mesh is needed. Then a model PVC, a fetch Job, a custom CPU ServingRuntime, an InferenceService, and a standard-library chat bot that proves the whole path with a prompt it writes itself |
 
 
 

@@ -1,0 +1,185 @@
+## Rendered by tasks/model.yml into {{ rhoai_manifest_dir }}/21-runtime.yaml.
+## A ServingRuntime - the thing that says HOW a model is served - for
+## {{ rhoai_runtime }}, on CPU.
+##
+## WHY A CUSTOM ONE. OpenShift AI ships ServingRuntime templates out of the
+## box, and on a cluster with a GPU you would pick one of the vLLM ones and be
+## done. None of them fits this lab: the vLLM templates are CUDA or ROCm
+## builds, and the one CPU vLLM runtime Red Hat ships is supported on IBM
+## Power, IBM Z and ARM rather than the x86-64 this lab runs on. A custom
+## ServingRuntime is itself a documented OpenShift AI feature, so this is the
+## intended way out, not a workaround.
+##
+## It is created in the project namespace rather than as a cluster-wide
+## template, so it sits beside the product's own templates instead of
+## competing with them for autoSelect.
+##
+## The name the model answers under in /v1/models - and the name the chat bot
+## puts in every request - is written in below as {{ rhoai_model_name }}.
+## KServe also understands the placeholder {{ '{{' }}.Name{{ '}}' }} here, which it
+## replaces with the InferenceService's name when it reconciles it, and that
+## is what the product's own vLLM templates use. This lab writes the name
+## instead: both come from rhoai_model_name, so they cannot drift, and the
+## served name then does not depend on a substitution whose behaviour varies
+## between KServe versions. A runtime shared by several models wants the
+## placeholder.
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: {{ rhoai_runtime_name }}
+  namespace: {{ rhoai_project_namespace }}
+  labels:
+    opendatahub.io/dashboard: "true"
+  annotations:
+    openshift.io/display-name: {{ rhoai_runtime_display_name | to_json }}
+    ## No accelerator: this is the whole point. The dashboard uses this
+    ## annotation to suggest runtimes for a model, and an empty list keeps it
+    ## from offering this one for a GPU it cannot use.
+    opendatahub.io/recommended-accelerators: '[]'
+spec:
+  ## One model per pod. The alternative, multiModel, is ModelMesh's territory
+  ## and wants a model-mesh controller this lab does not run.
+  multiModel: false
+  supportedModelFormats:
+    - name: {{ rhoai_model_format }}
+      ## autoSelect off: the InferenceService names this runtime explicitly,
+      ## and a runtime that volunteers for a format can otherwise be picked
+      ## for somebody else's model in this namespace.
+      autoSelect: false
+  protocolVersions:
+    - v2
+  containers:
+    - name: kserve-container
+      image: {{ rhoai_runtime_image }}
+{% if rhoai_runtime == 'llamacpp' %}
+      ## llama.cpp's server speaks the OpenAI API - /v1/models,
+      ## /v1/chat/completions - which is all the chat bot needs, and loads one
+      ## GGUF file. The file name is not written here: KServe mounts the PVC
+      ## at /mnt/models and the wrapper takes the only .gguf it finds, because
+      ## the fetch job picks the file by quantisation, not by name.
+      ##
+      ## The binary's path differs between llama.cpp image builds, so it is
+      ## looked for rather than assumed - a wrong path would otherwise show up
+      ## as a CrashLoopBackOff with "no such file or directory" and nothing
+      ## else to go on.
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+          gguf="$(ls -1 /mnt/models/*.gguf 2>/dev/null | head -1 || true)"
+          if [ -z "$gguf" ]; then
+            echo "No .gguf in /mnt/models. The fetch job either has not run or"
+            echo "wrote somewhere else; ls /mnt/models:"
+            ls -la /mnt/models || true
+            exit 1
+          fi
+          bin=""
+{% if rhoai_llamacpp_binary | length > 0 %}
+          bin="{{ rhoai_llamacpp_binary }}"
+{% else %}
+          for p in "$(command -v llama-server 2>/dev/null || true)" \
+                   /app/llama-server /llama-server /usr/local/bin/llama-server \
+                   /usr/bin/llama-server /app/server; do
+            if [ -n "$p" ] && [ -x "$p" ]; then bin="$p"; break; fi
+          done
+{% endif %}
+          if [ -z "$bin" ]; then
+            echo "No llama-server binary in {{ rhoai_runtime_image }}."
+            echo "Set rhoai_llamacpp_binary to its path and re-run --tags model."
+            exit 1
+          fi
+          echo "serving $gguf with $bin"
+          exec "$bin" \
+            --host 0.0.0.0 --port 8080 \
+            --model "$gguf" \
+            --alias {{ rhoai_model_name | quote }} \
+            --ctx-size {{ rhoai_model_context_length }} \
+            --threads {{ rhoai_model_cpu_limit }} \
+            --metrics
+{% else %}
+      ## The product's CPU vLLM build, started the same way its own template
+      ## starts the GPU ones: the OpenAI-compatible API server, on the
+      ## snapshot KServe mounted at /mnt/models.
+      command:
+        - python
+        - -m
+        - vllm.entrypoints.openai.api_server
+      args:
+        - --host=0.0.0.0
+        - --port=8080
+        - --model=/mnt/models
+        - --served-model-name={{ rhoai_model_name }}
+        - --max-model-len={{ rhoai_model_context_length }}
+        ## No GPU to shard over, and nothing to offload to.
+        - --device=cpu
+        - --dtype=bfloat16
+{% endif %}
+      ports:
+        - containerPort: 8080
+          protocol: TCP
+      ## KServe only generates probes for a container that has none, and the
+      ## ones it generates are for its own v1/v2 inference protocols - which
+      ## an OpenAI-API server does not serve. So the probes are declared here,
+      ## against /health, which both runtimes have.
+      ##
+      ## The startup probe is the one that matters: loading a model off a lab
+      ## PVC and building the KV cache takes minutes, and without it the
+      ## liveness probe kills the container before it ever finishes.
+      startupProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        periodSeconds: 10
+        failureThreshold: 90
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        periodSeconds: 10
+        failureThreshold: 3
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        periodSeconds: 30
+        failureThreshold: 5
+      ## Both runtimes write a little scratch - a cache directory, a
+      ## tokenizer's compiled form - and /mnt/models is read-only to them in
+      ## spirit if not in mode. HOME and the cache variables point at an
+      ## emptyDir so the container does not try to write into the image.
+      env:
+        - name: HOME
+          value: /tmp
+        - name: HF_HOME
+          value: /tmp/hf
+        - name: XDG_CACHE_HOME
+          value: /tmp/cache
+        - name: TRANSFORMERS_OFFLINE
+          value: "1"
+        - name: HF_HUB_OFFLINE
+          value: "1"
+      volumeMounts:
+        - name: scratch
+          mountPath: /tmp
+{% if rhoai_runtime != 'llamacpp' %}
+        ## vLLM wants a big /dev/shm for its own workers even on one CPU.
+        - name: shm
+          mountPath: /dev/shm
+{% endif %}
+      securityContext:
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+  volumes:
+    - name: scratch
+      emptyDir:
+        sizeLimit: 2Gi
+{% if rhoai_runtime != 'llamacpp' %}
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi
+{% endif %}

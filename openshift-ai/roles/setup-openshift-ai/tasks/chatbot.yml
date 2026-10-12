@@ -1,0 +1,100 @@
+---
+# The test app: a chat bot that talks to the model.
+#
+# One Deployment, one Service, one Route, and the app's code in a ConfigMap.
+# No image is built: chatbot.py is standard-library-only Python, mounted into
+# the UBI python image and run - so there is nothing to build, nothing to push
+# to a registry, and nothing to mirror for a disconnected cluster.
+
+- name: Fail if the model is not being served
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_project_namespace }} get inferenceservice {{ rhoai_model_name }}
+      -o 'jsonpath={range .status.conditions[?(@.type=="Ready")]}{.status}{end}'
+  register: rhoai_cb_isvc
+  changed_when: false
+  failed_when: false
+
+- name: Say so
+  ansible.builtin.assert:
+    that: rhoai_cb_isvc.rc == 0 and rhoai_cb_isvc.stdout == 'True'
+    fail_msg: >-
+      InferenceService {{ rhoai_model_name }} in
+      {{ rhoai_project_namespace }} is
+      {{ "not Ready ('" ~ rhoai_cb_isvc.stdout ~ "')" if rhoai_cb_isvc.rc == 0 else 'not there' }}.
+      Run --tags model first - the app would start and then have nothing to
+      talk to.
+
+# The Python is kept as a file in the role and turned into a ConfigMap
+# manifest with --dry-run, so what is applied is exactly the file on disk -
+# the same arrangement as the SPIFFE lab's demo app.
+- name: Render the app's code as a ConfigMap manifest
+  ansible.builtin.shell:
+    cmd: >-
+      oc create configmap {{ rhoai_chatbot_cm }} -n {{ rhoai_project_namespace }}
+      --from-file={{ role_path }}/files/chatbot.py
+      --dry-run=client -o yaml > {{ rhoai_manifest_dir }}/30-chatbot-code.yaml
+  changed_when: false
+
+# A ConfigMap change does not restart a pod by itself. Putting the code's
+# checksum on the pod template does: the Deployment's template changes, so the
+# Deployment rolls, so the new code actually runs.
+- name: Checksum the code
+  ansible.builtin.stat:
+    path: "{{ role_path }}/files/chatbot.py"
+    checksum_algorithm: sha1
+  register: rhoai_cb_code
+
+- name: Keep it
+  ansible.builtin.set_fact:
+    rhoai_chatbot_code_checksum: "{{ rhoai_cb_code.stat.checksum }}"
+
+- name: Render the Deployment, Service and Route
+  ansible.builtin.template:
+    src: chatbot.yaml.j2
+    dest: "{{ rhoai_manifest_dir }}/30-chatbot.yaml"
+    mode: '0644'
+
+- name: Apply them
+  ansible.builtin.command:
+    cmd: oc apply -f {{ rhoai_manifest_dir }}/{{ item }}
+  loop:
+    - 30-chatbot-code.yaml
+    - 30-chatbot.yaml
+  register: rhoai_cb_apply
+  changed_when: rhoai_cb_apply.stdout_lines | reject('search', ' unchanged$') | list | length > 0
+
+- name: Wait for it to roll out
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_project_namespace }} rollout status
+      deployment/{{ rhoai_chatbot_name }} --timeout=300s
+  changed_when: false
+
+- name: Read its Route
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_project_namespace }} get route {{ rhoai_chatbot_name }}
+      -o jsonpath={.spec.host}
+  register: rhoai_cb_route
+  retries: 12
+  delay: 5
+  until: rhoai_cb_route.rc == 0 and rhoai_cb_route.stdout | length > 0
+  changed_when: false
+
+- name: Keep it
+  ansible.builtin.set_fact:
+    rhoai_chatbot_url: "https://{{ rhoai_cb_route.stdout }}"
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      {{ [
+        'chat bot:   ' ~ rhoai_chatbot_url,
+        'demo:       curl -sk ' ~ rhoai_chatbot_url ~ '/api/demo',
+        'health:     curl -sk ' ~ rhoai_chatbot_url ~ '/api/health',
+        'talking to: ' ~ rhoai_model_name ~ '-predictor.' ~ rhoai_project_namespace ~ '.svc:8080',
+        'The Route resolves through the helper\'s *.apps wildcard - from a',
+        'machine that uses the helper for DNS, open it in a browser. The first',
+        'answer after the model pod starts is the slow one.',
+      ] }}

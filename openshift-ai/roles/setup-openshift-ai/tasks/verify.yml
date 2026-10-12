@@ -1,0 +1,227 @@
+---
+# Asserts only. Nothing here creates, changes or deletes anything on the
+# cluster except one short-lived probe pod per check, and every check is a
+# question with a yes/no answer rather than a report to read.
+#
+# It checks the whole chain, from the bottom up, so the first failure is the
+# lowest broken link rather than a symptom of it:
+#
+#   1. the operator's CSV is Succeeded
+#   2. the DataScienceCluster is Ready and kserve is Managed, in
+#      {{ rhoai_kserve_deployment_mode }} mode
+#   3. the ServingRuntime and InferenceService exist, and the predictor pod is
+#      ready
+#   4. the model answers /v1/chat/completions over the in-cluster Service
+#   5. the app's own /api/demo - the app writing a prompt and getting an
+#      answer - works through the Route
+#
+# 5 is the one the whole lab is for: a prompt the app generated, answered by a
+# model on a CPU, over the Route.
+
+## ---------------------------------------------------------------------------
+## 1. the operator
+## ---------------------------------------------------------------------------
+
+- name: Read the operator's CSV
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_operator_namespace }} get csv
+      -o 'jsonpath={range .items[*]}{.metadata.name}={.status.phase}{"\n"}{end}'
+  register: rhoai_vf_csv
+  changed_when: false
+  failed_when: false
+
+- name: Assert it is installed
+  ansible.builtin.assert:
+    that: rhoai_vf_csv.stdout_lines | select('search', '=Succeeded$') | list | length > 0
+    fail_msg: >-
+      No Succeeded ClusterServiceVersion in
+      {{ rhoai_operator_namespace }}. Found:
+      {{ rhoai_vf_csv.stdout_lines | join(', ') | default('nothing', true) }}.
+      Run --tags operator.
+    success_msg: >-
+      operator: {{ rhoai_vf_csv.stdout_lines | select('search', '=Succeeded$') | join(', ') }}
+
+## ---------------------------------------------------------------------------
+## 2. the DataScienceCluster
+## ---------------------------------------------------------------------------
+
+- name: Read the DataScienceCluster
+  ansible.builtin.command:
+    cmd: >-
+      oc get datasciencecluster
+      -o 'jsonpath={range .items[*]}{.metadata.name}|{.status.phase}|{range .status.conditions[?(@.type=="Ready")]}{.status}{end}|{.spec.components.kserve.managementState}|{.spec.components.kserve.defaultDeploymentMode}{"\n"}{end}'
+  register: rhoai_vf_dsc
+  changed_when: false
+  failed_when: false
+
+- name: Assert it is ready, with KServe on and not expecting Knative
+  ansible.builtin.assert:
+    that:
+      - rhoai_vf_dsc.stdout_lines | length > 0
+      - rhoai_vf_dsc_fields[1] == 'Ready' or rhoai_vf_dsc_fields[2] == 'True'
+      - rhoai_vf_dsc_fields[3] == 'Managed'
+    fail_msg: >-
+      DataScienceCluster is
+      '{{ rhoai_vf_dsc.stdout | default('(none)', true) | trim }}'
+      (name|phase|Ready|kserve|mode). It has to be Ready with kserve Managed
+      before anything is served. Run --tags dsc.
+    success_msg: >-
+      DataScienceCluster {{ rhoai_vf_dsc_fields[0] }} ready, kserve
+      {{ rhoai_vf_dsc_fields[3] }} in
+      {{ rhoai_vf_dsc_fields[4] | default('(cluster default)', true) }} mode
+  vars:
+    rhoai_vf_dsc_fields: "{{ (rhoai_vf_dsc.stdout_lines | first | default('|||')).split('|') }}"
+
+## ---------------------------------------------------------------------------
+## 3. the model's objects and its pod
+## ---------------------------------------------------------------------------
+
+- name: Read the ServingRuntime, the InferenceService and the predictor's pods
+  ansible.builtin.command:
+    cmd: "{{ item.cmd }}"
+  loop:
+    - key: runtime
+      cmd: >-
+        oc -n {{ rhoai_project_namespace }} get servingruntime {{ rhoai_runtime_name }}
+        -o jsonpath={.spec.containers[0].image}
+    - key: isvc
+      cmd: >-
+        oc -n {{ rhoai_project_namespace }} get inferenceservice {{ rhoai_model_name }}
+        -o 'jsonpath={range .status.conditions[?(@.type=="Ready")]}{.status}{end}'
+    - key: pods
+      cmd: >-
+        oc -n {{ rhoai_project_namespace }} get pods
+        -l serving.kserve.io/inferenceservice={{ rhoai_model_name }}
+        -o 'jsonpath={range .items[*]}{.metadata.name}={.status.phase}/{range .status.conditions[?(@.type=="Ready")]}{.status}{end} {end}'
+  loop_control:
+    label: "{{ item.key }}"
+  register: rhoai_vf_model
+  changed_when: false
+  failed_when: false
+
+- name: Keep the answers under readable names
+  ansible.builtin.set_fact:
+    rhoai_vf_runtime_image: "{{ rhoai_vf_model.results | selectattr('item.key', 'eq', 'runtime') | map(attribute='stdout') | first | trim }}"
+    rhoai_vf_isvc_ready: "{{ rhoai_vf_model.results | selectattr('item.key', 'eq', 'isvc') | map(attribute='stdout') | first | trim }}"
+    rhoai_vf_pods: "{{ rhoai_vf_model.results | selectattr('item.key', 'eq', 'pods') | map(attribute='stdout') | first | trim }}"
+
+- name: Assert the model is served
+  ansible.builtin.assert:
+    that:
+      - rhoai_vf_runtime_image | length > 0
+      - rhoai_vf_isvc_ready == 'True'
+      - "'Running/True' in rhoai_vf_pods"
+    fail_msg: >-
+      ServingRuntime image '{{ rhoai_vf_runtime_image }}', InferenceService
+      Ready '{{ rhoai_vf_isvc_ready }}', predictor pods
+      '{{ rhoai_vf_pods | default('none', true) }}'. Run --tags model.
+    success_msg: >-
+      {{ rhoai_model_name }} served by {{ rhoai_runtime_name }}
+      ({{ rhoai_vf_runtime_image }}); pods {{ rhoai_vf_pods }}
+
+## ---------------------------------------------------------------------------
+## 4. the model actually answers
+## ---------------------------------------------------------------------------
+
+- name: Ask the model directly, over the in-cluster Service
+  ansible.builtin.include_tasks: model-probe.yml
+  vars:
+    rhoai_probe_prompt: "{{ rhoai_chatbot_demo_prompt }}"
+
+- name: Assert it answered
+  ansible.builtin.assert:
+    that: rhoai_probe_ok | bool
+    fail_msg: >-
+      The model did not answer /v1/chat/completions. /v1/models said
+      '{{ rhoai_probe_models | default('nothing') }}'. The probe printed:
+      {{ rhoai_probe_log | default('(nothing)') | truncate(900) }}
+      -- a 404 from /v1/chat/completions means the runtime is not an
+      OpenAI-API server; a reply with no choices usually means the model has
+      no chat template, which a base (non-instruct) model does not.
+    success_msg: >-
+      the model answers. /v1/models: {{ rhoai_probe_models }}
+      -- asked "{{ rhoai_chatbot_demo_prompt | trim }}", answered:
+      "{{ rhoai_probe_answer | truncate(300) }}"
+
+## ---------------------------------------------------------------------------
+## 5. the app, through its Route - which is the point of the whole lab
+## ---------------------------------------------------------------------------
+
+- name: Read the chat bot's Route and its pods
+  ansible.builtin.command:
+    cmd: "{{ item.cmd }}"
+  loop:
+    - key: route
+      cmd: >-
+        oc -n {{ rhoai_project_namespace }} get route {{ rhoai_chatbot_name }}
+        -o jsonpath={.spec.host}
+    - key: pods
+      cmd: >-
+        oc -n {{ rhoai_project_namespace }} get pods -l app={{ rhoai_chatbot_name }}
+        -o 'jsonpath={range .items[*]}{.metadata.name}={.status.phase}/{range .status.conditions[?(@.type=="Ready")]}{.status}{end} {end}'
+  loop_control:
+    label: "{{ item.key }}"
+  register: rhoai_vf_app
+  changed_when: false
+  failed_when: false
+
+- name: Keep them
+  ansible.builtin.set_fact:
+    rhoai_vf_route: "{{ rhoai_vf_app.results | selectattr('item.key', 'eq', 'route') | map(attribute='stdout') | first | trim }}"
+    rhoai_vf_app_pods: "{{ rhoai_vf_app.results | selectattr('item.key', 'eq', 'pods') | map(attribute='stdout') | first | trim }}"
+
+- name: Assert the app is up
+  ansible.builtin.assert:
+    that:
+      - rhoai_vf_route | length > 0
+      - "'Running/True' in rhoai_vf_app_pods"
+    fail_msg: >-
+      Route '{{ rhoai_vf_route }}', pods
+      '{{ rhoai_vf_app_pods | default('none', true) }}'. Run --tags chatbot.
+    success_msg: "chat bot https://{{ rhoai_vf_route }}, pods {{ rhoai_vf_app_pods }}"
+
+# Through the Route, from the host this playbook runs on - which is the lab's
+# hypervisor, and resolves *.apps through the helper. Not from inside the
+# cluster: the point of this last check is that the path a person's browser
+# takes works, ingress and all.
+- name: Ask the app to generate a prompt and answer it, through the Route
+  ansible.builtin.uri:
+    url: "https://{{ rhoai_vf_route }}/api/demo"
+    ## The lab's Routes carry the ingress controller's own certificate, which
+    ## is self-signed unless somebody replaced it. The check is that the app
+    ## answers, not that the lab has a public CA.
+    validate_certs: false
+    timeout: "{{ (rhoai_chatbot_timeout | int) + 30 }}"
+    status_code: [200, 502]
+    return_content: true
+  register: rhoai_vf_demo
+  changed_when: false
+
+- name: Assert the app's own prompt came back answered
+  ansible.builtin.assert:
+    that:
+      - rhoai_vf_demo.status == 200
+      - rhoai_vf_demo.json.reply | default('') | length > 0
+    fail_msg: >-
+      https://{{ rhoai_vf_route }}/api/demo answered
+      {{ rhoai_vf_demo.status }}:
+      {{ rhoai_vf_demo.json.error | default(rhoai_vf_demo.content | default('') | truncate(500)) }}
+      -- the model answered the same prompt over the Service a moment ago, so
+      this is the app or the Route rather than the model. `oc -n
+      {{ rhoai_project_namespace }} logs deploy/{{ rhoai_chatbot_name }}`.
+    success_msg: >-
+      the app generated its own prompt and the model answered it, over the
+      Route, in {{ rhoai_vf_demo.json.took_seconds | default('?') }}s:
+      "{{ rhoai_vf_demo.json.reply | default('') | truncate(300) }}"
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      {{ [
+        'Everything checks out on ' ~ rhoai_c.name ~ '.',
+        'chat bot:  https://' ~ rhoai_vf_route,
+        'model:     ' ~ rhoai_model_name ~ ' on ' ~ rhoai_runtime_name
+                   ~ ' (' ~ rhoai_vf_runtime_image ~ '), CPU only',
+        'answer in: ' ~ (rhoai_vf_demo.json.took_seconds | default('?') | string) ~ 's',
+      ] }}

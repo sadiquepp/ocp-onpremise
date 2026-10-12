@@ -1,0 +1,35 @@
+## Rendered by tasks/operator.yml into {{ rhoai_manifest_dir }}/01-operator.yaml.
+## The operator's namespace, its OperatorGroup and its Subscription.
+##
+## The catalog ({{ rhoai_catalog_source }}) is resolved per run so the same
+## manifest serves a connected and a disconnected cluster - see
+## rhoai_catalog_source in ../vars.yaml.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ rhoai_operator_namespace }}
+  labels:
+    openshift.io/cluster-monitoring: "true"
+---
+## No targetNamespaces: an AllNamespaces OperatorGroup, which is the only
+## install mode the OpenShift AI operator offers. It watches the whole
+## cluster, creates its applications namespace itself, and reconciles
+## DataScienceClusters, which are cluster-scoped.
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: {{ rhoai_operator_namespace }}-operatorgroup
+  namespace: {{ rhoai_operator_namespace }}
+spec: {}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: {{ rhoai_pkg }}
+  namespace: {{ rhoai_operator_namespace }}
+spec:
+  name: {{ rhoai_pkg }}
+  channel: {{ rhoai_chan }}
+  source: {{ rhoai_catalog_source }}
+  sourceNamespace: {{ rhoai_catalog_namespace }}
+  installPlanApproval: Automatic

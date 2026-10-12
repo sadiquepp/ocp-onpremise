@@ -1,0 +1,59 @@
+---
+# The namespace the model and the chat bot share, and the PVC the model's
+# weights live on.
+#
+# Separate from the model phase because the PVC is the one object here with
+# state worth keeping: re-running the model phase with a different runtime or
+# a different model re-uses this PVC, and `--tags cleanup` offers to keep it
+# so a rebuild does not re-download the weights.
+
+- name: Work out which StorageClass the PVC gets
+  ansible.builtin.include_tasks: storage-decide.yml
+
+- name: Render the namespace and the PVC
+  ansible.builtin.template:
+    src: project.yaml.j2
+    dest: "{{ rhoai_manifest_dir }}/10-project.yaml"
+    mode: '0644'
+
+- name: Apply them
+  ansible.builtin.command:
+    cmd: oc apply -f {{ rhoai_manifest_dir }}/10-project.yaml
+  register: rhoai_pr_apply
+  changed_when: rhoai_pr_apply.stdout_lines | reject('search', ' unchanged$') | list | length > 0
+
+# A WaitForFirstConsumer class - which lvms-vg1 is - leaves the PVC Pending
+# until a pod wants it, and that is not a failure. So accept either Bound or
+# Pending, and only object to the rest.
+- name: Read the PVC's phase
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_project_namespace }} get pvc {{ rhoai_model_pvc_name }}
+      -o 'jsonpath={.status.phase}|{.spec.storageClassName}'
+  register: rhoai_pr_pvc
+  retries: 12
+  delay: 5
+  until: rhoai_pr_pvc.rc == 0 and rhoai_pr_pvc.stdout | length > 0
+  changed_when: false
+
+- name: Read the class's binding mode
+  ansible.builtin.command:
+    cmd: oc get storageclass {{ rhoai_sc }} -o jsonpath={.volumeBindingMode}
+  register: rhoai_pr_binding
+  changed_when: false
+  failed_when: false
+
+- name: Fail if it is neither Bound nor waiting for a pod
+  ansible.builtin.assert:
+    that: rhoai_pr_pvc.stdout.split('|')[0] in ['Bound', 'Pending']
+    fail_msg: >-
+      PVC {{ rhoai_project_namespace }}/{{ rhoai_model_pvc_name }} is
+      '{{ rhoai_pr_pvc.stdout.split('|')[0] }}'. `oc -n
+      {{ rhoai_project_namespace }} describe pvc {{ rhoai_model_pvc_name }}`.
+    success_msg: >-
+      PVC {{ rhoai_model_pvc_name }} ({{ rhoai_model_pvc_size }}) is
+      {{ rhoai_pr_pvc.stdout.split('|')[0] }} on
+      {{ rhoai_pr_pvc.stdout.split('|')[1] }}{{
+        ' - Pending is expected for a ' ~ rhoai_pr_binding.stdout
+        ~ ' class until the fetch job claims it'
+        if rhoai_pr_pvc.stdout.split('|')[0] == 'Pending' else '' }}

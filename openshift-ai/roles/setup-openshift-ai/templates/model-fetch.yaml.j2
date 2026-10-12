@@ -1,0 +1,94 @@
+## Rendered by tasks/model.yml into {{ rhoai_manifest_dir }}/20-model-fetch.yaml.
+## The Job that puts the model's weights on the PVC, and the Secret it reads a
+## Hugging Face token from when the model is a gated one.
+##
+## THE JOB NAME CARRIES A HASH of everything that decides what it downloads
+## ({{ rhoai_fetch_hash }} here). A Job's spec is immutable, so re-applying a
+## changed one would be rejected by the API server - naming it this way means
+## a changed model or runtime makes a NEW Job, and an unchanged one re-applies
+## as a no-op.
+{% if rhoai_hf_token | length > 0 %}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ rhoai_hf_secret_name }}
+  namespace: {{ rhoai_project_namespace }}
+type: Opaque
+stringData:
+  ## From hf_token in ../vault.yaml. Only a GATED repository needs it; the
+  ## models this lab defaults to are public.
+  token: {{ rhoai_hf_token | to_json }}
+---
+{% endif %}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ rhoai_fetch_job }}
+  namespace: {{ rhoai_project_namespace }}
+  labels:
+    app: rhoai-model-fetch
+spec:
+  backoffLimit: 3
+  ## The whole job, not one attempt. A few hundred MiB over a lab's uplink is
+  ## minutes; rhoai_fetch_timeout is the ceiling.
+  activeDeadlineSeconds: {{ rhoai_fetch_timeout }}
+  ## Keep a finished Job's pod around to read the log from. Supported from
+  ## Kubernetes 1.23, so every OpenShift this repository builds.
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: rhoai-model-fetch
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: fetch
+          image: {{ rhoai_fetch_image }}
+          command: ["/bin/sh", "/script/fetch-model.sh"]
+          env:
+            - name: MODE
+              value: {{ 'gguf' if rhoai_runtime == 'llamacpp' else 'snapshot' }}
+            - name: HF_ENDPOINT
+              value: {{ rhoai_hf_endpoint }}
+            - name: HF_REPO
+              value: {{ (rhoai_model_gguf_repo if rhoai_runtime == 'llamacpp' else rhoai_model_hf_repo) }}
+            - name: FILE_MATCH
+              value: {{ rhoai_model_file_match | to_json }}
+            - name: DEST
+              value: /models/{{ rhoai_model_dir }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ rhoai_hf_secret_name }}
+                  key: token
+                  ## Optional so the Job is the same manifest with or without
+                  ## a token: no Secret, no variable, no Authorization header.
+                  optional: true
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: script
+              mountPath: /script
+              readOnly: true
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: {{ rhoai_model_pvc_name }}
+        - name: script
+          configMap:
+            name: {{ rhoai_fetch_script_cm }}
+            defaultMode: 0555

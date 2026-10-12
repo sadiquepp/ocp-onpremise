@@ -1,0 +1,314 @@
+---
+# The two cluster-scoped CRs that turn an installed OpenShift AI operator into
+# a running OpenShift AI: a DSCInitialization, which settles the namespaces
+# and the cluster-wide bits, and a DataScienceCluster, which says which
+# components run.
+#
+# NON-DESTRUCTIVE ON AN EXISTING INSTALL. If the cluster already has either CR
+# - because somebody installed OpenShift AI from the console, or because a
+# previous run of this lab made one - it is PATCHED with the fields this lab
+# needs and nothing else. A cluster already serving pipelines or Ray keeps
+# them; only a CR this lab creates from nothing gets the full
+# "everything not in rhoai_components_managed is Removed" treatment.
+#
+# The apiVersion, the component names and the kserve sub-fields all come from
+# the installed CRDs - tasks/crd-shape.yml says why.
+
+## ---------------------------------------------------------------------------
+## DSCInitialization
+## ---------------------------------------------------------------------------
+
+- name: Read the DSCInitialization CRD's shape
+  ansible.builtin.include_tasks: crd-shape.yml
+  vars:
+    rhoai_crd_name: dscinitializations.dscinitialization.opendatahub.io
+
+- name: Keep it under names of its own
+  ansible.builtin.set_fact:
+    rhoai_dsci_group: "{{ rhoai_crd_group }}"
+    rhoai_dsci_version: "{{ rhoai_crd_version }}"
+    rhoai_dsci_props: "{{ rhoai_crd_spec_props }}"
+    rhoai_dsci_monitoring_props: >-
+      {{ (rhoai_crd_spec.properties.monitoring.properties | default({}, true))
+         | dict2items | map(attribute='key') | list | sort }}
+
+- name: Look for a DSCInitialization already on the cluster
+  ansible.builtin.command:
+    cmd: oc get dscinitialization -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}'
+  register: rhoai_dsci_existing
+  changed_when: false
+
+- name: Settle on the DSCInitialization's name
+  ansible.builtin.set_fact:
+    rhoai_dsci_name: "{{ rhoai_dsci_existing.stdout_lines[0] | default('default-dsci', true) }}"
+    rhoai_dsci_is_new: "{{ rhoai_dsci_existing.stdout_lines | length == 0 }}"
+
+- name: Create the DSCInitialization
+  when: rhoai_dsci_is_new | bool
+  block:
+    - name: Render it
+      ansible.builtin.template:
+        src: dsci.yaml.j2
+        dest: "{{ rhoai_manifest_dir }}/02-dsci.yaml"
+        mode: '0644'
+
+    - name: Apply it
+      ansible.builtin.command:
+        cmd: oc apply -f {{ rhoai_manifest_dir }}/02-dsci.yaml
+      register: rhoai_dsci_apply
+      changed_when: rhoai_dsci_apply.stdout_lines | reject('search', ' unchanged$') | list | length > 0
+
+# Service Mesh Managed on an existing DSCI would have the operator demand the
+# Service Mesh operator that this lab does not install, and the DSCI then sits
+# in phase Error - so this one field IS changed on an existing CR. Nothing
+# else is: applicationsNamespace in particular is where the operands already
+# live, and moving it would orphan them.
+- name: Switch Service Mesh off on an existing DSCInitialization
+  when:
+    - not rhoai_dsci_is_new | bool
+    - "'serviceMesh' in rhoai_dsci_props"
+  block:
+    - name: Read what it is set to
+      ansible.builtin.command:
+        cmd: >-
+          oc get dscinitialization {{ rhoai_dsci_name }}
+          -o jsonpath={.spec.serviceMesh.managementState}
+      register: rhoai_dsci_mesh
+      changed_when: false
+
+    - name: Set it to Removed
+      ansible.builtin.command:
+        cmd: >-
+          oc patch dscinitialization {{ rhoai_dsci_name }} --type=merge
+          -p {{ '{"spec":{"serviceMesh":{"managementState":"Removed"}}}' | quote }}
+      when: rhoai_dsci_mesh.stdout != 'Removed'
+      changed_when: true
+
+- name: Wait for the DSCInitialization to be ready
+  ansible.builtin.command:
+    cmd: >-
+      oc get dscinitialization {{ rhoai_dsci_name }}
+      -o 'jsonpath={.status.phase}|{range .status.conditions[?(@.type=="Ready")]}{.status}{end}'
+  register: rhoai_dsci_ready
+  retries: "{{ rhoai_wait_retries }}"
+  delay: "{{ rhoai_wait_delay }}"
+  until: >-
+    rhoai_dsci_ready.rc == 0
+    and (rhoai_dsci_ready.stdout.split('|')[0] == 'Ready'
+         or rhoai_dsci_ready.stdout.split('|')[1] | default('') == 'True')
+  changed_when: false
+  failed_when: false
+
+- name: Read why, if it is not
+  ansible.builtin.command:
+    cmd: >-
+      oc get dscinitialization {{ rhoai_dsci_name }}
+      -o 'jsonpath={range .status.conditions[*]}{.type}={.status} {.reason} {.message}{"\n"}{end}'
+  register: rhoai_dsci_why
+  changed_when: false
+  failed_when: false
+  when: >-
+    not (rhoai_dsci_ready.stdout.split('|')[0] == 'Ready'
+         or rhoai_dsci_ready.stdout.split('|')[1] | default('') == 'True')
+
+- name: Fail if the DSCInitialization did not become ready
+  ansible.builtin.assert:
+    that: >-
+      rhoai_dsci_ready.stdout.split('|')[0] == 'Ready'
+      or rhoai_dsci_ready.stdout.split('|')[1] | default('') == 'True'
+    fail_msg: >-
+      DSCInitialization {{ rhoai_dsci_name }} is not ready after
+      {{ (rhoai_wait_retries | int) * (rhoai_wait_delay | int) }}s
+      (status: '{{ rhoai_dsci_ready.stdout | default('', true) }}').
+      {{ rhoai_dsci_why.stdout | default('') | trim }}
+    success_msg: >-
+      DSCInitialization {{ rhoai_dsci_name }}
+      ({{ rhoai_dsci_group }}/{{ rhoai_dsci_version }}) ready,
+      applications namespace {{ rhoai_applications_namespace }}
+
+## ---------------------------------------------------------------------------
+## DataScienceCluster
+## ---------------------------------------------------------------------------
+
+- name: Read the DataScienceCluster CRD's shape
+  ansible.builtin.include_tasks: crd-shape.yml
+  vars:
+    rhoai_crd_name: datascienceclusters.datasciencecluster.opendatahub.io
+
+- name: Keep it under names of its own
+  ansible.builtin.set_fact:
+    rhoai_dsc_group: "{{ rhoai_crd_group }}"
+    rhoai_dsc_version: "{{ rhoai_crd_version }}"
+    rhoai_dsc_components: >-
+      {{ (rhoai_crd_spec.properties.components.properties | default({}, true))
+         | dict2items | map(attribute='key') | list | sort }}
+    rhoai_dsc_kserve_props: >-
+      {{ (rhoai_crd_spec.properties.components.properties.kserve.properties | default({}, true))
+         | dict2items | map(attribute='key') | list | sort }}
+
+# If a component this lab wants is not in the schema, the CR would be rejected
+# (or the field pruned) - so say which names the operator does know.
+- name: Fail if a component this lab wants is not in the installed CRD
+  ansible.builtin.assert:
+    that: rhoai_components_managed | difference(rhoai_dsc_components) | length == 0
+    fail_msg: >-
+      rhoai_components_managed names
+      {{ rhoai_components_managed | difference(rhoai_dsc_components) | join(', ') }},
+      which {{ rhoai_dsc_group }}/{{ rhoai_dsc_version }} has no field for. The
+      components this operator knows are:
+      {{ rhoai_dsc_components | join(', ') }}. The component layout was
+      reorganised between the v1, v2 and v3 shapes of this CR - set
+      rhoai_components_managed in vars.yaml to names from that list.
+    success_msg: >-
+      {{ rhoai_dsc_group }}/{{ rhoai_dsc_version }}, components
+      {{ rhoai_dsc_components | join(', ') }}; Managed:
+      {{ rhoai_components_managed | join(', ') }}
+
+- name: Look for a DataScienceCluster already on the cluster
+  ansible.builtin.command:
+    cmd: oc get datasciencecluster -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}'
+  register: rhoai_dsc_existing
+  changed_when: false
+
+- name: Settle on the DataScienceCluster's name
+  ansible.builtin.set_fact:
+    rhoai_dsc_name: "{{ rhoai_dsc_existing.stdout_lines[0] | default('default-dsc', true) }}"
+    rhoai_dsc_is_new: "{{ rhoai_dsc_existing.stdout_lines | length == 0 }}"
+
+- name: Create the DataScienceCluster
+  when: rhoai_dsc_is_new | bool
+  block:
+    - name: Render it
+      ansible.builtin.template:
+        src: dsc.yaml.j2
+        dest: "{{ rhoai_manifest_dir }}/03-dsc.yaml"
+        mode: '0644'
+
+    - name: Apply it
+      ansible.builtin.command:
+        cmd: oc apply -f {{ rhoai_manifest_dir }}/03-dsc.yaml
+      register: rhoai_dsc_apply
+      changed_when: rhoai_dsc_apply.stdout_lines | reject('search', ' unchanged$') | list | length > 0
+
+# An existing DataScienceCluster is somebody's: switch ON what this lab needs
+# and leave every other component exactly as it is. The merge patch is built
+# from the same facts the template uses, so the two paths agree about kserve.
+- name: Switch this lab's components on, on an existing DataScienceCluster
+  when: not rhoai_dsc_is_new | bool
+  block:
+    - name: Build the patch
+      ansible.builtin.set_fact:
+        rhoai_dsc_patch:
+          spec:
+            components: >-
+              {{ dict(rhoai_components_managed
+                      | zip([{'managementState': 'Managed'}] * (rhoai_components_managed | length)))
+                 | combine({'kserve': rhoai_dsc_kserve_spec}
+                           if 'kserve' in rhoai_components_managed else {}) }}
+      vars:
+        # kserve carries the deployment-mode fields too, and only the ones the
+        # installed schema has - the same three conditions the template uses,
+        # so the create path and the patch path cannot drift apart.
+        rhoai_dsc_kserve_spec: >-
+          {{ {'managementState': 'Managed'}
+             | combine({'defaultDeploymentMode': rhoai_kserve_deployment_mode}
+                       if 'defaultDeploymentMode' in rhoai_dsc_kserve_props else {})
+             | combine({'rawDeploymentServiceConfig': rhoai_kserve_service_config}
+                       if 'rawDeploymentServiceConfig' in rhoai_dsc_kserve_props else {})
+             | combine({'serving': {'managementState': 'Removed'}}
+                       if 'serving' in rhoai_dsc_kserve_props else {}) }}
+
+    - name: Say what it will change
+      ansible.builtin.debug:
+        msg: >-
+          DataScienceCluster {{ rhoai_dsc_name }} already exists - patching
+          only {{ rhoai_components_managed | join(', ') }} to Managed and
+          leaving every other component as it is. Delete it and re-run this
+          phase if you want this lab's full
+          "everything else Removed" layout.
+
+    - name: Apply it
+      ansible.builtin.command:
+        cmd: >-
+          oc patch datasciencecluster {{ rhoai_dsc_name }} --type=merge
+          -p {{ rhoai_dsc_patch | to_json | quote }}
+      register: rhoai_dsc_patched
+      changed_when: "' (no change)' not in rhoai_dsc_patched.stdout"
+
+- name: Wait for the DataScienceCluster to be ready
+  ansible.builtin.command:
+    cmd: >-
+      oc get datasciencecluster {{ rhoai_dsc_name }}
+      -o 'jsonpath={.status.phase}|{range .status.conditions[?(@.type=="Ready")]}{.status}{end}'
+  register: rhoai_dsc_ready
+  retries: "{{ rhoai_wait_retries }}"
+  delay: "{{ rhoai_wait_delay }}"
+  until: >-
+    rhoai_dsc_ready.rc == 0
+    and (rhoai_dsc_ready.stdout.split('|')[0] == 'Ready'
+         or rhoai_dsc_ready.stdout.split('|')[1] | default('') == 'True')
+  changed_when: false
+  failed_when: false
+
+- name: Read why, if it is not
+  ansible.builtin.command:
+    cmd: "{{ item }}"
+  loop:
+    - >-
+      oc get datasciencecluster {{ rhoai_dsc_name }}
+      -o 'jsonpath={range .status.conditions[*]}{.type}={.status} {.reason} {.message}{"\n"}{end}'
+    - >-
+      oc -n {{ rhoai_applications_namespace }} get pods
+      --field-selector=status.phase!=Running
+      -o 'jsonpath={range .items[*]}{.metadata.name}={.status.phase}{"\n"}{end}'
+  register: rhoai_dsc_why
+  changed_when: false
+  failed_when: false
+  when: >-
+    not (rhoai_dsc_ready.stdout.split('|')[0] == 'Ready'
+         or rhoai_dsc_ready.stdout.split('|')[1] | default('') == 'True')
+
+- name: Fail if the DataScienceCluster did not become ready
+  ansible.builtin.assert:
+    that: >-
+      rhoai_dsc_ready.stdout.split('|')[0] == 'Ready'
+      or rhoai_dsc_ready.stdout.split('|')[1] | default('') == 'True'
+    fail_msg: >-
+      DataScienceCluster {{ rhoai_dsc_name }} is not ready after
+      {{ (rhoai_wait_retries | int) * (rhoai_wait_delay | int) }}s
+      (status: '{{ rhoai_dsc_ready.stdout | default('', true) }}').
+      {{ rhoai_dsc_why.results | default([], true) | selectattr('stdout', 'defined')
+         | map(attribute='stdout') | select() | join(' | ') | trim }}
+      Pods stuck Pending in {{ rhoai_applications_namespace }} mean the
+      cluster is out of room - the preflight phase adds up what there is.
+    success_msg: "DataScienceCluster {{ rhoai_dsc_name }} ready"
+
+- name: Wait for the KServe controller, which the model phase needs
+  ansible.builtin.command:
+    cmd: oc wait --for=condition=Established --timeout=600s crd/{{ item }}
+  loop:
+    - inferenceservices.serving.kserve.io
+    - servingruntimes.serving.kserve.io
+  changed_when: false
+
+- name: Find the dashboard's Route
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_applications_namespace }} get route
+      -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.spec.host}{"\n"}{end}'
+  register: rhoai_dsc_routes
+  changed_when: false
+  failed_when: false
+
+- name: Report it
+  ansible.builtin.debug:
+    msg: >-
+      {{ ('OpenShift AI dashboard: https://'
+          ~ ((rhoai_dsc_routes.stdout_lines | select('search', 'dashboard') | first).split() | last))
+         if rhoai_dsc_routes.stdout_lines | select('search', 'dashboard') | list | length > 0
+         else ('No dashboard Route in ' ~ rhoai_applications_namespace ~ ' yet. Routes there: '
+               ~ (rhoai_dsc_routes.stdout_lines | join(', ') | default('none', true))
+               ~ '. The dashboard component is '
+               ~ ('Managed, so give it another minute.'
+                  if 'dashboard' in rhoai_components_managed else
+                  'not in rhoai_components_managed, so there is none by design.')) }}

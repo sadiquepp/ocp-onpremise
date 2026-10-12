@@ -1,0 +1,134 @@
+---
+# Install the Red Hat OpenShift AI operator: Namespace, OperatorGroup,
+# Subscription, then wait for the CSV and the two CRDs the next phase writes.
+#
+# The same Subscription -> CSV -> CRD -> CR sequence as the SPIFFE lab's
+# spiffe-spire/roles/setup-spiffe-spire/tasks/operator.yml, with the CR half
+# in dsc.yml.
+#
+# This phase installs the operator and NOTHING ELSE. An OpenShift AI operator
+# with no DataScienceCluster runs no dashboard, no KServe and no webhooks - it
+# sits there waiting for one, which is why the dsc phase is separate and why
+# this one is safe to run on a cluster you are still deciding about.
+
+- name: Look the operator up in the catalog
+  ansible.builtin.include_tasks: catalog.yml
+
+# An installed operator keeps the channel it was installed from. Re-running
+# this phase must not move it to whatever the catalog's default is today - a
+# channel change is an upgrade, and on this operator an upgrade can rewrite
+# the DataScienceCluster's own API version. So: read what is there, and keep
+# it unless rhoai_operator_channel says otherwise.
+- name: Read the channel of an existing Subscription
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_operator_namespace }} get subscriptions.operators.coreos.com
+      {{ rhoai_pkg }} -o jsonpath={.spec.channel}
+  register: rhoai_op_existing
+  changed_when: false
+  failed_when: false
+
+- name: Keep the existing channel
+  ansible.builtin.set_fact:
+    rhoai_chan: "{{ rhoai_op_existing.stdout }}"
+  when:
+    - rhoai_op_existing.rc == 0
+    - rhoai_op_existing.stdout | length > 0
+    - not rhoai_operator_channel
+
+- name: Say which channel is being used
+  ansible.builtin.debug:
+    msg: >-
+      {{ rhoai_pkg }} channel {{ rhoai_chan }}
+      {{ '(kept from the existing Subscription; -e rhoai_operator_channel=<name> to move it,
+          which is an upgrade)' if (rhoai_op_existing.rc == 0 and rhoai_op_existing.stdout | length > 0
+                                    and not rhoai_operator_channel)
+         else ('(as set in rhoai_operator_channel)' if rhoai_operator_channel
+               else "(the catalog's default channel)") }}
+
+- name: Render the Namespace, OperatorGroup and Subscription
+  ansible.builtin.template:
+    src: operator.yaml.j2
+    dest: "{{ rhoai_manifest_dir }}/01-operator.yaml"
+    mode: '0644'
+
+- name: Apply them
+  ansible.builtin.command:
+    cmd: oc apply -f {{ rhoai_manifest_dir }}/01-operator.yaml
+  register: rhoai_op_apply
+  changed_when: rhoai_op_apply.stdout_lines | reject('search', ' unchanged$') | list | length > 0
+
+- name: Wait for the Subscription to name an installed CSV
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_operator_namespace }} get subscriptions.operators.coreos.com
+      {{ rhoai_pkg }} -o jsonpath={.status.installedCSV}
+  register: rhoai_op_csv
+  retries: "{{ rhoai_wait_retries }}"
+  delay: "{{ rhoai_wait_delay }}"
+  until: rhoai_op_csv.rc == 0 and rhoai_op_csv.stdout | length > 0
+  changed_when: false
+
+# The commonest failure here is not the operator at all: it is a disconnected
+# cluster whose ImageContentSourcePolicy does not cover the operator's images,
+# so the InstallPlan's bundle unpack job cannot pull. Read the Subscription's
+# conditions when the CSV does not come up, because they say so.
+- name: Wait for the CSV to succeed
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_operator_namespace }} get csv {{ rhoai_op_csv.stdout }}
+      -o jsonpath={.status.phase}
+  register: rhoai_op_phase
+  retries: "{{ rhoai_wait_retries }}"
+  delay: "{{ rhoai_wait_delay }}"
+  until: rhoai_op_phase.stdout == 'Succeeded'
+  changed_when: false
+  failed_when: false
+
+- name: Read the CSV's and the Subscription's own account of it, if it did not
+  ansible.builtin.command:
+    cmd: "{{ item }}"
+  loop:
+    - >-
+      oc -n {{ rhoai_operator_namespace }} get csv {{ rhoai_op_csv.stdout }}
+      -o jsonpath={.status.message}
+    - >-
+      oc -n {{ rhoai_operator_namespace }} get subscriptions.operators.coreos.com
+      {{ rhoai_pkg }} -o 'jsonpath={range .status.conditions[*]}{.type}={.status} {.message}{"\n"}{end}'
+  register: rhoai_op_why
+  changed_when: false
+  failed_when: false
+  when: rhoai_op_phase.stdout != 'Succeeded'
+
+- name: Fail if the operator did not install
+  ansible.builtin.assert:
+    that: rhoai_op_phase.stdout == 'Succeeded'
+    fail_msg: >-
+      {{ rhoai_op_csv.stdout }} is in phase
+      '{{ rhoai_op_phase.stdout | default('', true) }}', not Succeeded, after
+      {{ (rhoai_wait_retries | int) * (rhoai_wait_delay | int) }}s.
+      {{ rhoai_op_why.results | default([], true) | selectattr('stdout', 'defined')
+         | map(attribute='stdout') | select() | join(' | ') }}
+      On a disconnected cluster the usual cause is an ImageContentSourcePolicy
+      that does not cover the operator's images, so the bundle unpack job
+      cannot pull - `oc -n {{ rhoai_catalog_namespace }} get pods` shows it
+      failing.
+    success_msg: "{{ rhoai_op_csv.stdout }} installed"
+
+# The two CRDs the dsc phase writes. Their GROUP is stable
+# (*.opendatahub.io) even though their served VERSIONS are not, which is why
+# dsc.yml reads the version out of the CRD instead of hardcoding one.
+- name: Wait for the operator's CRDs to be established
+  ansible.builtin.command:
+    cmd: oc wait --for=condition=Established --timeout=300s crd/{{ item }}
+  loop:
+    - dscinitializations.dscinitialization.opendatahub.io
+    - datascienceclusters.datasciencecluster.opendatahub.io
+  changed_when: false
+
+- name: Wait for the operator's own Deployment
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ rhoai_operator_namespace }} wait deployment --all
+      --for=condition=Available --timeout=600s
+  changed_when: false
