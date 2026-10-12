@@ -166,7 +166,8 @@ That runs every phase in order. By hand, phase by phase:
 
 ```bash
 cd openshift-ai
-PB="ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml -e rhoai_cluster=hub"
+PB="ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml \
+    --vault-password-file ~/.vault_pass -e rhoai_cluster=hub"
 
 $PB --tags preflight     # changes nothing - run this first
 $PB --tags operator
@@ -176,6 +177,28 @@ $PB --tags model
 $PB --tags chatbot
 $PB --tags verify
 ```
+
+**The vault flag is not optional**, even though no phase here reads a secret
+unless your model is gated. `../vault.yaml` is loaded for one variable,
+`hf_token`, and `vars_files` is resolved before any task runs - so an
+encrypted vault.yaml with no password fails the run before it starts:
+
+```
+ERROR! Attempting to decrypt but no vault secrets found
+```
+
+Use `--ask-vault-pass` instead to type it, or skip the file altogether when
+you have no password to hand and your model is not gated:
+
+```bash
+# note: no vault flag at all in this one, so it does not use $PB
+ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml --tags preflight \
+  -e rhoai_cluster=hub -e rhoai_vault=vars.yaml
+```
+
+`build-lab.sh` works this out for itself: `--vault-password-file
+~/.vault_pass` when that file exists, `--ask-vault-pass` when it does not,
+neither when there is no `../vault.yaml` at all, and `--no-vault` to skip it.
 
 Each phase runs **only** when named: a bare run does nothing but check the
 kubeconfig, deliberately. Every phase is idempotent, so an interrupted run is
@@ -228,6 +251,7 @@ is not something to publish without being asked. To publish it anyway:
 
 ```bash
 ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml --tags model \
+  --vault-password-file ~/.vault_pass \
   -e rhoai_cluster=hub -e rhoai_model_expose_route=true
 ```
 
@@ -264,6 +288,7 @@ repository and say which quantisation:
 
 ```bash
 ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml --tags model \
+  --vault-password-file ~/.vault_pass \
   -e rhoai_cluster=hub \
   -e rhoai_model_gguf_repo=TinyLlama/TinyLlama-1.1B-Chat-v1.0-GGUF \
   -e rhoai_model_file_match=q4_k_m \
@@ -324,7 +349,7 @@ or
 
 ```bash
 ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml --tags cleanup \
-  -e rhoai_cluster=hub
+  --vault-password-file ~/.vault_pass -e rhoai_cluster=hub
 ```
 
 That removes the app, the model, the project namespace (the PVC with it), the

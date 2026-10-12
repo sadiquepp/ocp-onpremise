@@ -33,6 +33,10 @@
 ##   cd openshift-ai
 ##   PB="ansible-playbook setup_openshift_ai.yaml --ask-vault-pass -e rhoai_cluster=hub"
 ##
+## The vault flag is not optional when ../vault.yaml exists and is encrypted,
+## even though nothing here reads a secret unless your model is gated - see
+## vars_files below, which also says how to skip it.
+##
 ##   $PB --tags preflight   is the operator in the catalog, what channel, is
 ##                          there a default StorageClass, has the cluster the
 ##                          CPU and memory for it, do the nodes' CPU flags
@@ -65,7 +69,25 @@
   vars_files:
     - ../vars.yaml          # base (and, for now, everyone else's)
     - vars.yaml             # this use case - may refer to base variables freely
-    - ["../vault.yaml", "vars.yaml"]   # optional: only a gated model reads hf_token
+    # ../vault.yaml is read for ONE variable - hf_token - and only a GATED
+    # Hugging Face model needs that, so no phase here requires a secret.
+    #
+    # It is still loaded when the file is there, and vars_files is resolved
+    # before any task runs, so an ENCRYPTED vault.yaml needs a vault password
+    # even on a phase that reads nothing from it:
+    #
+    #   --vault-password-file ~/.vault_pass     (what build-lab.sh looks for)
+    #   --ask-vault-pass                        (type it)
+    #
+    # Without one, "Attempting to decrypt but no vault secrets found" is what
+    # the run fails with. To skip the file entirely when you have no password
+    # to hand - fine for every phase unless your model is gated:
+    #
+    #   -e rhoai_vault=vars.yaml
+    #
+    # which points the first-found list at this directory's own vars.yaml, a
+    # harmless second load of a file already in the list above.
+    - ["{{ rhoai_vault | default('../vault.yaml') }}", "vars.yaml"]
   vars:
     # The selected cluster. Guarded with a default so the assert below, not a
     # templating error, is what reports a missing or misspelt -e rhoai_cluster.

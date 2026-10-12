@@ -14,6 +14,7 @@ ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml --tags preflight 
 
 ## Contents
 
+- [0. "Attempting to decrypt but no vault secrets found"](#0-attempting-to-decrypt-but-no-vault-secrets-found)
 - [1. Operands sit Pending for ever](#1-operands-sit-pending-for-ever)
 - [2. The operator installs, and nothing happens](#2-the-operator-installs-and-nothing-happens)
 - [3. The DSCInitialization goes to Error about Service Mesh](#3-the-dscinitialization-goes-to-error-about-service-mesh)
@@ -32,6 +33,42 @@ ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml --tags preflight 
 - [16. InferenceService creates hang after cleanup](#16-inferenceservice-creates-hang-after-cleanup)
 
 ---
+
+## 0. "Attempting to decrypt but no vault secrets found"
+
+**Looks like**: every phase, including `preflight`, fails immediately:
+
+```console
+$ ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml --tags preflight -e rhoai_cluster=hub
+ERROR! Attempting to decrypt but no vault secrets found
+```
+
+**Cause**: `../vault.yaml` exists and is encrypted, and no vault password was
+given. The playbook loads it for one variable - `hf_token`, which only a
+**gated** Hugging Face model needs - but `vars_files` is resolved before any
+task runs, so the file has to be readable even on a phase that reads nothing
+from it.
+
+**Fix**, any of three:
+
+```bash
+# the password in a file (what build-lab.sh looks for)
+ansible-playbook ... --vault-password-file ~/.vault_pass ...
+
+# or type it
+ansible-playbook ... --ask-vault-pass ...
+
+# or skip the file entirely - fine unless your model is gated
+ansible-playbook ... -e rhoai_vault=vars.yaml ...
+```
+
+`build-lab.sh` works it out for itself, and takes `--no-vault` for the third
+case:
+
+```bash
+./build-lab.sh --cluster hub --only preflight
+./build-lab.sh --cluster hub --no-vault --only preflight
+```
 
 ## 1. Operands sit Pending for ever
 

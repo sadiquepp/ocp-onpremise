@@ -9,6 +9,7 @@
 #   ./build-lab.sh --cluster hub --only preflight    # one step
 #   ./build-lab.sh --cluster hub --from model        # resume at a step
 #   ./build-lab.sh --cluster hub --runtime vllm-cpu  # the CPU vLLM runtime
+#   ./build-lab.sh --cluster hub --no-vault # do not read ../vault.yaml at all
 #   ./build-lab.sh --cluster hub --only cleanup      # remove it all again
 #   ./build-lab.sh --cluster hub -e @my-vars.yaml    # extra args, passed to
 #                                                    # every playbook
@@ -62,6 +63,7 @@ RUNTIME=""
 ONLY=""
 FROM=""
 DRY=0
+NO_VAULT=0
 WANT_LIST=0
 EXTRA=()
 
@@ -71,6 +73,7 @@ while (($#)); do
     --runtime) RUNTIME="${2:?--runtime needs llamacpp or vllm-cpu}"; shift 2 ;;
     --only)    ONLY="${2:?--only needs a step}"; shift 2 ;;
     --from)    FROM="${2:?--from needs a step}"; shift 2 ;;
+    --no-vault) NO_VAULT=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --list)    WANT_LIST=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -98,11 +101,21 @@ for s in ${ONLY:+$ONLY} ${FROM:+$FROM}; do
 done
 [[ -n "$ONLY" && -n "$FROM" ]] && { echo "error: --only and --from are exclusive." >&2; exit 2; }
 
-# ../vault.yaml is only read for hf_token, which only a gated model needs -
-# but the file is encrypted, so a run has to be able to open it when it is
-# there. --vault-password-file is used when the usual file exists, and
-# --ask-vault-pass otherwise; neither is passed when there is no vault at all.
+# ../vault.yaml is read for one variable, hf_token, which only a GATED model
+# needs - but vars_files is resolved before any task runs, so an encrypted
+# vault.yaml has to be openable even on a phase that reads nothing from it, or
+# the run dies with "Attempting to decrypt but no vault secrets found".
+#
+# So: --vault-password-file when the usual file is there, --ask-vault-pass
+# when it is not, nothing at all when there is no ../vault.yaml - and with
+# --no-vault, point the playbook's first-found list at its own vars.yaml so
+# the vault is never opened. That last one is for "I have no password to hand"
+# and is fine for every phase unless the model is gated.
 vault_args() {
+  if ((NO_VAULT)); then
+    printf -- '-e\nrhoai_vault=vars.yaml\n'
+    return 0
+  fi
   [[ -r ../vault.yaml ]] || return 0
   if [[ -r ~/.vault_pass ]]; then
     printf -- '--vault-password-file\n%s\n' "$HOME/.vault_pass"

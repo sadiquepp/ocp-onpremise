@@ -2120,9 +2120,15 @@ or one phase at a time:
 
 ```bash
 cd openshift-ai
-ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml \
-  --tags preflight -e rhoai_cluster=hub
+ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml --tags preflight \
+  --vault-password-file ~/.vault_pass -e rhoai_cluster=hub
 ```
+
+The vault flag is needed whenever `vault.yaml` exists and is encrypted, as
+with every other playbook here - this lab reads one variable from it,
+`hf_token`, and only a gated model needs that, so `-e rhoai_vault=vars.yaml`
+skips the file when you have no password to hand. `build-lab.sh` picks the
+right flag by itself.
 
 It needs a cluster that already exists (`setup_hub_cluster.yaml`,
 `setup_sno.yaml`), a default StorageClass - `lvms-vg1` from the base build -

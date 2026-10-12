@@ -16,13 +16,22 @@ Everything is run from inside `openshift-ai/`:
 ```bash
 cd openshift-ai
 export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
-PB="ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml -e rhoai_cluster=hub"
+PB="ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml \
+    --vault-password-file ~/.vault_pass -e rhoai_cluster=hub"
 ```
 
 `$KUBECONFIG` matters for the by-hand route: every `oc` below goes wherever it
 points, and on this lab's hypervisor that is usually the hub whether you meant
 it or not. The playbook sets it per run from `rhoai_clusters` and refuses to
 start if the file is missing; by hand, you are the guard.
+
+The **vault flag** matters for the playbook route. `../vault.yaml` is loaded
+for one variable, `hf_token`, which only a gated Hugging Face model needs -
+but `vars_files` is resolved before any task runs, so an encrypted vault.yaml
+with no password fails every phase before it starts, with
+`ERROR! Attempting to decrypt but no vault secrets found`. Use
+`--ask-vault-pass` to type it instead, or `-e rhoai_vault=vars.yaml` to skip
+the file when your model is not gated. None of the `oc` commands below care.
 
 ## Contents
 
