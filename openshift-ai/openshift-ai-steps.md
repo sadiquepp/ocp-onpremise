@@ -32,7 +32,9 @@ oc apply --dry-run=server -f "$M/01-operator.yaml"
 diff -u "$M/01-operator.yaml" /var/lib/libvirt/images/openshift-ai/hub/01-operator.yaml
 ```
 
-Every block here is checked by
+Every block here is checked by two tests -
+[`tests/check-doc-shell.py`](tests/check-doc-shell.py), which parses every
+shell block with `bash -n`, and
 [`tests/check-steps-manifests.py`](tests/check-steps-manifests.py), which runs
 each one in a real shell and compares what lands on disk against what this
 page shows - because an unquoted `<<EOF` expands `$`, backticks and `\` in the
@@ -338,8 +340,11 @@ oc apply -f "$M/02-dsci.yaml"
 **If one already exists**, do not apply a second. Patch the one field:
 
 ```bash
-oc get dscinitialization    # find its name
-oc patch dscinitialization <name> --type=merge \
+# whatever the existing one is called - usually default-dsci
+DSCI=$(oc get dscinitialization -o jsonpath='{.items[0].metadata.name}')
+echo "$DSCI"
+
+oc patch dscinitialization "$DSCI" --type=merge \
   -p '{"spec":{"serviceMesh":{"managementState":"Removed"}}}'
 ```
 
@@ -349,11 +354,12 @@ moving it orphans them.
 ### Did it work
 
 ```bash
-oc get dscinitialization <name> \
+oc get dscinitialization default-dsci \
   -o 'jsonpath={.status.phase}{"\n"}{range .status.conditions[*]}{.type}={.status} {.message}{"\n"}{end}'
 ```
 
-Want `Ready`.
+Want `Ready`. If you patched an existing DSCInitialization instead of creating
+one, it is `"$DSCI"` from the block above, not `default-dsci`.
 
 ---
 
@@ -419,7 +425,11 @@ oc apply -f "$M/03-dsc.yaml"
 else's components alone:
 
 ```bash
-oc patch datasciencecluster <name> --type=merge -p '{"spec":{"components":{
+# whatever the existing one is called - usually default-dsc
+DSC=$(oc get datasciencecluster -o jsonpath='{.items[0].metadata.name}')
+echo "$DSC"
+
+oc patch datasciencecluster "$DSC" --type=merge -p '{"spec":{"components":{
   "dashboard":{"managementState":"Managed"},
   "workbenches":{"managementState":"Managed"},
   "kserve":{"managementState":"Managed","defaultDeploymentMode":"RawDeployment",
@@ -430,7 +440,7 @@ oc patch datasciencecluster <name> --type=merge -p '{"spec":{"components":{
 ### Did it work
 
 ```bash
-oc get datasciencecluster <name> -o jsonpath='{.status.phase}'; echo
+oc get datasciencecluster default-dsc -o jsonpath='{.status.phase}'; echo
 oc -n redhat-ods-applications get pods
 oc wait --for=condition=Established --timeout=600s \
   crd/inferenceservices.serving.kserve.io crd/servingruntimes.serving.kserve.io
@@ -439,9 +449,19 @@ oc wait --for=condition=Established --timeout=600s \
 oc -n redhat-ods-applications get route
 ```
 
+(If you patched an existing DataScienceCluster, it is `"$DSC"` from the block
+above rather than `default-dsc`.)
+
 Pods stuck `Pending` here mean the cluster is out of room - step 0's capacity
-check is what that was for. `oc -n redhat-ods-applications describe pod
-<name> | tail -20` names the resource it could not get.
+check is what that was for. This names the resource the first one could not
+get:
+
+```bash
+oc -n redhat-ods-applications describe pod "$(
+  oc -n redhat-ods-applications get pods \
+    --field-selector=status.phase!=Running \
+    -o jsonpath='{.items[0].metadata.name}')" | tail -20
+```
 
 ---
 
@@ -782,8 +802,9 @@ oc apply -f "$M/22-inferenceservice.yaml"
 
 ### Did it work
 
-In RawDeployment mode KServe makes a Deployment and a Service named
-`<name>-predictor`:
+In RawDeployment mode KServe makes a Deployment and a Service named after the
+InferenceService with `-predictor` appended - here
+`qwen2-5-0-5b-instruct-predictor`:
 
 ```bash
 oc -n rhoai-chatbot get deployment,svc,pod -l serving.kserve.io/inferenceservice=qwen2-5-0-5b-instruct
@@ -1104,10 +1125,14 @@ cluster, and these are shared with anything else ever installed from the same
 operator. `oc get crd | grep -E 'opendatahub|kserve'` lists them if you
 really want them gone.
 
-A namespace that stays `Terminating` has an object with a finalizer in it:
+A namespace that stays `Terminating` has an object with a finalizer in it.
+The two this lab can leave behind are `rhoai-chatbot` and
+`redhat-ods-applications`:
 
 ```bash
-oc get all,inferenceservice,servingruntime -n <ns>
+oc get ns rhoai-chatbot redhat-ods-applications
+oc get all,inferenceservice,servingruntime -n rhoai-chatbot
+oc get all -n redhat-ods-applications
 ```
 
 ---

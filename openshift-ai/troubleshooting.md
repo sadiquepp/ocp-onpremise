@@ -171,7 +171,10 @@ reaches `Ready`, and `oc -n redhat-ods-applications get pods` shows pods
 
 ```bash
 oc -n redhat-ods-applications get pods --field-selector=status.phase!=Running
-oc -n redhat-ods-applications describe pod <name> | tail -20
+oc -n redhat-ods-applications describe pod "$(
+  oc -n redhat-ods-applications get pods \
+    --field-selector=status.phase!=Running \
+    -o jsonpath='{.items[0].metadata.name}')" | tail -20
 ```
 
 "Insufficient memory" or "Insufficient cpu" in the events. The cluster has
@@ -208,7 +211,8 @@ ansible-playbook -i ../inventory/hosts setup_openshift_ai.yaml --tags dsc \
 **Looks like**:
 
 ```bash
-oc get dscinitialization <name> -o 'jsonpath={range .status.conditions[*]}{.type}={.status} {.message}{"\n"}{end}'
+oc get dscinitialization default-dsci \
+  -o 'jsonpath={range .status.conditions[*]}{.type}={.status} {.message}{"\n"}{end}'
 ```
 
 ...mentions `servicemeshoperator`, an istio control plane, or a missing
@@ -221,7 +225,10 @@ RawDeployment.
 **Fix**:
 
 ```bash
-oc patch dscinitialization <name> --type=merge \
+# default-dsci is what this lab creates; an existing one may be called
+# something else, so read it rather than assuming
+DSCI=$(oc get dscinitialization -o jsonpath='{.items[0].metadata.name}')
+oc patch dscinitialization "$DSCI" --type=merge \
   -p '{"spec":{"serviceMesh":{"managementState":"Removed"}}}'
 ```
 
@@ -279,7 +286,7 @@ oc -n rhoai-chatbot describe pvc rhoai-models | tail -15
 **Looks like**:
 
 ```bash
-oc -n rhoai-chatbot logs job/rhoai-fetch-<hash>
+oc -n rhoai-chatbot logs -l app=rhoai-model-fetch --tail=50
 ```
 
 > ERROR: could not list Qwen/Qwen2.5-0.5B-Instruct-GGUF.
@@ -330,7 +337,7 @@ repository that has safetensors, or the `llamacpp` runtime and a GGUF one.
 **Looks like**: `CrashLoopBackOff`, and
 
 ```bash
-oc -n rhoai-chatbot logs -l serving.kserve.io/inferenceservice=<model> -c kserve-container
+oc -n rhoai-chatbot logs -l serving.kserve.io/inferenceservice=qwen2-5-0-5b-instruct -c kserve-container
 ```
 
 prints the "No .gguf in /mnt/models" message followed by an `ls` of what is
@@ -344,8 +351,8 @@ than an error from KServe.
 **Fix**: look at what is on the PVC and make them agree.
 
 ```bash
-oc -n rhoai-chatbot get inferenceservice <model> -o jsonpath='{.spec.predictor.model.storageUri}'; echo
-oc -n rhoai-chatbot logs job/rhoai-fetch-<hash> | tail -5
+oc -n rhoai-chatbot get inferenceservice qwen2-5-0-5b-instruct -o jsonpath='{.spec.predictor.model.storageUri}'; echo
+oc -n rhoai-chatbot logs -l app=rhoai-model-fetch --tail=5
 ```
 
 The playbook derives both from `rhoai_model_dir`
@@ -357,7 +364,7 @@ run with a different `-e` than the other.
 **Looks like**: the pod restarts immediately with no log output, and
 
 ```bash
-oc -n rhoai-chatbot get pod -l serving.kserve.io/inferenceservice=<model> \
+oc -n rhoai-chatbot get pod -l serving.kserve.io/inferenceservice=qwen2-5-0-5b-instruct \
   -o jsonpath='{.items[0].status.containerStatuses[0].lastState}'; echo
 ```
 
@@ -376,7 +383,8 @@ llama.cpp needs nothing beyond AVX2. If you want vLLM, the nodes' CPUs have to
 have `avx512f`:
 
 ```bash
-oc debug node/<node> --quiet -- chroot /host grep -m1 '^flags' /proc/cpuinfo \
+oc debug node/"$(oc get nodes -o jsonpath='{.items[0].metadata.name}')" \
+  --quiet -- chroot /host grep -m1 '^flags' /proc/cpuinfo \
   | tr ' ' '\n' | grep avx512f
 ```
 
@@ -393,7 +401,7 @@ building the KV cache takes minutes. The startup probe allows 15 minutes
 before giving up. Watch it:
 
 ```bash
-oc -n rhoai-chatbot logs -l serving.kserve.io/inferenceservice=<model> \
+oc -n rhoai-chatbot logs -l serving.kserve.io/inferenceservice=qwen2-5-0-5b-instruct \
   -c kserve-container -f
 ```
 
@@ -403,7 +411,7 @@ llama.cpp prints its load progress and then "server is listening".
 `/health`:
 
 ```bash
-oc -n rhoai-chatbot describe pod -l serving.kserve.io/inferenceservice=<model> | grep -A3 Readiness
+oc -n rhoai-chatbot describe pod -l serving.kserve.io/inferenceservice=qwen2-5-0-5b-instruct | grep -A3 Readiness
 ```
 
 A probe on a path the runtime does not serve is the usual cause in a
@@ -440,7 +448,7 @@ under. Ask the server:
 ```bash
 oc -n rhoai-chatbot run probe --rm -i --restart=Never --quiet \
   --image=registry.access.redhat.com/ubi9/ubi-minimal:latest --command -- \
-  /bin/sh -c 'curl -sS http://<model>-predictor.rhoai-chatbot.svc.cluster.local:8080/v1/models'
+  /bin/sh -c 'curl -sS http://qwen2-5-0-5b-instruct-predictor.rhoai-chatbot.svc.cluster.local:8080/v1/models'
 ```
 
 The name comes from the runtime's `--alias` (llama.cpp) or
@@ -500,8 +508,12 @@ is wall-clock time - 256 is the default for that reason.
 Something in it has a finalizer whose controller is gone:
 
 ```bash
-oc get all,inferenceservice,servingruntime -n <ns>
-oc get ns <ns> -o jsonpath='{.status.conditions}' | python3 -m json.tool
+# the two this lab can leave behind
+oc get all,inferenceservice,servingruntime -n rhoai-chatbot
+oc get ns rhoai-chatbot -o jsonpath='{.status.conditions}' | python3 -m json.tool
+
+oc get all -n redhat-ods-applications
+oc get ns redhat-ods-applications -o jsonpath='{.status.conditions}' | python3 -m json.tool
 ```
 
 The usual cause is deleting the operator before the DataScienceCluster, which
@@ -510,7 +522,8 @@ deletes the DataScienceCluster first and waits for it, for this reason. To
 recover, remove the finalizer from the object the conditions name:
 
 ```bash
-oc -n <ns> patch inferenceservice <name> -p '{"metadata":{"finalizers":null}}' --type=merge
+oc -n rhoai-chatbot patch inferenceservice qwen2-5-0-5b-instruct \
+  -p '{"metadata":{"finalizers":null}}' --type=merge
 ```
 
 ## 16. InferenceService creates hang after cleanup
@@ -524,9 +537,19 @@ gone. Removing the operator before the DataScienceCluster does this.
 **Fix**: find the orphaned webhook configuration and remove it.
 
 ```bash
+# what is still registered
 oc get mutatingwebhookconfigurations,validatingwebhookconfigurations \
   | grep -E 'kserve|opendatahub'
-oc delete validatingwebhookconfiguration <name>
+```
+
+Then remove them. `xargs -p` asks before each one, so you can read what is
+about to go - these are cluster-scoped, and deleting a webhook that something
+else still uses is not a small mistake:
+
+```bash
+oc get mutatingwebhookconfigurations,validatingwebhookconfigurations -o name \
+  | grep -E 'kserve|opendatahub' \
+  | xargs -r -p -n1 oc delete
 ```
 
 Re-installing the operator and creating a DataScienceCluster also fixes it,
