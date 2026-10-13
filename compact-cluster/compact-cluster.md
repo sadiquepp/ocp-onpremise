@@ -18,6 +18,7 @@ by hand, so you can see what each one does, run them one at a time, or debug a
 step that failed. Each section names the role task file that automates it.
 
 - [What you get](#what-you-get)
+- [Choose the storage: LVM Storage or Ceph](#choose-the-storage-lvm-storage-or-ceph)
 - [The automated path](#the-automated-path)
 - [Manual deployment](#manual-deployment)
   1. [Prerequisites](#step-1---prerequisites)
@@ -31,7 +32,7 @@ step that failed. Each section names the role task file that automates it.
   9. [Create the three VMs, each with two NICs](#step-9---create-the-three-vms-each-with-two-nics)
   10. [Watch the install](#step-10---watch-the-install)
   11. [Verify the cluster and the bonds](#step-11---verify-the-cluster-and-the-bonds)
-  12. [Add LVM Storage](#step-12---add-lvm-storage)
+  12. [Add storage](#step-12---add-storage): [LVM Storage](#12a---lvm-storage) or [Ceph via ODF](#12b---ceph-via-odf-external-mode)
   13. [Test bond failover](#step-13---test-bond-failover)
   14. [Clean up](#step-14---clean-up)
 - [Troubleshooting](#troubleshooting)
@@ -68,8 +69,8 @@ step that failed. Each section names the role task file that automates it.
 | Bond port 1 (primary) | `enp1s0`, MAC `52:54:00:e2:54:<octet>` | `compact_primary_mac_prefix` |
 | Bond port 2 (backup) | `enp2s0`, MAC `52:54:00:e2:56:<octet>` | `compact_secondary_mac_prefix` |
 | Per node | 8 vCPU, 24 GiB RAM, 150 GB disk (`vda`, RHCOS) | `compact_vcpus`, `compact_memory`, `compact_disk_gb` |
-| Storage disk per node | 500 GB, empty (`vdb`), for LVM Storage | `compact_storage_disk_gb`, `compact_lvm_storage` |
-| Default StorageClass | `lvms-vg1` (LVM Storage, thin-provisioned XFS) | `roles/setup-lvm-storage`, `use_lvm_storage` in `vars.yaml` |
+| Storage disk per node | LVM Storage: 500 GB, empty (`vdb`). Ceph: none | `compact_storage_disk_gb`, `compact_lvm_storage` |
+| Default StorageClass | LVM Storage: `lvms-vg1` (thin-provisioned XFS). Ceph: `ocs-external-storagecluster-ceph-rbd` | `use_lvm_storage` in `vars.yaml`, see [Choose the storage](#choose-the-storage-lvm-storage-or-ceph) |
 
 **Why these addresses.** They were five of the last six free two-digit octets
 on the lab network. They are clear of every hosted-cluster MetalLB pool
@@ -96,25 +97,109 @@ change:
 
 ---
 
+## Choose the storage: LVM Storage or Ceph
+
+Decide this **before you build the cluster**. It changes how the VMs are
+built, not only what is installed on them afterwards.
+
+| | LVM Storage (default) | Ceph 9 via ODF external mode |
+|---|---|---|
+| Where the data lives | A 500 GB disk (`vdb`) on each node, local to that node | A separate Ceph cluster: `ceph1`-`ceph3` (`.24`-`.26`) and `cephadmin` (`.27`), built by `setup_ceph.yaml` |
+| Default StorageClass | `lvms-vg1` | `ocs-external-storagecluster-ceph-rbd` |
+| Other classes | none | `ocs-external-storagecluster-cephfs` (RWX) |
+| CSI volume snapshots | No VolumeSnapshotClass | Yes, RBD and CephFS |
+| A rebuild of the compact cluster | Deletes the data with the disks | Leaves the data on Ceph |
+| Extra load on the hypervisor | 3 x 500 GB thin disks | About 80 GiB RAM, 52 vCPUs and 1.1 TB of thin disks for the four Ceph VMs ([README](../README.md#what-gets-built)) |
+
+Pick **Ceph** when a pod must not be tied to one node's disk. The usual case
+is a hosted control plane's etcd ([compact-cluster-hcp.md](compact-cluster-hcp.md)).
+It then sits on Ceph RBD, can be snapshotted, and can be backed up with
+`oadp_backup_method=csi`. LVM Storage ships no VolumeSnapshotClass, so OADP can
+only copy those volumes file by file.
+
+**Set the choice in `vars.yaml`:**
+
+```yaml
+# LVM Storage: the default, nothing to change
+use_lvm_storage: true
+
+# Ceph: no LVM Storage, ODF external mode instead
+use_lvm_storage: false
+```
+
+With `use_lvm_storage: false`, the compact build:
+
+- creates no `vdb` storage disk on the nodes (`tasks/vm.yml`), and
+- skips the LVM Storage step (`--tags compactstorage`).
+
+`compact_lvm_storage` follows `use_lvm_storage`. `use_lvm_storage` is the
+lab-wide switch: a hub, hub2 or SNO built afterwards also comes up without LVM
+Storage. To change only the compact cluster, leave `vars.yaml` alone and pass
+`-e compact_lvm_storage=false` to `setup_compact_cluster.yaml` instead.
+
+**Why not both.** LVM Storage and ODF both install into the `openshift-storage`
+namespace, each with its own OperatorGroup. This repo has not tested them
+together. And if `lvms-vg1` is already the default StorageClass when ODF
+arrives, PVCs that name no class, etcd's included, still land on LVM Storage.
+To move a cluster that already has LVM Storage, see
+[Switching a cluster that already has LVM Storage](#switching-a-cluster-that-already-has-lvm-storage).
+
+**What Ceph needs** in addition to everything else in this guide:
+
+- **OCP 4.22 or later** on the compact cluster. Below 4.22, a Ceph 9 RBD
+  volume binds but never mounts
+  ([README, Requirements](../README.md#requirements)). `ocp_major_version` in
+  `vars.yaml` is `"4.22"`.
+- **`ceph_dashboard_password`** in `vault.yaml`, next to `org_id`,
+  `activation_key` and `pull_secret`.
+- The `ceph`, `ceph_admin` and `ceph_nodes` groups in `inventory/hosts`.
+  `setup_bm_host.yaml` renders them; an inventory rendered before they existed
+  needs that playbook run again.
+- **A connected cluster.** The ODF Subscription comes from `redhat-operators`.
+  [compact-cluster-disconnected.md](compact-cluster-disconnected.md) does not
+  cover Ceph.
+
+---
+
 ## The automated path
 
 ```bash
+# 0. Ceph only (use_lvm_storage: false), from the repository root: the Ceph
+#    cluster. It does not depend on the compact cluster.
+ansible-playbook -i inventory/hosts setup_ceph.yaml --ask-vault-pass
+ssh root@192.168.122.27 ceph -s          # HEALTH_OK, 3 mons, 9 OSDs
+
 # 1. DNS, from the repository root: the zone on the helper, and api/*.apps in
 #    the hypervisor's /etc/hosts
 ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns --ask-vault-pass
 
 # 2. The cluster, from inside compact-cluster/: pre-flight, ISO, three VMs,
-#    wait for the install, then LVM Storage
+#    wait for the install, then LVM Storage (skipped when use_lvm_storage is
+#    false)
 cd compact-cluster
 ansible-playbook -i ../inventory/hosts setup_compact_cluster.yaml --ask-vault-pass
+
+# 3. Ceph only, back at the repository root: ODF on the compact cluster,
+#    attached to the Ceph cluster from step 0
+cd ..
+test -x /usr/bin/oc || cp /var/lib/libvirt/images/compact_install/oc /usr/bin/oc
+ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass \
+  -e ceph_odf_target_kubeconfig=/var/lib/libvirt/images/compact_install/auth/kubeconfig
 ```
+
+For Ceph, pass **`ceph_odf_target_kubeconfig`**. `setup_ceph_odf.yaml` knows
+only `target_hub=hub` and `target_hub=hub2`, and treats any other value,
+`compact` included, as `hub`. Without the kubeconfig it installs ODF on
+**hub1**. Step 3 also needs `oc` in `/usr/bin`: the ODF plays run plain `oc`,
+and the compact build keeps its own `oc` in `compact_install/`, off the
+`PATH`. A hub build puts one in `/usr/bin`.
 
 Run the two compact playbooks from **inside `compact-cluster/`**. Ansible
 reads `ansible.cfg` from the working directory, and the one in this folder
 adds `../roles` to `roles_path`. Run from the repository root, Ansible cannot
 find `setup-compact-cluster`. The shared playbooks (`setup_bm_host.yaml`,
-`setup_mirror_registry.yaml`, `cleanup.yaml`) stay at the repository root and
-run from there.
+`setup_mirror_registry.yaml`, `setup_ceph.yaml`, `setup_ceph_odf.yaml`,
+`cleanup.yaml`) stay at the repository root and run from there.
 
 | Tag | What it does | Role file |
 |---|---|---|
@@ -122,7 +207,7 @@ run from there.
 | `compactimage` | Downloads the installer, renders the manifests and builds the ISO. | `tasks/image.yml` |
 | `compactvm` | Builds the three VMs from the ISO that is already there. | `tasks/vm.yml` |
 | `compactwait` | Waits for bootstrap and for install-complete, then checks the bonds. | `tasks/wait.yml` |
-| `compactstorage` | Installs LVM Storage and waits for the `lvms-vg1` StorageClass. Attaches the storage disk to any node built without one. | `tasks/storage.yml`, `roles/setup-lvm-storage` |
+| `compactstorage` | Installs LVM Storage and waits for the `lvms-vg1` StorageClass. Attaches the storage disk to any node built without one. Skipped when `use_lvm_storage` (or `compact_lvm_storage`) is false. | `tasks/storage.yml`, `roles/setup-lvm-storage` |
 | `acm` | Only when asked for (also tagged `never`). ACM/MCE, MetalLB and OADP, making this a management cluster for hosted clusters. See [compact-cluster-hcp.md](compact-cluster-hcp.md). | `roles/setup-hub-acm` |
 | `hcpingress` | Only when asked for. MetalLB inside each hosted cluster this cluster manages, for its `*.apps`. | `roles/setup-hcp-ingress-metallb` |
 
@@ -169,6 +254,40 @@ ansible-vault view vault.yaml   # copy the pull_secret value
 vi /root/pull-secret.json       # paste it here, as one line of JSON
 ```
 
+**Ceph only: build the Ceph cluster now.** *Automated by: `setup_ceph.yaml`*
+
+Skip this for LVM Storage. With Ceph
+([Choose the storage](#choose-the-storage-lvm-storage-or-ceph)), build it
+first: it takes a while, and nothing in it depends on the compact cluster. The
+compact nodes reach it directly, because the Ceph VMs are on the same libvirt
+`default` network. Step 12 attaches the compact cluster to it.
+
+From the repository root:
+
+```bash
+grep -q '^use_lvm_storage: false' vars.yaml && echo "Ceph path"
+ansible-vault view vault.yaml | grep -q '^ceph_dashboard_password:' && echo "dashboard password set"
+grep -A4 '^\[ceph' inventory/hosts       # the ceph, ceph_admin and ceph_nodes groups
+
+ansible-playbook -i inventory/hosts setup_ceph.yaml --ask-vault-pass
+```
+
+The playbook builds four VMs from `rhel9_kvm_image` and registers them with
+`subscription-manager`. It then runs `cephadm bootstrap` on `ceph1`, adds
+`ceph2` and `ceph3` as mon, mgr and OSD hosts, and makes `cephadmin` the admin
+node. The [README](../README.md#build-the-ceph-cluster) describes each play.
+
+```bash
+ssh root@192.168.122.27 ceph -s           # HEALTH_OK, 3 mons, 3 mgrs, 9 OSDs
+ssh root@192.168.122.27 ceph osd tree
+```
+
+Wait for `HEALTH_OK` before Step 12. The export in Step 12 also runs against a
+degraded cluster, and the problem shows up later as PVCs that do not bind.
+
+If the Ceph cluster already exists, for example because a hub uses it, do not
+build a second one. See [Sharing Ceph with a hub](#sharing-ceph-with-a-hub).
+
 ### Step 2 - Set the shell variables
 
 The commands in the rest of this guide use these variables. Set them once in
@@ -190,6 +309,8 @@ export RENDEZVOUS=$LAB.64
 
 export MAC1=52:54:00:e2:54                   # bond port 1 (enp1s0), the lab-wide scheme
 export MAC2=52:54:00:e2:56                   # bond port 2 (enp2s0)
+
+export STORAGE=lvm                           # lvm or ceph: use_lvm_storage true / false
 ```
 
 ### Step 3 - Check the addresses are free
@@ -500,9 +621,10 @@ ISO boots all three nodes. Each node picks its own configuration by MAC.
 
 *Automated by: `tasks/vm.yml`*
 
-For each node: create a fresh disk for RHCOS and a second, **empty disk for
-LVM Storage**, reserve the address for the first NIC's MAC, and create a
-domain with **two `--network` options on the default network**. These are the
+For each node: create a fresh disk for RHCOS and, **with LVM Storage only**, a
+second, **empty disk for LVM Storage**. Reserve the address for the first
+NIC's MAC, and create a domain with **two `--network` options on the default
+network**. These are the
 two bond ports. libvirt assigns PCI slots in the order the NICs are listed, so
 the first NIC becomes `enp1s0` and the second `enp2s0`.
 
@@ -517,8 +639,14 @@ for n in $NODES; do
   qemu-img create -f qcow2 $VMDIR/${dom}_disk.qcow2 150G
 
   # The storage disk: empty, for LVM Storage (Step 12). LVMS only takes a disk
-  # with nothing on it, so it is recreated on every rebuild too.
-  qemu-img create -f qcow2 -o preallocation=metadata $VMDIR/${dom}_storage.qcow2 500G
+  # with nothing on it, so it is recreated on every rebuild too. Ceph needs
+  # no disk on the nodes: STORAGE_DISK stays empty and virt-install gets one
+  # disk fewer.
+  STORAGE_DISK=
+  if [ "$STORAGE" = lvm ]; then
+    qemu-img create -f qcow2 -o preallocation=metadata $VMDIR/${dom}_storage.qcow2 500G
+    STORAGE_DISK="--disk $VMDIR/${dom}_storage.qcow2,format=qcow2,cache=none,bus=virtio"
+  fi
 
   # Reserve the address for the bond's MAC (the first NIC's MAC). Skip this if
   # setup-bm-host already did it.
@@ -534,7 +662,7 @@ for n in $NODES; do
     --cpu host-passthrough \
     --os-variant=rhel9.4 \
     --disk $VMDIR/${dom}_disk.qcow2,format=qcow2,cache=none,bus=virtio \
-    --disk $VMDIR/${dom}_storage.qcow2,format=qcow2,cache=none,bus=virtio \
+    $STORAGE_DISK \
     --disk $WORK/agent.x86_64.iso,device=cdrom,bus=sata,readonly=on \
     --boot hd,cdrom \
     --network network:default,mac=$MAC1:$oct,model=virtio \
@@ -543,12 +671,12 @@ for n in $NODES; do
     --noautoconsole
 done
 
-# Each domain should list two interfaces with the expected MACs,
-# and two disks: vda (RHCOS) and vdb (storage)
+# Each domain should list two interfaces with the expected MACs, and the
+# disks: vda (RHCOS), plus vdb (storage) with LVM Storage
 for n in $NODES; do virsh domiflist compact_${n%%:*}; virsh domblklist compact_${n%%:*}; done
 ```
 
-**The order of the two disks matters.** The RHCOS disk is listed first, so it
+**The order of the two disks matters** (LVM Storage). The RHCOS disk is listed first, so it
 is `vda`. The storage disk is second, so it is `vdb`. `agent-config.yaml` pins
 the install to `/dev/vda` with `rootDeviceHints` (Step 7), which keeps the
 installer off the storage disk. Without that pin the agent picks a disk by its
@@ -662,7 +790,15 @@ cat $WORK/auth/kubeadmin-password
 # https://console-openshift-console.apps.compact.mylab.com
 ```
 
-### Step 12 - Add LVM Storage
+### Step 12 - Add storage
+
+Follow the part for the storage you chose in
+[Choose the storage](#choose-the-storage-lvm-storage-or-ceph):
+
+- `STORAGE=lvm`: [12a - LVM Storage](#12a---lvm-storage)
+- `STORAGE=ceph`: [12b - Ceph via ODF external mode](#12b---ceph-via-odf-external-mode)
+
+#### 12a - LVM Storage
 
 *Automated by: `tasks/storage.yml`, which runs `roles/setup-lvm-storage` (`--tags compactstorage`)*
 
@@ -774,6 +910,175 @@ node, so the volume is created on whichever node the pod is scheduled to.
 LVMS marks `lvms-vg1` as the default class only if no other class is already
 the default.
 
+#### 12b - Ceph via ODF external mode
+
+*Automated by: `setup_ceph_odf.yaml` (from the repository root), which runs
+`roles/setup-ceph-odf-consumer` and `roles/setup-ceph-odf-export`*
+
+ODF in **external mode** runs no Ceph daemon on the compact cluster. The
+operator installs ceph-csi, and ceph-csi provisions RBD and CephFS volumes out
+of the Ceph cluster from Step 1. The playbook runs three plays, in this order:
+
+1. **On the compact cluster:** create `openshift-storage`, subscribe to
+   `odf-operator` (channel `stable-<ocp_major_version>`), and take the
+   exporter script from the operator just installed. That script has to match
+   the operator version. An older script writes the CSI credentials under key
+   names a newer operator does not read.
+2. **On `cephadmin`:** create the RBD pool `ocs-storagecluster-cephblockpool`
+   and the CephFS filesystem `ocs-storagecluster-cephfilesystem` if they are
+   missing. Then run the exporter script, which creates scoped CSI users and
+   writes the fsid, mon endpoints and keys as JSON to
+   `ceph-odf/external-cluster-details.json` on the hypervisor. That file holds
+   credentials and is in `.gitignore`.
+3. **On the compact cluster:** create the `rook-ceph-external-cluster-details`
+   Secret from that JSON and the external `StorageCluster`
+   `ocs-external-storagecluster`. The operator then creates the StorageClasses
+   and marks the RBD class as the default (`ceph_odf_rbd_default_sc: true`).
+
+**Check there is no LVM Storage on the cluster.** With `STORAGE=ceph` there
+should be none:
+
+```bash
+oc get lvmcluster -A                           # No resources found
+oc get storageclass                            # no lvms-vg1, and nothing marked (default)
+```
+
+If LVM Storage is there, remove it first, as in
+[Switching a cluster that already has LVM Storage](#switching-a-cluster-that-already-has-lvm-storage).
+
+**Run the playbook** from the repository root:
+
+```bash
+cd /path/to/ocp-onpremise                      # the repository root
+
+# The ODF plays run plain `oc`. The compact build keeps its oc in $WORK, off
+# the PATH; a hub build puts one in /usr/bin.
+test -x /usr/bin/oc || cp $WORK/oc /usr/bin/oc
+
+ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass \
+  -e ceph_odf_target_kubeconfig=$WORK/auth/kubeconfig
+```
+
+`ceph_odf_target_kubeconfig` is required. Do not use `-e target_hub=compact`:
+the playbook knows only `hub` and `hub2`, treats every other value as `hub`,
+and would install ODF on hub1. The plays set `KUBECONFIG` themselves, so the
+`KUBECONFIG` exported in your shell does not change where they go.
+
+The plays are tagged, so a failed stage can be run again on its own:
+`--tags ceph-odf-install`, `ceph-odf-export`, `ceph-odf-create`.
+
+**Check the result.** The last play waits only 60 seconds, so the
+StorageCluster can still be `Progressing` when it ends. Give it a few minutes:
+
+```bash
+oc -n openshift-storage get csv                       # odf-operator, ocs-operator, ... Succeeded
+oc -n openshift-storage get storagecluster            # ocs-external-storagecluster  PHASE Ready
+oc get storageclass
+# ocs-external-storagecluster-ceph-rbd (default)   openshift-storage.rbd.csi.ceph.com
+# ocs-external-storagecluster-cephfs               openshift-storage.cephfs.csi.ceph.com
+oc get volumesnapshotclass                            # one for RBD, one for CephFS
+```
+
+**Mount a volume.** A PVC that binds only shows that provisioning works. On a
+node kernel that cannot map a Ceph 9 RBD image (OCP below 4.22), the PVC binds
+and the pod then fails to start. Test with a pod:
+
+```bash
+oc apply -f - <<'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ceph-test
+  namespace: default
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ceph-test
+  namespace: default
+spec:
+  containers:
+  - name: test
+    image: registry.access.redhat.com/ubi9/ubi-minimal
+    command: ["sleep", "3600"]
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: ceph-test
+EOF
+
+oc -n default get pvc ceph-test                    # Bound, STORAGECLASS ocs-external-storagecluster-ceph-rbd
+oc -n default wait pod/ceph-test --for=condition=Ready --timeout=180s
+oc -n default exec ceph-test -- df -h /data        # /dev/rbd0, about 1G
+ssh root@192.168.122.27 rbd ls ocs-storagecluster-cephblockpool   # csi-vol-<uuid>
+
+oc -n default delete pod/ceph-test pvc/ceph-test
+```
+
+From here on, every PVC that names no StorageClass goes to Ceph RBD. That
+includes the AgentServiceConfig's three PVCs and each hosted cluster's etcd
+volumes in [compact-cluster-hcp.md](compact-cluster-hcp.md). Attach Ceph
+**before** those steps: a PVC that is already bound stays on the class it got.
+After the hosted cluster is up, check:
+
+```bash
+oc get pvc -n multicluster-engine              # three, Bound on ocs-external-storagecluster-ceph-rbd
+oc get pvc -n hcp-compact1-hcp-compact1        # data-etcd-*, Bound on ocs-external-storagecluster-ceph-rbd
+```
+
+##### Sharing Ceph with a hub
+
+One Ceph cluster can serve the hub and the compact cluster at the same time.
+Run `setup_ceph_odf.yaml` once for each cluster, each with its own
+kubeconfig. By default both runs use the same RBD pool and CephFS filesystem,
+so both clusters provision into one pool. That works, but a pool of its own
+keeps the compact cluster's volumes apart and makes it safe to clean up one
+cluster without the other:
+
+```bash
+ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass \
+  -e ceph_odf_target_kubeconfig=$WORK/auth/kubeconfig \
+  -e ceph_odf_rbd_pool=compact-rbd -e ceph_odf_enable_cephfs=false
+```
+
+Each run overwrites `ceph-odf/external-cluster-details.json`. That is
+harmless: the cluster from the earlier run already holds its copy as a Secret.
+
+A Ceph cluster shared with a hub also shares the hub's lifecycle. The DR
+walkthrough in [steps.md](../steps.md) destroys and rebuilds Ceph with
+`cleanup-ceph.yaml`. Doing that takes the compact cluster's volumes with it,
+etcd included.
+
+##### Switching a cluster that already has LVM Storage
+
+Setting `use_lvm_storage: false` after the build uninstalls nothing. Remove
+LVM Storage by hand before running `setup_ceph_odf.yaml`. Volumes on
+`lvms-vg1` cannot move to Ceph, so delete or back up the PVCs that use it
+first:
+
+```bash
+oc get pvc -A | grep lvms-vg1                          # delete these first
+
+oc -n openshift-storage delete lvmcluster my-lvmcluster
+oc get storageclass                                    # wait until lvms-vg1 is gone
+oc -n openshift-storage delete subscription lvms
+oc -n openshift-storage delete csv -l operators.coreos.com/lvms-operator.openshift-storage
+oc -n openshift-storage delete operatorgroup openshift-storage-operatorgroup
+```
+
+Delete the OperatorGroup too. ODF creates its own, `openshift-storage-odf`,
+and OLM installs nothing in a namespace that has two OperatorGroups. Keep the
+`openshift-storage` namespace, because ODF uses it. The `vdb` disks can stay
+attached to the nodes, since ODF does not use them.
+
 ### Step 13 - Test bond failover
 
 Take down the active port of master1 and check that the bond moves to the
@@ -820,6 +1125,16 @@ The DHCP reservations, DNS zone and `/etc/hosts` entries stay in place, as
 they do for every other cluster in this lab. They are derived from `ip_list`,
 and a rebuild reuses them.
 
+**Ceph** is not removed with the cluster. Its VMs and pools are separate, and
+a rebuilt compact cluster can attach to the same Ceph cluster again (Step 12b).
+The RBD images the cluster left behind stay in the pool. To remove the Ceph
+cluster too, and only if no hub still uses it, run from the repository root:
+
+```bash
+ansible-playbook -i inventory/hosts cleanup-ceph.yaml
+virsh list --all | grep -E 'ceph[123]|cephadmin'     # nothing
+```
+
 ---
 
 ## Troubleshooting
@@ -838,3 +1153,9 @@ and a rebuild reuses them.
 | LVMCluster stays `Progressing` or `Failed`, or `lvms-vg1` never appears | A node has no empty disk: `vdb` is missing, or it already holds partitions, a filesystem or an old volume group | `lsblk /dev/vdb` on each node (Step 12). `oc -n openshift-storage logs ds/vg-manager` names every device it skipped and why. Attach a fresh disk as in Step 12. |
 | RHCOS was installed on the storage disk | `rootDeviceHints` was removed, or the storage disk was listed before the RHCOS disk in `virt-install` | `virsh domblklist compact_masterN`: the RHCOS disk must be `vda`. Rebuild with the disk order from Step 9. |
 | A PVC stays `Pending` with no pod using it | `lvms-vg1` binds when the first pod uses the PVC (`WaitForFirstConsumer`) | Expected. Start a pod that mounts it. |
+| Ceph: ODF ended up on the hub, not the compact cluster | `setup_ceph_odf.yaml` was run with `-e target_hub=compact` or without a kubeconfig | Run it again with `-e ceph_odf_target_kubeconfig=$WORK/auth/kubeconfig` (Step 12b). Remove ODF from the hub if it should not be there. |
+| Ceph: `setup_ceph_odf.yaml` fails with `oc: command not found` | No `oc` in `/usr/bin` on a hypervisor that has never built a hub | `cp $WORK/oc /usr/bin/oc` (Step 12b) |
+| Ceph: the ODF CSV is `Failed` with reason `TooManyOperatorGroups` | LVM Storage's OperatorGroup is still in `openshift-storage` | `oc -n openshift-storage get operatorgroup`. Delete `openshift-storage-operatorgroup`, as in Step 12b. |
+| Ceph: the StorageCluster stays `Progressing` | Ceph is not `HEALTH_OK`, or the compact nodes cannot reach the mons on `.24`-`.26` | `ssh root@192.168.122.27 ceph -s`. `oc -n openshift-storage get storagecluster ocs-external-storagecluster -o yaml` shows the conditions. |
+| Ceph: the PVC is `Bound` but the pod stays `ContainerCreating` with `failed to add secret to kernel` or error 524 | The node kernel cannot map a Ceph 9 RBD image: OCP below 4.22 | Build with OCP 4.22 or later. See [README, Requirements](../README.md#requirements). |
+| Ceph: hosted cluster etcd or AgentServiceConfig PVCs are on `lvms-vg1` | They were created while `lvms-vg1` was the default StorageClass | Bound PVCs do not move. Remove LVM Storage, attach Ceph, then recreate them (Step 12b). |
