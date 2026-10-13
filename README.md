@@ -21,6 +21,7 @@ In a hurry? [steps.md](steps.md) is the same end-to-end run as commands only.
   - [Choose Connected or Disconnected](#choose-connected-or-disconnected)
   - [Setup Bare Metal Host](#setup-bare-metal-host-1)
   - [Setup Mirror Registry (disconnected only)](#setup-mirror-registry-disconnected-only)
+  - [Setup Bastion VM (optional)](#setup-bastion-vm-optional)
   - [Choose the Hub's PV Storage](#choose-the-hubs-pv-storage)
   - [Setup Hub Cluster](#setup-hub-cluster)
   - [Prepare ACM (Disconnected Deployment)](#prepare-acm-disconnected-deployment)
@@ -408,7 +409,7 @@ Before running it:
   `<ocp_major_version>.<ocp_minor_version>`, i.e. what the rest of the lab
   installs) and `mirror_catalog_operator_packages`. That last list is what gets
   mirrored beyond the release payload; it already covers the operators
-  `setup-hub-acm` installs (ACM, MCE, LVM Storage, MetalLB, OADP, cincinnati),
+  the hub installs (ACM, MCE, LVM Storage, MetalLB, OADP, cincinnati),
   so add anything else your lab needs **before** the mirror runs rather than
   after.
 - Mirroring the release payload plus those catalogs pulls thousands of images -
@@ -457,17 +458,105 @@ That last directory holds the `ImageDigestMirrorSet` / `ImageTagMirrorSet` /
 `CatalogSource` the hub install stages and applies as day-2 resources; the hub
 install fails with a clear message if it is not there yet.
 
+### Setup Bastion VM (optional)
+
+A big-disk guest for building and scanning container images. Nothing else in the
+lab depends on it, and nothing in the install flow imports it — run it when you
+need it, skip it otherwise.
+
+It exists because the bare-metal host does not have the room. Building container
+images is disk-hungry: the hardened-vs-UBI image comparison in
+[`sadiquepp/openshift`](https://github.com/sadiquepp/openshift/tree/main/test-workloads/online-boutique/hardened)
+pulls a dozen base images, produces two full stacks of twelve service images,
+and saves each one to a tar in order to scan it. On a host whose `/` is nearly
+full that either fails partway or fills `/` — and filling `/` on the hypervisor
+takes the whole lab with it.
+
+```bash
+ansible-playbook -i inventory/hosts setup_bastion.yaml --ask-vault-pass
+```
+
+256G disk, 8 vCPU, 16G RAM by default (`bastion_*` in `vars.yaml`). It reuses the
+base image `setup_bm_host.yaml` prepared, so run that first. Registry trust and
+login additionally need `setup_mirror_registry.yaml`; without it, run:
+
+```bash
+ansible-playbook -i inventory/hosts setup_bastion.yaml --ask-vault-pass \
+  -e bastion_trust_mirror_registry=false -e bastion_registry_login=false
+```
+
+**If `/var/lib/libvirt/images` is itself on a small `/`,** point the disk
+somewhere with room — that is the whole point of the exercise:
+
+```bash
+ansible-playbook -i inventory/hosts setup_bastion.yaml --ask-vault-pass \
+  -e bastion_disk_dir=/data/libvirt/images
+```
+
+The role refuses to create the disk if the filesystem holding `bastion_disk_dir`
+has less free space than `bastion_disk_size`, and names the filesystem and the
+shortfall when it does. Pass `-e bastion_require_free_space=false` to overcommit
+the sparse qcow2 on purpose.
+
+**Tags can be used on their own.** Address discovery and the ssh wait are tagged
+`always`, so the in-memory `bastion` group is rebuilt on every run regardless of
+what else is selected — `--tags repos,scanners` works without recreating the VM.
+That matters because the group is built by `add_host` and exists only for the
+duration of a run; nothing is written to `inventory/hosts`.
+
+**This VM has no address reservation.** Unlike helper and mirror-registry there
+is no `ip_list` entry and no `ip-dhcp-host` entry on the `default` network — it
+takes whatever libvirt's DHCP gives it, which is fine because nothing in the lab
+needs to reach it at a predictable address. The playbook prints the address and
+adds the host to the in-memory inventory for its own later plays. To find it
+again:
+
+```bash
+virsh domifaddr bastion
+```
+
+**The clone is pinned to a branch.** `main` in `sadiquepp/openshift` does not yet
+carry `test-workloads/online-boutique/hardened` — the build and scan tooling this
+bastion exists to run — so `bastion_git_repos` pins that entry to the branch that
+does. Drop the `version:` line once it merges, otherwise the paths in
+`/root/.bastion-env` point at a directory that is not there.
+
+What it installs: podman, buildah, skopeo, git, jq and friends; `grype` with its
+vulnerability database primed (~1GB, pre-pulled so the first scan does not pay
+for it, and so a database that downloads but cannot unpack fails here rather
+than mid-comparison); `oc` and `kubectl`; the mirror registry's CA in the trust
+bundle plus a `podman login` to it; and a clone of `sadiquepp/openshift` under
+`/root/work`. `trivy` is available but off by default (`bastion_install_trivy`)
+— the two scanners use different databases, so the second is a cross-check
+rather than a requirement.
+
+Then, on the bastion:
+
+```bash
+source /root/.bastion-env     # sets REGISTRY and NAMESPACE
+cd /root/work/openshift/test-workloads/online-boutique/hardened
+./preflight.sh --build-check
+```
+
+Extra dnf repositories, if the packages you want are not in the subscription's,
+go in `bastion_extra_dnf_repos` (passed through to `yum_repository`); extra RHSM
+repository IDs go in `bastion_rhsm_repos`.
+
 ### Choose the Hub's PV Storage
 
 The hub needs a PV provider before anything with a PVC (the hosted clusters'
 etcd, the hello-openshift sample used in the backup/restore walkthrough) will
 schedule.
 There are two options, and the choice has to be made **before** the hub is
-built, because `setup-hub-acm` acts on it during bring-up:
+built, because the hub build acts on it:
 
 - **LVM Storage** (default) - `use_lvm_storage: true` in `vars.yaml`. Nothing
-  else to do; the sections below install it as part of the hub. Good enough to
-  stand up hosted clusters and run workloads on them.
+  else to do: `roles/setup-lvm-storage` installs it as part of the cluster
+  build itself (tag `lvm`), right after the cluster operators settle and
+  before the ACM step - so a hub built with `--skip-tags acm` still has
+  `lvms-vg1` as its default StorageClass. Good enough to stand up hosted
+  clusters and run workloads on them. The SNO (`setup_sno.yaml`) follows the
+  same switch: it gets a second disk and LVM Storage after its install.
 - **Ceph 9 via ODF external mode** - set `use_lvm_storage: false`, then build
   the Ceph cluster and attach it with the two `setup_ceph*.yaml` playbooks,
   before the AgentServiceConfig step - that step's PVCs need a default
@@ -487,11 +576,21 @@ built, because `setup-hub-acm` acts on it during bring-up:
 
 ### Setup Hub Cluster
 
-Deploys an OpenShift cluster with ACM, LVM-Storage, MetalLB, and the OADP
+Deploys an OpenShift cluster with LVM-Storage, then ACM, MetalLB, and the OADP
 operator. LVM-Storage is skipped when `use_lvm_storage: false`.
 
 ```bash
 ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass
+```
+
+LVM Storage is part of the build, not of the `acm` step: `--skip-tags acm`
+keeps it, `--tags acm` does not re-run it. To add it - and nothing else - to
+a hub that is already up (one built before this, or with `--skip-tags acm`
+when LVM Storage was still part of `acm`):
+
+```bash
+ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass --tags lvm
+ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass --tags snostorage   # the SNO's equivalent
 ```
 
 One playbook, both modes - which hub it builds follows `disconnected_install`
@@ -1789,8 +1888,9 @@ ansible-playbook -i inventory/hosts setup_bm_host.yaml --ask-vault-pass
 
 ### Switching the hub off LVM Storage
 
-`use_lvm_storage` in `vars.yaml` gates both the LVM Storage operator
-Subscription and the `LVMCluster` CR in `roles/setup-hub-acm`:
+`use_lvm_storage` in `vars.yaml` gates `roles/setup-lvm-storage` - the LVM
+Storage operator Subscription and the `LVMCluster` CR - in every hub build and
+the SNO's storage step:
 
 ```yaml
 use_lvm_storage: false
@@ -2036,6 +2136,7 @@ delegates.
 | ----------------------------- | --------------------------------------------- |
 | `setup_bm_host.yaml`          | Prepare bare metal, create helper VM (DNS/LB) |
 | `setup_mirror_registry.yaml`  | Build the mirror registry VM and fill it with oc-mirror - required first when `disconnected_install: true`, refuses to run otherwise |
+| `setup_bastion.yaml`          | Build the 256G bastion VM for container image builds and CVE scanning - optional, nothing else depends on it |
 | `setup_hub_cluster.yaml`      | Deploy the hub (OCP + day-2 operators): hub1, or hubd when `disconnected_install: true` |
 | `setup_hub_cluster2.yaml`     | Deploy the DR replacement hub: hub2, or hub2d when `disconnected_install: true` |
 | `setup_hosted_cluster.yaml`   | Provision hosted cluster 1                    |
@@ -2064,8 +2165,11 @@ delegates.
 
 | Role            | Responsibility                                                        |
 | --------------- | --------------------------------------------------------------------- |
-| `setup-hub-acm` | Installs ACM, LVM-Storage, MetalLB, and OADP operator subscriptions, and creates one single-address MetalLB `IPAddressPool` + `L2Advertisement` per hosted cluster. LVM-Storage (operator + `LVMCluster`) is skipped when `use_lvm_storage: false` |
+| `setup-lvm-storage` | Installs LVM-Storage (operator + `LVMCluster`) and waits for the `lvms-vg1` default StorageClass. Run by the hub builds (tag `lvm`, outside `acm`) and the SNO's `snostorage` step; skipped when `use_lvm_storage: false` |
+| `setup-hub-acm` | Installs ACM, MetalLB, and OADP operator subscriptions, and creates one single-address MetalLB `IPAddressPool` + `L2Advertisement` per hosted cluster |
 | `setup-oadp`    | Creates the cloud-credentials secret and DataProtectionApplication CR; with `oadp_backup_method=csi` also labels the VolumeSnapshotClass Velero selects CSI snapshot classes by |
+| `setup-bastion-vm` | Creates the bastion VM: preflights free space where the disk will live, expands the prepared RHEL 9 base image into a 256G sparse qcow2, imports it, then discovers its DHCP address and adds it to the in-memory inventory (no reservation, unlike every other VM in this lab) |
+| `setup-bastion` | The in-guest half: build and scan tooling (podman/buildah/skopeo, grype with its db primed, optional trivy), `oc`, the mirror registry's CA and login, and a clone of `sadiquepp/openshift` under `/root/work` |
 | `setup-ceph-vm` | Creates the ceph1-3 + cephadmin VMs and attaches the raw OSD disks |
 | `setup-ceph-prereqs` | Registers the Ceph nodes with subscription-manager (no Satellite), enables the RHCS 9 tools repo, installs cephadm, and installs `pull_secret` as each node's podman authfile |
 | `setup-ceph-cluster` | Runs `cephadm bootstrap` on ceph1, expands the cluster onto ceph2/ceph3 + cephadmin, places mon/mgr/osd daemons, and enables msgr2 |

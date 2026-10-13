@@ -192,7 +192,10 @@ hub_worker_replicas: 3
 disconnected_install: false
 
 ## LVM Storage (true) or Ceph 9 via ODF external mode (false) for the hub's PVs.
-## Has to be decided before the hub is built. Pick Ceph for the backup/restore
+## Has to be decided before the hub is built. true installs LVM Storage as part
+## of the cluster build itself (roles/setup-lvm-storage, tag lvm - not part of
+## --tags acm), so every hub, and the SNO (sno_lvm_storage), comes up with
+## lvms-vg1 as its default StorageClass. Pick Ceph for the backup/restore
 ## demo: LVM Storage ships no VolumeSnapshotClass, so oadp_backup_method=csi -
 ## the only trustworthy control-plane restore - is not available on it.
 use_lvm_storage: true
@@ -742,6 +745,14 @@ sno_install_folder: "{{ download_dir }}/sno_install"
 sno_memory: 32768
 sno_vcpus: 12
 sno_disk_gb: 200
+
+## LVM Storage on the SNO, as on the hub: a second disk of this size is
+## hot-plugged into the VM after the install and handed to LVMS, which makes
+## lvms-vg1 the default StorageClass. Follows use_lvm_storage; set
+## sno_lvm_storage: false to keep the SNO without storage.
+## Add it to a running SNO with: setup_sno.yaml --tags snostorage
+sno_lvm_storage: "{{ use_lvm_storage }}"
+sno_storage_disk_gb: 100
 
 ## A second, unconfigured NIC on the containerlab fabric, added at build time.
 ## Off by default: this builds a cluster and nothing about a cluster needs the
@@ -1466,6 +1477,31 @@ hosted_cluster_domains:
 ## disconnected_install gates whether any of this is used at all - default
 ## false so connected installs are completely unaffected. It is set in the
 ## START HERE block at the top.
+## ===========================================================================
+## Bastion VM (setup_bastion.yaml)
+##
+## A big-disk guest for building and scanning container images, because the
+## baremetal host does not have the room and filling its / takes the lab down.
+## 256G, 8 vCPU, 16G -- sized for the hardened-vs-UBI image comparison in
+## sadiquepp/openshift, which builds two full stacks of twelve images and saves
+## each one to a tar to scan it.
+##
+## No ip_list entry on purpose: the bastion takes a DHCP address and the role
+## reports it. Nothing needs to reach it at a fixed address. Find it again with
+## `virsh domifaddr bastion`.
+##
+## bastion_disk_dir is where the qcow2 goes. If /var/lib/libvirt/images is on a
+## small /, point it at a filesystem with room -- the role refuses to create the
+## disk otherwise rather than filling the filesystem it is on.
+## ===========================================================================
+bastion_name: bastion
+bastion_disk: bastion_disk.qcow2
+bastion_disk_dir: /var/lib/libvirt/images
+bastion_disk_size: 256G
+bastion_resize_partition: /dev/sda4
+bastion_memory: 16384
+bastion_vcpus: 8
+
 mirror_registry_name: registry
 mirror_registry_disk: registry_disk.qcow2
 mirror_registry_extra_disk: registry_extra_disk.qcow2
