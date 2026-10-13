@@ -133,8 +133,9 @@ With `use_lvm_storage: false`, the compact build:
 - skips the LVM Storage step (`--tags compactstorage`).
 
 `compact_lvm_storage` follows `use_lvm_storage`. `use_lvm_storage` is the
-lab-wide switch: a hub, hub2 or SNO built afterwards also comes up without LVM
-Storage. To change only the compact cluster, leave `vars.yaml` alone and pass
+lab-wide switch: a hub, hub2, SNO or disconnected compact cluster (`compactd`)
+built afterwards also comes up without LVM Storage. `compactd` has no Ceph
+path, so build it with `-e compact_lvm_storage=true`. To change only the compact cluster, leave `vars.yaml` alone and pass
 `-e compact_lvm_storage=false` to `setup_compact_cluster.yaml` instead.
 
 **Why not both.** LVM Storage and ODF both install into the `openshift-storage`

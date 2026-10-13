@@ -99,9 +99,26 @@ keeps it off every hub.
 
 ## Before you start
 
-- **The compact cluster is up, with LVM Storage.** The AgentServiceConfig
-  claims three PVCs from the default StorageClass, `lvms-vg1`. See
-  [compact-cluster.md](compact-cluster.md), Steps 1-12.
+- **The compact cluster is up, with a default StorageClass.** See
+  [compact-cluster.md](compact-cluster.md), Steps 1-12. Two cases, chosen
+  before the cluster is built
+  ([Choose the storage](compact-cluster.md#choose-the-storage-lvm-storage-or-ceph)):
+  - **LVM Storage** (`use_lvm_storage: true`): `lvms-vg1`, on each node's
+    own disk.
+  - **Ceph via ODF** (`use_lvm_storage: false`):
+    `ocs-external-storagecluster-ceph-rbd`, on the external Ceph cluster
+    ([Step 12b](compact-cluster.md#12b---ceph-via-odf-external-mode)).
+
+  Every PVC in this guide names no StorageClass, so each one lands on the
+  default. That covers the AgentServiceConfig's three PVCs (Step 3) and the
+  hosted cluster's etcd volumes (Step 7). A bound PVC never moves to another
+  class, so with Ceph, **attach it before Step 3**. On Ceph, etcd can be
+  snapshotted, and the control plane can be backed up with
+  `oadp_backup_method=csi`. LVM Storage has no VolumeSnapshotClass.
+
+  ```bash
+  oc get storageclass       # exactly one (default): lvms-vg1, or ocs-external-storagecluster-ceph-rbd
+  ```
 - **The libvirt network forwards `compact.mylab.com`.** Check from the
   hypervisor:
 
@@ -179,8 +196,8 @@ This installs the same set as the hub's `--tags acm`:
 - OADP;
 - the Provisioning configuration.
 
-LVM Storage is in that role too. It is the same operator and LVMCluster
-`--tags compactstorage` already applied, so that part changes nothing.
+The role installs no storage. The compact cluster already has its storage
+from compact-cluster.md, Step 12: LVM Storage or ODF.
 `metallb_hub=compact` makes MetalLB's only pool `hcp-compact1-api-pool`
 (`.100`), restricted to `hcp-compact1`'s control-plane namespace.
 
@@ -190,7 +207,8 @@ LVM Storage is in that role too. It is the same operator and LVMCluster
 ```bash
 oc get multiclusterhub -n open-cluster-management      # Running (10-15 minutes)
 oc get ipaddresspool -n metallb-system                 # hcp-compact1-api-pool
-oc get csv -A | grep -E 'advanced-cluster|multicluster-engine|metallb|lvms|oadp'
+oc get csv -A | grep -E 'advanced-cluster|multicluster-engine|metallb|oadp'
+oc get csv -A | grep -E 'lvms|odf-operator'            # the storage: lvms or odf, not both
 ```
 
 ### Step 3 - Apply the AgentServiceConfig
@@ -203,7 +221,10 @@ it for you to review. Once the MultiClusterHub is `Running`:
 less ../roles/setup-hub-acm/files/.rendered-05-agentserviceconfig.yaml
 oc apply -f ../roles/setup-hub-acm/files/.rendered-05-agentserviceconfig.yaml
 oc -n multicluster-engine rollout status deploy/assisted-service --timeout=15m
-oc get pvc -n multicluster-engine                      # three, Bound on lvms-vg1
+oc get pvc -n multicluster-engine                      # three, Bound on the default class
+oc get pvc -n multicluster-engine \
+  -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,CLASS:.spec.storageClassName
+# CLASS: lvms-vg1, or ocs-external-storagecluster-ceph-rbd with Ceph
 ```
 
 ### Step 4 - The InfraEnv
@@ -288,6 +309,23 @@ oc get agents -n bminfra                                 # bound to the cluster,
 
 The control plane is up in about 10 minutes. The two Agents then install and
 join, typically in 20-40 minutes.
+
+**Check where etcd landed.** HyperShift creates one PVC per etcd member,
+`data-etcd-<n>`, in the control-plane namespace. It names no StorageClass, so
+it gets the compact cluster's default:
+
+```bash
+oc get pvc -n hcp-compact1-hcp-compact1 \
+  -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,CLASS:.spec.storageClassName
+# data-etcd-0, -1, -2 (only -0 with SingleReplica), Bound on
+# lvms-vg1, or ocs-external-storagecluster-ceph-rbd with Ceph
+```
+
+With Ceph, the RBD images are visible from `cephadmin`:
+
+```bash
+ssh root@192.168.122.27 rbd ls ocs-storagecluster-cephblockpool   # one csi-vol-<uuid> per PVC
+```
 
 **A worker that ends up `shut off` was built before the boot-order fix.**
 Each Agent writes RHCOS to its worker's disk and then reboots the machine. A
@@ -536,7 +574,9 @@ with it.
 | Symptom | Likely cause | Check |
 |---|---|---|
 | `setup_bminfra.yaml` fails: `No AgentServiceConfig on this hub` | Step 3 was skipped, or `-e target_hub=compact` was left off and it looked at the hub | `oc get agentserviceconfig agent` on compact |
-| The AgentServiceConfig's PVCs stay `Pending` | No default StorageClass on compact | `oc get sc`: `lvms-vg1 (default)`. Run `--tags compactstorage` (compact-cluster.md, Step 12). |
+| The AgentServiceConfig's PVCs stay `Pending` | No default StorageClass on compact | `oc get sc`. LVM Storage: `lvms-vg1 (default)`, else run `--tags compactstorage` (compact-cluster.md, Step 12a). Ceph: `ocs-external-storagecluster-ceph-rbd (default)`, else run `setup_ceph_odf.yaml` (Step 12b) and check `oc -n openshift-storage get storagecluster`. |
+| Ceph was chosen, but the etcd or AgentServiceConfig PVCs are on `lvms-vg1` | LVM Storage was still installed, and `lvms-vg1` was the default when the PVCs were created | Bound PVCs do not move. Remove LVM Storage and attach Ceph ([Step 12b](compact-cluster.md#switching-a-cluster-that-already-has-lvm-storage)), then recreate the AgentServiceConfig and the hosted cluster. |
+| `data-etcd-*` stay `Pending`, or etcd pods stay `ContainerCreating`, on Ceph | The StorageCluster is not `Ready`, or the node kernel cannot map a Ceph 9 RBD image (OCP below 4.22) | `oc -n openshift-storage get storagecluster`; `oc -n hcp-compact1-hcp-compact1 describe pod etcd-0`. See compact-cluster.md troubleshooting. |
 | The workers boot but no Agent appears | They booted the hub's ISO, or cannot reach assisted-service through compact's `*.apps` | `virsh dumpxml hcp_compact1_worker1 \| grep iso` names `compact-bminfra-discovery-...`; `dig @192.168.122.1 x.apps.compact.mylab.com` |
 | A worker gets an address from `.201`-`.249` | Its DHCP reservation is missing | `virsh net-dumpxml default \| grep 54:08`; re-run Step 5 |
 | The HostedCluster waits on `kube-apiserver` with no EXTERNAL-IP | The MetalLB pool on compact is missing, or names another namespace | `oc get ipaddresspool hcp-compact1-api-pool -n metallb-system -o yaml`; re-run `--tags acm` |
