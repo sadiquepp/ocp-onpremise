@@ -102,6 +102,17 @@ kubevirt_nodepool_replicas: 2
 kubevirt_worker_cores: 4
 kubevirt_worker_memory: 16Gi
 
+## Auto-repair (the NodePool's MachineHealthCheck) deletes and replaces a
+## worker whose node is NotReady for longer than kubevirt_mhc_timeout, or that
+## has not joined within kubevirt_mhc_node_startup_timeout of its VM starting.
+## HyperShift's defaults are 8m and 20m. A nested worker on a busy lab can sit
+## NotReady for 25 minutes while OVN-Kubernetes sets the node up, and with the
+## defaults auto-repair deletes it mid-way - the replacement then starts the
+## same wait, and the deletion's drain can hang with the node cordoned.
+## Per cluster: mhc_timeout / mhc_node_startup_timeout on its entry.
+kubevirt_mhc_timeout: 40m
+kubevirt_mhc_node_startup_timeout: 60m
+
 ## The root disk, a PVC on the management cluster that CDI fills from the RHCOS
 ## KubeVirt image in the release payload.
 ##

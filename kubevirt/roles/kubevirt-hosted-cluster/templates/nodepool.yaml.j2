@@ -10,6 +10,12 @@ kind: NodePool
 metadata:
   name: nodepool-{{ kv.name }}-1
   namespace: {{ kv.name }}
+{# How long auto-repair waits before it replaces a worker: HyperShift's
+   defaults (8m NotReady, 20m to first join) are shorter than nested workers
+   take on a busy lab, and a replacement starts the same wait over. #}
+  annotations:
+    hypershift.openshift.io/machine-health-check-timeout: "{{ kv.mhc_timeout }}"
+    hypershift.openshift.io/machine-health-check-node-startup-timeout: "{{ kv.mhc_node_startup_timeout }}"
 spec:
   clusterName: {{ kv.name }}
   replicas: {{ kv.replicas }}

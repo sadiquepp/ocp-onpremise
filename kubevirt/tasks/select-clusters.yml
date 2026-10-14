@@ -73,6 +73,8 @@
            'name': item.name,
            'ingress': item.ingress | default(kubevirt_ingress),
            'replicas': item.nodepool_replicas | default(kubevirt_nodepool_replicas),
+           'mhc_timeout': item.mhc_timeout | default(kubevirt_mhc_timeout),
+           'mhc_node_startup_timeout': item.mhc_node_startup_timeout | default(kubevirt_mhc_node_startup_timeout),
            'cores': item.cores | default(kubevirt_worker_cores),
            'memory': item.memory | default(kubevirt_worker_memory),
            'root_volume_size': item.root_volume_size | default(kubevirt_root_volume_size),
