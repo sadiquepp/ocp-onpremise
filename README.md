@@ -635,6 +635,13 @@ To re-run just the ACM part against a hub that is already up:
 ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass --tags acm
 ```
 
+Or only the hosted clusters' MetalLB API pools - all a hub that is already up
+needs after a hosted cluster is added to `hosted_cluster_metallb_pools`:
+
+```bash
+ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass --tags metallb
+```
+
 What the disconnected run does on top of the connected one:
 
 - Points every operator `Subscription` (ACM, LVM Storage, MetalLB, OADP) at the

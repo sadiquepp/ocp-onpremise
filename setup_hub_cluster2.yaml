@@ -27,7 +27,8 @@
 ## mirror-registry VM); the preflight below fails fast if it has not.
 ##
 ## Either mode ends in the same setup-hub-acm import, so --tags acm re-runs just
-## the day-2 part against whichever hub2 the flag selects.
+## the day-2 part against whichever hub2 the flag selects, and --tags metallb
+## just its hosted clusters' MetalLB API pools.
 ##
 ## The MetalLB address set is NOT part of what the flag switches here: both
 ## modes pass metallb_hub=hub2, because a disconnected hub2 is still the DR hub

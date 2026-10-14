@@ -32,6 +32,11 @@
 ##   ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass --tags acm \
 ##     -e disconnected_install=true
 ##
+## --tags metallb narrows that to the hosted clusters' MetalLB API pools - the
+## step to run after adding a hosted cluster to hosted_cluster_metallb_pools
+## on a hub that is already up:
+##   ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass --tags metallb
+##
 ## The two hubs CO-EXIST, with hub2 (setup_hub_cluster2.yaml) as well: the
 ## disconnected hub has its own IP block (ip_list.hubd_*), its own subdomain
 ## (hub_disconnected_domain) and its own VM/install directories, so all three

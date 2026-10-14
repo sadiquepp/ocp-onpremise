@@ -171,7 +171,7 @@ them; on a hub1 built before hcp-kv2 was in `vars.yaml`, render both again:
 
 ```bash
 ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns --ask-vault-pass
-ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --tags acm --ask-vault-pass
+ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --tags metallb --ask-vault-pass
 
 dig +short api.hcp-kv2.hub.mylab.com @192.168.122.21     # 192.168.122.252
 oc --kubeconfig /var/lib/libvirt/images/hub_install/auth/kubeconfig \

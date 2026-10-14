@@ -212,7 +212,7 @@ What that gives this lab, and why it matters here:
 - **hcp-kv1's API pool and DNS name.** hcp-kv1 is in the root `vars.yaml`, so
   step 4 publishes `api.hcp-kv1.hub.mylab.com` and step 6 creates
   `hcp-kv1-api-pool` at `.250`. On a hub built before hcp-kv1 was added,
-  re-run `setup_hub_cluster.yaml --tags acm` and `setup_bm_host.yaml --tags dns`.
+  re-run `setup_hub_cluster.yaml --tags metallb` and `setup_bm_host.yaml --tags dns`.
 - **Ceph RBD as the default StorageClass** (step 7, with
   `use_lvm_storage: false`). CDI gives the worker root disks ReadWriteMany
   block, so the VMs live-migrate when a hub node drains, and kubevirt-csi
@@ -276,7 +276,7 @@ oc --kubeconfig /var/lib/libvirt/images/hub_install/auth/kubeconfig \
 
 All in the root `vars.yaml`, next to hcp-kv1. Then, from the repository
 root, `setup_bm_host.yaml --tags dns` (its API name) and
-`setup_hub_cluster.yaml --tags acm` (its API pool), and this playbook:
+`setup_hub_cluster.yaml --tags metallb` (its API pool), and this playbook:
 
 ```yaml
 hosted_clusters:

@@ -63,7 +63,7 @@
       hosted_cluster_metallb_pools; on a hub built before {{ item.item.name }}
       was added to the root vars.yaml, re-run just that part, from the
       repository root:
-      ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --tags acm --ask-vault-pass
+      ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --tags metallb --ask-vault-pass
   loop: "{{ kubevirt_api_pools.results }}"
   loop_control:
     label: "{{ item.item.name }}"
