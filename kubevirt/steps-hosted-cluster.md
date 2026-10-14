@@ -11,7 +11,37 @@ Starting point: steps 1-7 of [steps.md](steps.md) done.
 cd kubevirt
 export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig   # hub1
 PB="ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass"
+
+# For the by-hand steps. The values are kubevirt/vars.yaml's defaults.
+M=/root/kubevirt-manifests/hub1; mkdir -p "$M"
+CATALOG=redhat-operators         # kubevirt_catalog_source
+CATALOG_NS=openshift-marketplace # kubevirt_catalog_source_namespace
+CNV_CHANNEL=stable               # kubevirt_cnv_channel
+NMSTATE_CHANNEL=stable           # kubevirt_nmstate_channel
+LOCALNET=kubevirt-lab            # kubevirt_localnet_name
+LOCALNET_BRIDGE=br-ex            # kubevirt_localnet_bridge
 ```
+
+**Every by-hand manifest is a file.** Each block writes its manifest into
+`$M` and then applies it, so it stays there to review later:
+
+```text
+cat > "$M/8.2-cnv-operator.yaml" <<EOF    # 1. write it: your shell expands $CATALOG etc.
+...
+EOF
+oc apply -f "$M/8.2-cnv-operator.yaml"     # 2. apply it
+```
+
+Between the two, look at what you are about to apply, every variable
+expanded:
+
+```bash
+cat "$M/8.2-cnv-operator.yaml"
+oc apply --dry-run=server -f "$M/8.2-cnv-operator.yaml"   # the API's verdict, nothing changed
+```
+
+The hosted cluster's own manifests (8.5-8.7) are already files: the playbook
+renders them into `rendered/hcp-kv1/` in 8.4.
 
 Every step is safe to repeat, and so is a full `$PB` run afterwards: what is
 already there is applied unchanged.
@@ -59,7 +89,7 @@ $PB --tags mgmt          # 8.2 and 8.3
 By hand - the operator:
 
 ```bash
-oc apply -f - <<'EOF'
+cat > "$M/8.2-cnv-operator.yaml" <<EOF
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -80,12 +110,13 @@ metadata:
   name: hco-operatorhub
   namespace: openshift-cnv
 spec:
-  channel: stable
+  channel: ${CNV_CHANNEL}
   name: kubevirt-hyperconverged
   installPlanApproval: Automatic
-  source: redhat-operators
-  sourceNamespace: openshift-marketplace
+  source: ${CATALOG}
+  sourceNamespace: ${CATALOG_NS}
 EOF
+oc apply -f "$M/8.2-cnv-operator.yaml"
 
 until oc get crd hyperconvergeds.hco.kubevirt.io >/dev/null 2>&1; do sleep 10; done
 ```
@@ -93,7 +124,7 @@ until oc get crd hyperconvergeds.hco.kubevirt.io >/dev/null 2>&1; do sleep 10; d
 Then the instance, and wait for it:
 
 ```bash
-oc apply -f - <<'EOF'
+cat > "$M/8.2-hyperconverged.yaml" <<EOF
 apiVersion: hco.kubevirt.io/v1beta1
 kind: HyperConverged
 metadata:
@@ -101,6 +132,7 @@ metadata:
   namespace: openshift-cnv
 spec: {}
 EOF
+oc apply -f "$M/8.2-hyperconverged.yaml"
 
 oc -n openshift-cnv wait hyperconverged/kubevirt-hyperconverged \
   --for=condition=Available --timeout=20m
@@ -117,8 +149,13 @@ wildcard Route on hub1. The router admits wildcard routes only when told to.
 This rolls the router pods once.
 
 ```bash
+cat > "$M/8.3-ingresscontroller-wildcards.yaml" <<EOF
+spec:
+  routeAdmission:
+    wildcardPolicy: WildcardsAllowed
+EOF
 oc -n openshift-ingress-operator patch ingresscontroller default --type=merge \
-  -p '{"spec":{"routeAdmission":{"wildcardPolicy":"WildcardsAllowed"}}}'
+  --patch-file "$M/8.3-ingresscontroller-wildcards.yaml"
 oc -n openshift-ingress rollout status deployment/router-default --timeout=10m
 ```
 
@@ -224,31 +261,73 @@ change. Destroy a cluster built the default way first:
 `$PB --tags destroy -e kubevirt_cluster=hcp-kv1`.
 
 **Instead of 8.3: the localnet network on hub1.** `$PB --tags mgmt -e kubevirt_ingress=metallb`.
-By hand, with the NMState operator installed (the same way as 8.2, package
-`kubernetes-nmstate-operator` in namespace `openshift-nmstate`):
+By hand - the NMState operator, skipped if `oc get crd
+nodenetworkconfigurationpolicies.nmstate.io` already answers (udn-bgp-evpn
+installs it too):
 
 ```bash
-oc apply -f - <<'EOF'
+cat > "$M/metallb-1-nmstate-operator.yaml" <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openshift-nmstate
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-nmstate
+  namespace: openshift-nmstate
+spec:
+  targetNamespaces:
+    - openshift-nmstate
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: kubernetes-nmstate-operator
+  namespace: openshift-nmstate
+spec:
+  channel: ${NMSTATE_CHANNEL}
+  name: kubernetes-nmstate-operator
+  installPlanApproval: Automatic
+  source: ${CATALOG}
+  sourceNamespace: ${CATALOG_NS}
+EOF
+oc apply -f "$M/metallb-1-nmstate-operator.yaml"
+
+until oc get crd nmstates.nmstate.io >/dev/null 2>&1; do sleep 10; done
+```
+
+Then the NMState instance, and the bridge mapping on hub1's workers:
+
+```bash
+cat > "$M/metallb-2-nmstate.yaml" <<EOF
 apiVersion: nmstate.io/v1
 kind: NMState
 metadata:
   name: nmstate
----
+EOF
+oc apply -f "$M/metallb-2-nmstate.yaml"
+
+until oc get crd nodenetworkconfigurationpolicies.nmstate.io >/dev/null 2>&1; do sleep 10; done
+
+cat > "$M/metallb-3-nncp-${LOCALNET}.yaml" <<EOF
 apiVersion: nmstate.io/v1
 kind: NodeNetworkConfigurationPolicy
 metadata:
-  name: kubevirt-lab-bridge-mapping
+  name: ${LOCALNET}-bridge-mapping
 spec:
   nodeSelector:
-    node-role.kubernetes.io/worker: ''
+    node-role.kubernetes.io/worker: ""
   desiredState:
     ovn:
       bridge-mappings:
-        - localnet: kubevirt-lab
-          bridge: br-ex
+        - localnet: ${LOCALNET}
+          bridge: ${LOCALNET_BRIDGE}
           state: present
 EOF
-oc wait nncp/kubevirt-lab-bridge-mapping --for=condition=Available --timeout=10m
+oc apply -f "$M/metallb-3-nncp-${LOCALNET}.yaml"
+oc wait nncp/${LOCALNET}-bridge-mapping --for=condition=Available --timeout=10m
 ```
 
 **Between 8.5 and 8.6: the NAD.** Render with
