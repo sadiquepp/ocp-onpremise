@@ -36,8 +36,8 @@ metadata:
   name: {{ kv.name }}
   namespace: {{ kv.name }}
 {# A record of which MetalLB pool the kube-apiserver address comes from. What
-   actually binds it is the pool's serviceAllocation (api-pool.yaml.j2): see the
-   same annotation in roles/create-hosted-cluster for why. #}
+   actually binds it is the pool's serviceAllocation, which roles/setup-hub-acm
+   renders: see the same annotation in roles/create-hosted-cluster for why. #}
   annotations:
     metallb.io/address-pool: {{ kv.api_pool }}
   labels:

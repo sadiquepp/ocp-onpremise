@@ -3,10 +3,10 @@
 # and their disks), HostedCluster (which deletes the control-plane namespace,
 # NAD included) and its own namespace.
 #
-# Left in place on purpose: the API pool (the hub's 'acm' tag owns it as much
-# as this lab does, and it holds nothing once the Service is gone), and the
-# management-cluster prerequisites - OpenShift Virtualization, the wildcard
-# route policy and the localnet bridge mapping - which other clusters may use.
+# Left in place on purpose: the API pool (setup_hub_cluster.yaml owns it, and
+# it holds nothing once the Service is gone), and the management-cluster
+# prerequisites - OpenShift Virtualization, the wildcard route policy and the
+# localnet bridge mapping - which other clusters may use.
 
 - name: "{{ kv.name }} | Remove the ACM import"
   ansible.builtin.command:

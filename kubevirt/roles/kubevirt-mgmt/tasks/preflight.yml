@@ -36,6 +36,38 @@
       `ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --tags acm --ask-vault-pass`
       run from the repository root.
 
+# The kube-apiserver's address comes from a single-address pool that
+# setup_hub_cluster.yaml (roles/setup-hub-acm) renders for every hosted
+# cluster in hosted_cluster_metallb_pools - step 6 of ../steps.md on a fresh
+# hub. Without it the HostedCluster waits forever on a <pending> Service.
+- name: Read each cluster's API pool on the management cluster
+  ansible.builtin.command:
+    cmd: >-
+      oc -n metallb-system get ipaddresspool {{ item.api_pool }}
+      -o jsonpath={.spec.addresses[0]}
+  loop: "{{ kubevirt_specs }}"
+  loop_control:
+    label: "{{ item.api_pool }}"
+  register: kubevirt_api_pools
+  changed_when: false
+  failed_when: false
+
+- name: Fail if a cluster's API pool is missing or holds another address
+  ansible.builtin.assert:
+    that:
+      - item.stdout == item.item.api_vip ~ '-' ~ item.item.api_vip
+    fail_msg: >-
+      IPAddressPool {{ item.item.api_pool }} holds
+      '{{ item.stdout | default('', true) | default('nothing - it does not exist', true) }}',
+      not {{ item.item.api_vip }}. setup_hub_cluster.yaml creates it from
+      hosted_cluster_metallb_pools; on a hub built before {{ item.item.name }}
+      was added to the root vars.yaml, re-run just that part, from the
+      repository root:
+      ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --tags acm --ask-vault-pass
+  loop: "{{ kubevirt_api_pools.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
 - name: Check the pull secret is loaded
   ansible.builtin.assert:
     that:
@@ -139,14 +171,16 @@
     fail_msg: >-
       The management cluster has no default StorageClass, and a cluster in
       this run relies on one (empty root_volume_storage_class or no
-      csi_storage_class_mapping). Set use_lvm_storage or build Ceph
-      (setup_ceph.yaml, setup_ceph_odf.yaml), or name the classes in
-      kubevirt/vars.yaml.
+      csi_storage_class_mapping). Attach Ceph to the hub - steps 5 and 7 of
+      ../steps.md (setup_ceph.yaml, setup_ceph_odf.yaml) - or name the
+      classes in kubevirt/vars.yaml.
 
 - name: Say what the default StorageClass means for the worker VMs
   ansible.builtin.debug:
     msg: >-
       Default StorageClass: {{ kubevirt_default_sc.stdout | trim | default('none', true) }}.
-      {{ ('topolvm' in kubevirt_default_sc.stdout)
-         | ternary('It is LVM Storage - ReadWriteOnce, so worker VMs cannot live-migrate and a hub node drain stops the workers on it. Fine for a lab; use the Ceph RBD class for RWX block if hub maintenance must not touch the hosted cluster.',
-                   'Root disks and kubevirt-csi volumes come from it unless kubevirt/vars.yaml names another class.') }}
+      {{ ('rbd.csi.ceph.com' in kubevirt_default_sc.stdout)
+         | ternary('Ceph RBD from ../steps.md: CDI gives the root disks ReadWriteMany block, so the worker VMs live-migrate when a hub node drains.',
+           ('topolvm' in kubevirt_default_sc.stdout)
+           | ternary('LVM Storage - ReadWriteOnce, so worker VMs cannot live-migrate and a hub node drain stops the workers on it. Fine for a quick look; ../steps.md builds the hub on Ceph instead.',
+                     'Root disks and kubevirt-csi volumes come from it unless kubevirt/vars.yaml names another class.')) }}

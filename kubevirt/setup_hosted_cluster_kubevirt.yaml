@@ -10,16 +10,18 @@
 ## From inside kubevirt/, like compact-cluster/: ansible.cfg is read from the
 ## working directory, and the one here adds ../roles to roles_path.
 ##
-## The clusters are the 'platform: kubevirt' entries in the root vars.yaml's
-## hosted_clusters (hcp-kv1 out of the box). Before the first run, from the
-## repository root, publish their API names - once per new cluster:
-##
-##   ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns --ask-vault-pass
+## The host, Ceph and the hub come first, from the backup/restore flow
+## unchanged - steps 1-7 of ../steps.md; steps.md in this directory lists them.
+## That flow also gives every hosted cluster in the root vars.yaml its API name
+## (setup_bm_host.yaml) and its MetalLB API pool (setup_hub_cluster.yaml), and
+## the clusters this playbook builds are the 'platform: kubevirt' entries in
+## that same hosted_clusters list (hcp-kv1 out of the box). This playbook does
+## only what that flow does not.
 ##
 ## Phases - a plain run does all of them except destroy, in this order:
-##   --tags preflight  checks only: MCE and MetalLB on the hub, nested KVM on
-##                     this host, api.<name> resolving to its MetalLB address,
-##                     a StorageClass for the disks
+##   --tags preflight  checks only: MCE, MetalLB and each API pool on the hub,
+##                     nested KVM on this host, api.<name> resolving to its
+##                     MetalLB address, a StorageClass for the disks
 ##   --tags mgmt       the hub: OpenShift Virtualization; wildcard routes on
 ##                     its router (ingress: route); NMState and the localnet
 ##                     bridge mapping (ingress: metallb)

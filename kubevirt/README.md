@@ -16,6 +16,10 @@ L0  RHEL host            kvm nested=1 (roles/setup-bm-host)
      └─ L2  worker VMs    hcp-kv1's nodes, one per NodePool replica
 ```
 
+**Commands only: [steps.md](steps.md).** The host, Ceph and the hub come from
+the backup/restore flow's [../steps.md](../steps.md), unchanged; this directory
+automates only what that flow doesn't do.
+
 Nested virtualisation is fine for learning the flow (ingress, kubevirt-csi,
 backup and restore), but not for performance numbers, and Red Hat does not
 support it. There is no third level: the hosted cluster cannot run OpenShift
@@ -34,9 +38,10 @@ Virtualization itself.
 
 | Piece | Where | Comes from |
 |---|---|---|
+| Host, Ceph, hub1, ODF on Ceph | | [../steps.md](../steps.md) steps 1-7 |
+| API address `192.168.122.250` | hub MetalLB, pool `hcp-kv1-api-pool` | `setup_hub_cluster.yaml` (step 6), from `hosted_cluster_metallb_pools` |
+| `api.hcp-kv1.hub.mylab.com` | helper DNS | `setup_bm_host.yaml` (step 4) |
 | OpenShift Virtualization | hub, `openshift-cnv` | `--tags mgmt` (`roles/kubevirt-mgmt`) |
-| API address `192.168.122.250` | hub MetalLB, pool `hcp-kv1-api-pool` | `hosted_cluster_metallb_pools` in the root `vars.yaml` |
-| `api.hcp-kv1.hub.mylab.com` | helper DNS | root `setup_bm_host.yaml --tags dns` |
 | HostedCluster, NodePool, Secrets | hub, namespace `hcp-kv1` | `--tags cluster` (`roles/kubevirt-hosted-cluster`) |
 | Control plane | hub, namespace `hcp-kv1-hcp-kv1` | HyperShift |
 | Worker VMs, their root disks | hub, namespace `hcp-kv1-hcp-kv1` | the NodePool (Cluster API KubeVirt provider + CDI) |
@@ -50,11 +55,10 @@ The rendered bundle for each cluster is left in `kubevirt/rendered/<name>/`
 (ignored by git, as it holds the pull secret):
 
 ```
-01-api-pool.yaml        the API's single-address IPAddressPool + L2Advertisement
-02-hosted-cluster.yaml  Namespace, pull-secret and ssh-key Secrets, HostedCluster
-03-nad.yaml             the localnet NAD (ingress: metallb only)
-04-nodepool.yaml        NodePool
-05-acm-import.yaml      ManagedCluster, KlusterletAddonConfig (whichever the hub has)
+01-hosted-cluster.yaml  Namespace, pull-secret and ssh-key Secrets, HostedCluster
+02-nad.yaml             the localnet NAD (ingress: metallb only)
+03-nodepool.yaml        NodePool
+04-acm-import.yaml      ManagedCluster, KlusterletAddonConfig (whichever the hub has)
 ```
 
 ## Ingress: the hub's router, or MetalLB
@@ -124,29 +128,33 @@ modes, destroy it and create it again.
 
 ## Before you start
 
-On the hub, from the repository root:
+Build the host, Ceph and hub1 with steps 1-7 of [../steps.md](../steps.md),
+unchanged. Skip its steps 8 and 9: AgentServiceConfig, bminfra and the
+libvirt worker VMs are for Agent clusters. [steps.md](steps.md) lists exactly
+which steps, and the checks to run before this playbook.
 
-- **MCE and MetalLB**: `setup_hub_cluster.yaml --tags acm`, as for every
-  hosted cluster.
-- **Nested KVM** on this host. `setup_bm_host.yaml` writes
-  `options kvm-intel nested=1`; it takes effect after the module is reloaded
-  or the host rebooted. `cat /sys/module/kvm_intel/parameters/nested` should
-  print `Y`. On an AMD host, use `kvm-amd`. The preflight checks this.
+What that gives this lab, and why it matters here:
+
+- **MCE and MetalLB** on hub1 (step 6).
+- **hcp-kv1's API pool and DNS name.** hcp-kv1 is in the root `vars.yaml`, so
+  step 4 publishes `api.hcp-kv1.hub.mylab.com` and step 6 creates
+  `hcp-kv1-api-pool` at `.250`. On a hub built before hcp-kv1 was added,
+  re-run `setup_hub_cluster.yaml --tags acm` and `setup_bm_host.yaml --tags dns`.
+- **Ceph RBD as the default StorageClass** (step 7, with
+  `use_lvm_storage: false`). CDI gives the worker root disks ReadWriteMany
+  block, so the VMs live-migrate when a hub node drains, and kubevirt-csi
+  volumes inside the hosted cluster come from the same pool. A hub on LVM
+  Storage works too, but its RWO disks can't migrate, so a drain stops the
+  workers on that node.
+- **Nested KVM** on the host. Step 4 writes `options kvm-intel nested=1`; it
+  takes effect once the module reloads, so reboot the host if
+  `/sys/module/kvm_intel/parameters/nested` isn't `Y`. On an AMD host, use
+  `kvm-amd`.
 - **Room on the hub.** Its three workers are 32 vCPU / 48 GiB each, and carry
   both the hosted control plane and the worker VMs (4 vCPU / 16 GiB each by
   default).
-- **Storage.** The worker root disks and kubevirt-csi use the hub's default
-  StorageClass unless `vars.yaml` names one.
-  - With `use_lvm_storage` that's `lvms-vg1`: ReadWriteOnce, so the VMs can't
-    live-migrate, and draining a hub node stops the workers on it.
-  - The Ceph RBD class from `setup_ceph.yaml` + `setup_ceph_odf.yaml` gives
-    RWX block, which lets the hosted cluster survive hub maintenance.
-- **DNS** for each KubeVirt cluster's API name, once per new cluster:
 
-  ```bash
-  ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns --ask-vault-pass
-  dig +short api.hcp-kv1.hub.mylab.com @192.168.122.21   # 192.168.122.250
-  ```
+The preflight checks all of these and names the step that fixes each one.
 
 ## Run it
 
@@ -159,7 +167,7 @@ A plain run does every phase except `destroy`:
 
 | Tag | Does |
 |---|---|
-| `preflight` | Checks only: MCE and MetalLB on the hub, nested KVM, `api.<name>` resolving to its address (and `*.apps` for MetalLB clusters), a StorageClass for the disks |
+| `preflight` | Checks only: MCE and MetalLB on the hub, each cluster's API pool, nested KVM, `api.<name>` resolving to its address (and `*.apps` for MetalLB clusters), a StorageClass for the disks |
 | `mgmt` | Hub: OpenShift Virtualization (and a check that some node can run VMs); wildcard routes (`route`); NMState + localnet bridge mapping (`metallb`) |
 | `cluster` | Render and apply each cluster, wait for its nodes, MetalLB ingress where set, then the report |
 | `wait` | Just the waits, for clusters already applied |
@@ -190,8 +198,9 @@ oc --kubeconfig /var/lib/libvirt/images/hub_install/auth/kubeconfig \
 
 ## Add a cluster
 
-All in the root `vars.yaml`, next to hcp-kv1, then `--tags dns` from the
-root and this playbook:
+All in the root `vars.yaml`, next to hcp-kv1. Then, from the repository
+root, `setup_bm_host.yaml --tags dns` (its API name) and
+`setup_hub_cluster.yaml --tags acm` (its API pool), and this playbook:
 
 ```yaml
 hosted_clusters:
@@ -228,9 +237,8 @@ rest of the lab knows about KubeVirt clusters through a few lines:
   `create_hosted_cluster.yaml` never renders hcp-kv1 as an Agent cluster.
   Naming one with `-e hcp_cluster_name` fails with the command to use instead.
 
-This playbook applies the API pool itself as well, with the same name and
-contents `setup-hub-acm` renders. A cluster added after the hub was built
-then doesn't need the hub's `acm` tag re-run first.
+Everything else - the host, Ceph, the hub, MCE, MetalLB, the API pool, DNS,
+ODF - comes from [../steps.md](../steps.md) and is not repeated here.
 
 ## Remove a cluster
 

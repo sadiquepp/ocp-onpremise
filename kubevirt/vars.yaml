@@ -105,11 +105,11 @@ kubevirt_worker_memory: 16Gi
 ## KubeVirt image in the release payload.
 ##
 ## Empty storage class = the management cluster's default StorageClass. On a
-## hub built with use_lvm_storage that is lvms-vg1: ReadWriteOnce, so the VMs
-## cannot live-migrate, and draining a hub node stops the worker VMs on it
-## instead of moving them. Use Ceph (setup_ceph.yaml + setup_ceph_odf.yaml) and
-## its RBD class for RWX block if you want drains and upgrades of the hub to
-## leave the hosted cluster running.
+## hub built the ../steps.md way (use_lvm_storage: false, Ceph attached with
+## setup_ceph_odf.yaml) that is ocs-external-storagecluster-ceph-rbd, and CDI
+## gives the root disks ReadWriteMany block, so the VMs live-migrate when a
+## hub node drains. On a hub built with use_lvm_storage it is lvms-vg1:
+## ReadWriteOnce, so draining a hub node stops the worker VMs on it instead.
 kubevirt_root_volume_size: 32Gi
 kubevirt_root_volume_storage_class: ""
 ## Empty = let CDI's StorageProfile for that class choose.
