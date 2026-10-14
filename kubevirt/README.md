@@ -160,6 +160,9 @@ The preflight checks all of these and names the step that fixes each one.
 
 ## Run it
 
+One run does everything below. To go one step at a time, by tag or by hand
+with `oc`, follow [steps-hosted-cluster.md](steps-hosted-cluster.md).
+
 ```bash
 cd kubevirt
 ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass

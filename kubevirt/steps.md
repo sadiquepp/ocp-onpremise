@@ -114,6 +114,9 @@ On hub1, this:
 It takes 30-60 minutes, most of it the nested workers booting. The rendered
 files are in `kubevirt/rendered/hcp-kv1/`.
 
+To do this one step at a time instead, by tag or by hand with `oc`, see
+[steps-hosted-cluster.md](steps-hosted-cluster.md).
+
 ## 9. Verify
 
 ```bash
