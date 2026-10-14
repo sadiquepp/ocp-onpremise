@@ -40,7 +40,7 @@ cat "$M/8.2-cnv-operator.yaml"
 oc apply --dry-run=server -f "$M/8.2-cnv-operator.yaml"   # the API's verdict, nothing changed
 ```
 
-The hosted cluster's own manifests (8.5-8.7) are already files: the playbook
+The hosted cluster's own manifests (8.5, 8.6) are already files: the playbook
 renders them into `rendered/hcp-kv1/` in 8.4.
 
 Every step is safe to repeat, and so is a full `$PB` run afterwards: what is
@@ -54,13 +54,13 @@ already there is applied unchanged.
 | [8.4](#84-render-the-bundle) | Render the bundle | `cluster -e kubevirt_apply=false` |
 | [8.5](#85-hostedcluster---the-control-plane) | HostedCluster - the control plane | by hand |
 | [8.6](#86-nodepool---the-worker-vms) | NodePool - the worker VMs | by hand |
-| [8.7](#87-import-into-acm) | Import into ACM | by hand |
+| [8.7](#87-import-into-acm) | Import into ACM | none - MCE does it |
 | [8.8](#88-wait-and-get-the-kubeconfig) | Wait, and get the kubeconfig | `wait` |
 | [8.9](#89-verify) | Verify | `verify` |
 
-`mgmt` runs 8.2 and 8.3 together. 8.5-8.7 have no tag of their own, because
-in the playbook they run as one block under `cluster`; by hand you apply the
-rendered files one at a time. The [MetalLB variant](#metallb-variant) adds
+`mgmt` runs 8.2 and 8.3 together. 8.5 and 8.6 have no tag of their own,
+because in the playbook they run as one block under `cluster`; by hand you
+apply the rendered files one at a time. 8.7 is MCE's own: you only check it. The [MetalLB variant](#metallb-variant) adds
 three steps.
 
 ## 8.1 Preflight
@@ -169,10 +169,10 @@ ls rendered/hcp-kv1/
 ```
 01-hosted-cluster.yaml   Namespace hcp-kv1, pull-secret and ssh-key Secrets, HostedCluster
 03-nodepool.yaml         NodePool: 2 x 4 vCPU / 16Gi VMs, 32Gi root disks
-04-acm-import.yaml       ManagedCluster, KlusterletAddonConfig
 ```
 
-(`02-nad.yaml` appears only with the MetalLB variant.) Read them before
+(`02-nad.yaml` appears only with the MetalLB variant, `04-acm-import.yaml`
+only with `-e kubevirt_acm_import=true` - see 8.7.) Read them before
 applying; `01` holds the pull secret, which is why the directory is 0700.
 
 ## 8.5 HostedCluster - the control plane
@@ -223,20 +223,21 @@ virtctl console -n hcp-kv1-hcp-kv1 $(oc get vmi -n hcp-kv1-hcp-kv1 -o name | hea
 
 ## 8.7 Import into ACM
 
-MCE's hypershift add-on usually does this by itself: it creates the
-ManagedCluster once hcp-kv1's control plane is available, so it may already
-be there:
+Nothing to apply. MCE's hypershift add-on imports every HostedCluster by
+itself once its control plane is available: it creates the ManagedCluster
+(hosted on `local-cluster`, klusterlet in Hosted mode) and, with ACM, the
+KlusterletAddonConfig, with its labels left to ACM's `auto-detect`. Check:
 
 ```bash
-oc get managedcluster hcp-kv1          # JOINED/AVAILABLE True
+oc get managedcluster hcp-kv1          # HUB ACCEPTED, JOINED, AVAILABLE True
 oc get klusterletaddonconfig -n hcp-kv1
 ```
 
-`04` is the same ManagedCluster (hosted on `local-cluster`, klusterlet in
-Hosted mode) plus the KlusterletAddonConfig, so applying it either way is
-harmless: it merges into what is there and adds anything missing.
+On a hub with that auto-import turned off, render the same objects with
+`kubevirt_acm_import` and apply them:
 
 ```bash
+$PB --tags cluster -e kubevirt_apply=false -e kubevirt_acm_import=true
 oc apply -f rendered/hcp-kv1/04-acm-import.yaml
 ```
 

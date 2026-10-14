@@ -5,7 +5,8 @@
 #   1. the HostedCluster   - HyperShift creates the control-plane namespace
 #   2. the NAD             - 'ingress: metallb' only; it lives in that namespace
 #   3. the NodePool        - its VMs refer to the NAD, so it goes last
-#   4. the ACM import
+#   4. the ACM import      - kubevirt_acm_import only; MCE's hypershift
+#                            add-on imports the cluster by itself
 #
 # The kube-apiserver's MetalLB pool is not here: setup_hub_cluster.yaml
 # (roles/setup-hub-acm) creates it from hosted_cluster_metallb_pools, the same
@@ -30,11 +31,13 @@
   register: kubevirt_import_crds
   changed_when: false
   failed_when: false
+  when: kubevirt_acm_import | bool
 
 - name: "{{ kv.name }} | Note them"
   ansible.builtin.set_fact:
     kubevirt_has_managedcluster: "{{ kubevirt_import_crds.results[0].rc == 0 }}"
     kubevirt_has_klusterletaddonconfig: "{{ kubevirt_import_crds.results[1].rc == 0 }}"
+  when: kubevirt_acm_import | bool
 
 # 0600: the HostedCluster file carries the pull secret.
 - name: "{{ kv.name }} | Render the bundle"
@@ -46,18 +49,24 @@
     - {src: hosted-cluster.yaml.j2, dest: 01-hosted-cluster.yaml}
     - {src: nad.yaml.j2, dest: 02-nad.yaml, when: "{{ kv.ingress == 'metallb' }}"}
     - {src: nodepool.yaml.j2, dest: 03-nodepool.yaml}
-    - {src: acm-import.yaml.j2, dest: 04-acm-import.yaml}
+    - {src: acm-import.yaml.j2, dest: 04-acm-import.yaml, when: "{{ kubevirt_acm_import }}"}
   loop_control:
     label: "{{ item.dest }}"
   when: item.when | default(true) | bool
 
-# A cluster switched to 'route' after being rendered as 'metallb' must not
-# leave a NAD file behind that a hand `oc apply -f rendered/<name>/` would pick up.
-- name: "{{ kv.name }} | Remove a NAD left from an earlier MetalLB render"
+# A file the current settings would not render must not be left behind for a
+# hand `oc apply -f rendered/<name>/` to pick up: the NAD from an earlier
+# MetalLB render, the ACM import from an earlier kubevirt_acm_import run.
+- name: "{{ kv.name }} | Remove files an earlier render left"
   ansible.builtin.file:
-    path: "{{ kubevirt_render_dir }}/{{ kv.name }}/02-nad.yaml"
+    path: "{{ kubevirt_render_dir }}/{{ kv.name }}/{{ item.file }}"
     state: absent
-  when: kv.ingress != 'metallb'
+  loop:
+    - {file: 02-nad.yaml, keep: "{{ kv.ingress == 'metallb' }}"}
+    - {file: 04-acm-import.yaml, keep: "{{ kubevirt_acm_import }}"}
+  loop_control:
+    label: "{{ item.file }}"
+  when: not (item.keep | bool)
 
 - name: "{{ kv.name }} | Stop here when not applying"
   ansible.builtin.debug:
@@ -104,4 +113,6 @@
         cmd: oc apply -f {{ kubevirt_render_dir }}/{{ kv.name }}/04-acm-import.yaml
       register: kubevirt_apply_import
       changed_when: "kubevirt_apply_import.stdout_lines | reject('search', ' unchanged$') | list | length > 0"
-      when: kubevirt_has_managedcluster | bool or kubevirt_has_klusterletaddonconfig | bool
+      when:
+        - kubevirt_acm_import | bool
+        - kubevirt_has_managedcluster | bool or kubevirt_has_klusterletaddonconfig | bool

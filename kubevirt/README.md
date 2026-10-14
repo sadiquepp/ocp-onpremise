@@ -59,8 +59,13 @@ The rendered bundle for each cluster is left in `kubevirt/rendered/<name>/`
 01-hosted-cluster.yaml  Namespace, pull-secret and ssh-key Secrets, HostedCluster
 02-nad.yaml             the localnet NAD (ingress: metallb only)
 03-nodepool.yaml        NodePool
-04-acm-import.yaml      ManagedCluster, KlusterletAddonConfig (whichever the hub has)
+04-acm-import.yaml      ManagedCluster, KlusterletAddonConfig (kubevirt_acm_import only)
 ```
+
+The import into ACM is MCE's own: its hypershift add-on creates the
+ManagedCluster and KlusterletAddonConfig once the control plane is
+available. `kubevirt_acm_import: true` renders and applies them here instead,
+for a hub with that turned off.
 
 ## Ingress: the hub's router, or MetalLB
 

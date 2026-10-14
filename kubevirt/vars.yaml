@@ -154,6 +154,20 @@ kubevirt_localnet_node_selector:
 kubevirt_localnet_nad: "{{ kubevirt_localnet_name }}"
 
 ## ---------------------------------------------------------------------------
+## Import into ACM
+## ---------------------------------------------------------------------------
+##
+## MCE's hypershift add-on imports every HostedCluster by itself once its
+## control plane is available: it creates the ManagedCluster (hosted on
+## local-cluster, klusterlet in Hosted mode) and, with ACM, the
+## KlusterletAddonConfig. So this playbook leaves it alone.
+##
+## true: render 04-acm-import.yaml and apply it after the NodePool - for a hub
+## with that auto-import turned off. It is the same objects, so on a hub that
+## does auto-import it only merges into what is already there.
+kubevirt_acm_import: false
+
+## ---------------------------------------------------------------------------
 ## Operators on the management cluster
 ## ---------------------------------------------------------------------------
 

@@ -1,6 +1,8 @@
-{# Import into ACM, the same objects roles/create-hosted-cluster renders for
-   the Agent clusters. Rendered only for the kinds the management cluster
-   actually has: MCE alone has ManagedCluster but no KlusterletAddonConfig. #}
+{# Import into ACM - only with kubevirt_acm_import, as MCE's hypershift
+   add-on otherwise creates these itself. The same objects it creates:
+   hosted on local-cluster, klusterlet in Hosted mode, labels left to ACM's
+   auto-detect. Rendered only for the kinds the management cluster actually
+   has: MCE alone has ManagedCluster but no KlusterletAddonConfig. #}
 {% if kubevirt_has_managedcluster | bool %}
 ---
 apiVersion: cluster.open-cluster-management.io/v1
@@ -11,8 +13,8 @@ metadata:
     import.open-cluster-management.io/klusterlet-deploy-mode: Hosted
     open-cluster-management/created-via: hypershift
   labels:
-    cloud: BareMetal
-    vendor: OpenShift
+    cloud: auto-detect
+    vendor: auto-detect
     name: {{ kv.name }}
     cluster.open-cluster-management.io/clusterset: {{ hosted_cluster_clusterset | default('default') }}
   name: {{ kv.name }}
@@ -30,8 +32,8 @@ spec:
   clusterName: {{ kv.name }}
   clusterNamespace: {{ kv.name }}
   clusterLabels:
-    cloud: BareMetal
-    vendor: OpenShift
+    cloud: auto-detect
+    vendor: auto-detect
   applicationManager:
     enabled: {{ hosted_cluster_addon_application_manager | default(true) | lower }}
   policyController:
