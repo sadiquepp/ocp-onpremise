@@ -43,6 +43,7 @@ metadata:
   labels:
     cluster.open-cluster-management.io/clusterset: {{ hosted_cluster_clusterset | default('default') }}
 spec:
+  channel: "{{ kv.channel }}"
   release:
     image: {{ kv.release_image }}
   pullSecret:

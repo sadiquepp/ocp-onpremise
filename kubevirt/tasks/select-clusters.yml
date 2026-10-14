@@ -81,6 +81,7 @@
            'root_volume_mode': item.root_volume_mode | default(kubevirt_root_volume_mode),
            'csi_mapping': item.csi_storage_class_mapping | default(kubevirt_csi_storage_class_mapping),
            'release_image': item.release_image | default(hosted_cluster_release_image),
+           'channel': item.channel | default(hosted_cluster_channel),
            'availability_policy': item.availability_policy | default(hosted_cluster_availability_policy | default('HighlyAvailable')),
            'cluster_cidr': item.cluster_cidr | default(hosted_cluster_cluster_cidr | default('10.132.0.0/14')),
            'service_cidr': item.service_cidr | default(hosted_cluster_service_cidr | default('172.31.0.0/16')),
