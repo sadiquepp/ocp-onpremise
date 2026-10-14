@@ -39,6 +39,7 @@
 ##       root_volume_size: 64Gi    # kubevirt_root_volume_size
 ##       root_volume_storage_class: ocs-external-storagecluster-ceph-rbd
 ##       channel: stable-4.21      # hosted_cluster_channel (root vars.yaml)
+##       infra: sno                # VMs on another cluster - kubevirt_infras
 ##
 ## The fuller walkthrough is README.md in this directory.
 
@@ -60,6 +61,32 @@ kubevirt_mgmt: "{{ target_hub | default('hub') }}"
 ## entry in hosted_clusters that has an address for kubevirt_mgmt. Narrow a run
 ## to one with -e kubevirt_cluster=hcp-kv1.
 kubevirt_cluster: ""
+
+## ---------------------------------------------------------------------------
+## Workers on another cluster ('external infrastructure')
+## ---------------------------------------------------------------------------
+##
+## By default a cluster's worker VMs run on the management cluster, next to its
+## control plane. 'infra: <key>' on its hosted_clusters entry puts them on the
+## cluster named here instead; the control plane, API address and ACM import
+## stay on the management cluster.
+##
+## On that cluster this playbook installs OpenShift Virtualization, lets its
+## router admit wildcard routes, and creates the VM namespace (by default the
+## same name as the control-plane namespace) with a ServiceAccount that has
+## only the Role HyperShift documents for it. A kubeconfig for that
+## ServiceAccount goes into a Secret beside the HostedCluster, which names it in
+## spec.platform.kubevirt.credentials. The VMs, their disks, the kubevirt-csi
+## volumes and the *.apps passthrough Route all live on that cluster, so a
+## cluster's apps are *.apps.<name>.<that cluster's apps domain>.
+##
+## Only 'ingress: route' is wired for these.
+kubevirt_infras:
+  sno:
+    kubeconfig: "{{ sno_install_folder }}/auth/kubeconfig"
+
+## The ServiceAccount on the infrastructure cluster, in each VM namespace.
+kubevirt_infra_service_account: hcp-infra
 
 ## ---------------------------------------------------------------------------
 ## Ingress for the hosted cluster's *.apps

@@ -227,6 +227,17 @@ hosted_clusters:
   ## 'ingress: metallb' for MetalLB inside it. kubevirt/README.md.
   - name: hcp-kv1
     platform: kubevirt
+  ## The same, but its worker VMs run on the SNO (setup_sno.yaml) instead of
+  ## the hub: the control plane stays on the hub, and the NodePool creates the
+  ## VMs on the SNO's OpenShift Virtualization through a kubeconfig for it
+  ## ('external infrastructure'). 'infra' names an entry in
+  ## kubevirt/vars.yaml's kubevirt_infras. Its apps are under the SNO's *.apps.
+  ## Smaller workers than hcp-kv1's, to fit beside the SNO's own workloads.
+  ## kubevirt/README.md, "Workers on another cluster".
+  - name: hcp-kv2
+    platform: kubevirt
+    infra: sno
+    memory: 12Gi
 hosted_clusters_disconnected:
   - hcp-cluster1-d
   - hcp-cluster2-d
@@ -1014,6 +1025,12 @@ hosted_cluster_metallb_pools:
     pool: hcp-kv1-api-pool
     ip:
       hub: 250
+  ## hcp-kv2's control plane is on the hub too (only its VMs are on the SNO),
+  ## so its API is the next free address above the DHCP range.
+  hcp-kv2:
+    pool: hcp-kv2-api-pool
+    ip:
+      hub: 252
 
 ## Network the pool addresses sit on, per hub. Anything not listed here uses
 ## lab_network_prefix, which is why this is empty by default - in this lab all
@@ -1496,6 +1513,7 @@ hosted_cluster_domains:
   ## resolves from every VM - the hub's nodes, and the worker VMs - with no
   ## change to the running network.
   hcp-kv1: "{{ hub_domain }}"
+  hcp-kv2: "{{ hub_domain }}"
 
 ## LEGACY: hosted_domain / hosted_domain2 / hosted_domain3 above are the same
 ## information as hosted_clusters, written twice. Nothing renders from them any

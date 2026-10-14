@@ -145,6 +145,68 @@ oc get pods -n online-boutique
 oc get route frontend -n online-boutique -o jsonpath='{.spec.host}{"\n"}'
 ```
 
+## hcp-kv2: workers on the SNO (optional)
+
+A second hosted cluster beside hcp-kv1: its control plane on hub1 too, its
+worker VMs on the single-node cluster. Explanation:
+[README.md](README.md#workers-on-another-cluster-hcp-kv2-on-the-sno).
+
+From the repository root. The SNO needs LVM Storage (the Ceph flow turns it
+off) and room for hcp-kv2's workers beside OpenShift and OpenShift
+Virtualization: 64 GiB for two 12 GiB workers. Check the host has it
+(`free -g`); with less, build it at 48 GiB (`-e sno_memory=49152`) and set
+`nodepool_replicas: 1` on hcp-kv2's entry in `vars.yaml`:
+
+```bash
+ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass \
+  -e sno_lvm_storage=true -e sno_memory=65536 -e sno_vcpus=16
+
+export KUBECONFIG=/var/lib/libvirt/images/sno_install/auth/kubeconfig
+oc get nodes                                  # sno Ready
+oc get sc                                     # lvms-vg1 (default)
+```
+
+hcp-kv2's API name and API pool. A lab built from steps 3-5 already has
+them; on a hub1 built before hcp-kv2 was in `vars.yaml`, render both again:
+
+```bash
+ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns --ask-vault-pass
+ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --tags acm --ask-vault-pass
+
+dig +short api.hcp-kv2.hub.mylab.com @192.168.122.21     # 192.168.122.252
+oc --kubeconfig /var/lib/libvirt/images/hub_install/auth/kubeconfig \
+  get ipaddresspool hcp-kv2-api-pool -n metallb-system \
+  -o jsonpath='{.spec.addresses}{"\n"}'                  # ["192.168.122.252-192.168.122.252"]
+```
+
+Then the cluster - OpenShift Virtualization and wildcard routes go on the SNO
+this time, the control plane on hub1:
+
+```bash
+cd kubevirt
+ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass \
+  -e kubevirt_cluster=hcp-kv2
+```
+
+Verify:
+
+```bash
+export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
+oc get hostedcluster,nodepool -n hcp-kv2
+oc get pods -n hcp-kv2-hcp-kv2 | grep -E 'etcd|kube-apiserver'   # control plane: hub1
+
+export KUBECONFIG=/var/lib/libvirt/images/sno_install/auth/kubeconfig
+oc get vm,vmi,dv -n hcp-kv2-hcp-kv2                              # workers: the SNO
+oc get route -n hcp-kv2-hcp-kv2                                  # the *.apps passthrough
+
+export KUBECONFIG=/var/lib/libvirt/images/hcp-kv2/kubeconfig
+oc get nodes
+curl -kI https://console-openshift-console.apps.hcp-kv2.apps.sno.mylab.com
+```
+
+Remove it with `--tags destroy -e kubevirt_cluster=hcp-kv2`; that also clears
+its namespace and ServiceAccount off the SNO.
+
 ## MetalLB ingress instead (optional)
 
 This serves `*.apps.hcp-kv1.hub.mylab.com` on `192.168.122.251`, from MetalLB

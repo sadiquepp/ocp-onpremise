@@ -2,6 +2,9 @@
 # Render, then apply, one cluster's bundle. 'kv' is its entry in
 # kubevirt_specs. Order matters on the management cluster:
 #
+#   0. (infra only) on the infrastructure cluster - the SNO - the VM
+#      namespace and the ServiceAccount HyperShift uses there; its token goes
+#      into a kubeconfig Secret in step 1
 #   1. the HostedCluster   - HyperShift creates the control-plane namespace
 #   2. the NAD             - 'ingress: metallb' only; it lives in that namespace
 #   3. the NodePool        - its VMs refer to the NAD, so it goes last
@@ -20,6 +23,67 @@
     path: "{{ kubevirt_render_dir }}/{{ kv.name }}"
     state: directory
     mode: '0700'
+
+# Set per cluster - a fact from the previous cluster in this loop must not
+# leak into this one's HostedCluster.
+- name: "{{ kv.name }} | Start with no infrastructure cluster credentials"
+  ansible.builtin.set_fact:
+    kubevirt_infra_token: ""
+    kubevirt_infra_server: ""
+    kubevirt_infra_ca: ""
+
+- name: "{{ kv.name }} | Access to the infrastructure cluster ({{ kv.infra }})"
+  when: kv.infra | length > 0
+  block:
+    - name: "{{ kv.name }} | Render what it needs on {{ kv.infra }}"
+      ansible.builtin.template:
+        src: infra-access.yaml.j2
+        dest: "{{ kubevirt_render_dir }}/{{ kv.name }}/00-infra-access.yaml"
+        mode: '0600'
+
+    - name: "{{ kv.name }} | Apply it to {{ kv.infra }}"
+      ansible.builtin.command:
+        cmd: >-
+          oc --kubeconfig {{ kv.infra_kubeconfig }}
+          apply -f {{ kubevirt_render_dir }}/{{ kv.name }}/00-infra-access.yaml
+      register: kubevirt_apply_infra
+      changed_when: "kubevirt_apply_infra.stdout_lines | reject('search', ' unchanged$') | list | length > 0"
+      when: kubevirt_apply | bool
+
+    # The token controller fills the Secret in a moment after it is created.
+    # Without -e kubevirt_apply this only reads what an earlier apply made.
+    - name: "{{ kv.name }} | Read the ServiceAccount's token on {{ kv.infra }}"
+      ansible.builtin.command:
+        cmd: >-
+          oc --kubeconfig {{ kv.infra_kubeconfig }} -n {{ kv.vm_namespace }}
+          get secret {{ kubevirt_infra_service_account }}-token -o jsonpath={.data.token}
+      register: kubevirt_infra_token_read
+      retries: "{{ (kubevirt_apply | bool) | ternary(30, 0) }}"
+      delay: 5
+      until: kubevirt_infra_token_read.stdout | length > 0
+      changed_when: false
+      failed_when: (kubevirt_apply | bool) and kubevirt_infra_token_read.stdout | length == 0
+      no_log: true
+
+    # The address and CA the hub's pods reach it on: the same ones this host
+    # uses, from the infrastructure cluster's admin kubeconfig.
+    - name: "{{ kv.name }} | Read {{ kv.infra }}'s API address and CA"
+      ansible.builtin.command:
+        cmd: >-
+          oc --kubeconfig {{ kv.infra_kubeconfig }} config view --raw --minify
+          -o jsonpath={{ item }}
+      loop:
+        - '{.clusters[0].cluster.server}'
+        - '{.clusters[0].cluster.certificate-authority-data}'
+      register: kubevirt_infra_endpoint
+      changed_when: false
+
+    - name: "{{ kv.name }} | Note them"
+      ansible.builtin.set_fact:
+        kubevirt_infra_token: "{{ kubevirt_infra_token_read.stdout | default('') | b64decode if kubevirt_infra_token_read.stdout | default('') | length > 0 else '' }}"
+        kubevirt_infra_server: "{{ kubevirt_infra_endpoint.results[0].stdout }}"
+        kubevirt_infra_ca: "{{ kubevirt_infra_endpoint.results[1].stdout }}"
+      no_log: true
 
 # ManagedCluster comes with MCE; KlusterletAddonConfig only with ACM.
 - name: "{{ kv.name }} | Check which ACM import kinds the management cluster has"
@@ -62,6 +126,7 @@
     path: "{{ kubevirt_render_dir }}/{{ kv.name }}/{{ item.file }}"
     state: absent
   loop:
+    - {file: 00-infra-access.yaml, keep: "{{ kv.infra | length > 0 }}"}
     - {file: 02-nad.yaml, keep: "{{ kv.ingress == 'metallb' }}"}
     - {file: 04-acm-import.yaml, keep: "{{ kubevirt_acm_import }}"}
   loop_control:
@@ -74,7 +139,9 @@
       kubevirt_apply is false - rendered {{ kubevirt_render_dir }}/{{ kv.name }}/,
       applied nothing. Apply by hand in file order (the NAD only after the
       HostedCluster has created {{ kv.cp_namespace }}), or re-run without
-      -e kubevirt_apply=false.
+      -e kubevirt_apply=false.{{ (kv.infra | length > 0) | ternary(
+      ' 00-infra-access.yaml goes to ' ~ kv.infra ~ ' (oc --kubeconfig ' ~ kv.infra_kubeconfig ~ ' apply -f ...), the rest to the management cluster.'
+      ~ ((kubevirt_infra_token | length == 0) | ternary(' 01 has no infra-kubeconfig Secret yet: apply 00 first, then render again.', '')), '') }}
   when: not (kubevirt_apply | bool)
 
 - name: "{{ kv.name }} | Apply"

@@ -21,10 +21,13 @@
 ## Phases - a plain run does all of them except destroy, in this order:
 ##   --tags preflight  checks only: MCE, MetalLB and each API pool on the hub,
 ##                     nested KVM on this host, api.<name> resolving to its
-##                     MetalLB address, a StorageClass for the disks
-##   --tags mgmt       the hub: OpenShift Virtualization; wildcard routes on
-##                     its router (ingress: route); NMState and the localnet
-##                     bridge mapping (ingress: metallb)
+##                     MetalLB address, each 'infra' cluster answering, a
+##                     StorageClass for the disks where the VMs run
+##   --tags mgmt       each cluster that runs worker VMs - the hub, and the
+##                     SNO for 'infra: sno' clusters such as hcp-kv2:
+##                     OpenShift Virtualization; wildcard routes on its router
+##                     (ingress: route); NMState and the localnet bridge
+##                     mapping (ingress: metallb)
 ##   --tags cluster    render + apply each cluster, wait for its nodes, then
 ##                     the metallb ingress and the report below
 ##   --tags wait       just wait for clusters already applied
@@ -54,19 +57,28 @@
       tags: always
 
     # baseDomain for 'ingress: route' clusters, and the console URL the report
-    # probes. Read from the cluster rather than derived from hub_domain, so a
-    # management cluster other than the hub works unchanged.
-    - name: Read the management cluster's apps domain
+    # probes: the apps domain of the cluster the VMs run on, because that
+    # cluster's router serves them. Read from each cluster rather than derived
+    # from hub_domain / sno_name, so other clusters work unchanged.
+    - name: Read the apps domain of each cluster that runs worker VMs
       ansible.builtin.command:
-        cmd: oc get ingresses.config.openshift.io cluster -o jsonpath={.spec.domain}
-      register: kubevirt_mgmt_apps_domain_read
+        cmd: >-
+          oc --kubeconfig {{ item.kubeconfig }}
+          get ingresses.config.openshift.io cluster -o jsonpath={.spec.domain}
+      loop: "{{ kubevirt_infra_targets }}"
+      loop_control:
+        label: "{{ item.label }}"
+      register: kubevirt_apps_domain_read
       changed_when: false
       failed_when: false
       tags: always
 
-    - name: Note it
+    - name: Note them, keyed by infra ('' for the management cluster)
       ansible.builtin.set_fact:
-        kubevirt_mgmt_apps_domain: "{{ kubevirt_mgmt_apps_domain_read.stdout | default('', true) | trim }}"
+        kubevirt_apps_domains: >-
+          {{ dict(kubevirt_apps_domain_read.results | map(attribute='item.infra')
+                  | zip(kubevirt_apps_domain_read.results
+                        | map(attribute='stdout') | map('default', '') | map('trim'))) }}
       tags: always
 
   tasks:
@@ -78,41 +90,63 @@
           tags: [preflight]
       tags: [preflight]
 
-    - name: Fail if the management cluster's apps domain could not be read
+    - name: Fail if the apps domain of a cluster serving 'ingress route' could not be read
       ansible.builtin.assert:
         that:
-          - kubevirt_mgmt_apps_domain | length > 0
+          - kubevirt_apps_domains[item.item.infra] | length > 0
         fail_msg: >-
-          `oc get ingresses.config.openshift.io cluster` returned no domain
-          ({{ kubevirt_mgmt_apps_domain_read.stderr | default('') | trim }}).
-          'ingress: route' clusters take their base domain from it.
-      when: kubevirt_any_route | bool
+          `oc get ingresses.config.openshift.io cluster` on {{ item.item.label }}
+          ({{ item.item.kubeconfig }}) returned no domain
+          ({{ item.stderr | default('') | trim }}). 'ingress: route' clusters
+          whose VMs run there take their base domain from it.
+      loop: "{{ kubevirt_apps_domain_read.results | selectattr('item.route') | list }}"
+      loop_control:
+        label: "{{ item.item.label }}"
       tags: [preflight, mgmt, cluster, verify]
 
-    - name: OpenShift Virtualization on the management cluster
+    # Each of these runs once per cluster that hosts worker VMs - the
+    # management cluster, an infrastructure cluster such as the SNO, or both -
+    # with KUBECONFIG pointed at it.
+    - name: OpenShift Virtualization on each cluster that runs worker VMs
       ansible.builtin.include_role:
         name: kubevirt-mgmt
         tasks_from: virtualization
         apply:
           tags: [mgmt]
+          environment:
+            KUBECONFIG: "{{ kvi.kubeconfig }}"
+      loop: "{{ kubevirt_infra_targets }}"
+      loop_control:
+        loop_var: kvi
+        label: "{{ kvi.label }}"
       tags: [mgmt]
 
-    - name: Wildcard routes on the management cluster's router (ingress route)
+    - name: Wildcard routes on its router (ingress route)
       ansible.builtin.include_role:
         name: kubevirt-mgmt
         tasks_from: route-ingress
         apply:
           tags: [mgmt]
-      when: kubevirt_any_route | bool
+          environment:
+            KUBECONFIG: "{{ kvi.kubeconfig }}"
+      loop: "{{ kubevirt_infra_targets | selectattr('route') | list }}"
+      loop_control:
+        loop_var: kvi
+        label: "{{ kvi.label }}"
       tags: [mgmt]
 
-    - name: Localnet bridge mapping on the management cluster (ingress metallb)
+    - name: Localnet bridge mapping on it (ingress metallb)
       ansible.builtin.include_role:
         name: kubevirt-mgmt
         tasks_from: localnet
         apply:
           tags: [mgmt]
-      when: kubevirt_any_metallb | bool
+          environment:
+            KUBECONFIG: "{{ kvi.kubeconfig }}"
+      loop: "{{ kubevirt_infra_targets | selectattr('metallb') | list }}"
+      loop_control:
+        loop_var: kvi
+        label: "{{ kvi.label }}"
       tags: [mgmt]
 
     - name: Render and apply each hosted cluster

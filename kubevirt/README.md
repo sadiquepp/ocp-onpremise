@@ -28,6 +28,7 @@ Virtualization itself.
 
 - [What it builds](#what-it-builds)
 - [Ingress: the hub's router, or MetalLB](#ingress-the-hubs-router-or-metallb)
+- [Workers on another cluster: hcp-kv2 on the SNO](#workers-on-another-cluster-hcp-kv2-on-the-sno)
 - [Before you start](#before-you-start)
 - [Run it](#run-it)
 - [Add a cluster](#add-a-cluster)
@@ -132,6 +133,71 @@ hosted_clusters:
 `baseDomainPassthrough` is immutable: to move a cluster between the two
 modes, destroy it and create it again.
 
+## Workers on another cluster: hcp-kv2 on the SNO
+
+hcp-kv2 keeps its control plane on the hub like hcp-kv1, but its worker VMs
+run on the single-node cluster (`../setup_sno.yaml`) - HyperShift's "external
+infrastructure". It is the same playbook; `infra: sno` on its
+`hosted_clusters` entry is the whole difference, and both clusters run side
+by side.
+
+```
+L0  RHEL host
+ ├─ L1  hub VMs                    MCE, MetalLB, OpenShift Virtualization
+ │   ├─ hcp-kv1-hcp-kv1            hcp-kv1's control plane AND worker VMs
+ │   └─ hcp-kv2-hcp-kv2            hcp-kv2's control plane only
+ │         └ Secret infra-kubeconfig-hcp-kv2 (in hcp-kv2) ──┐
+ └─ L1  SNO VM                     OpenShift Virtualization, LVM Storage
+     └─ hcp-kv2-hcp-kv2  <──────── ServiceAccount hcp-infra ┘
+           L2 worker VMs, their disks, kubevirt-csi volumes,
+           the *.apps passthrough Route
+```
+
+| | hcp-kv1 | hcp-kv2 |
+|---|---|---|
+| Control plane | hub, `hcp-kv1-hcp-kv1` | hub, `hcp-kv2-hcp-kv2` |
+| API | `api.hcp-kv1.hub.mylab.com` → `.250` (hub MetalLB) | `api.hcp-kv2.hub.mylab.com` → `.252` (hub MetalLB) |
+| OAuth, Konnectivity, Ignition | hub's router | hub's router |
+| Worker VMs, disks | hub, Ceph RBD | SNO, `lvms-vg1` |
+| `*.apps` | `*.apps.hcp-kv1.apps.hub.mylab.com`, hub's router | `*.apps.hcp-kv2.apps.sno.mylab.com`, SNO's router |
+
+What the playbook does for it, on top of hcp-kv1's steps:
+
+- `--tags mgmt` runs against **each** cluster that hosts VMs - the hub for
+  hcp-kv1, the SNO for hcp-kv2: OpenShift Virtualization, and wildcard routes
+  on that cluster's router.
+- `--tags cluster` renders `00-infra-access.yaml` and applies it **to the
+  SNO**: the VM namespace `hcp-kv2-hcp-kv2`, a ServiceAccount `hcp-infra`
+  with the Role HyperShift documents for this (VMs, DataVolumes, Services,
+  EndpointSlices, Routes, NetworkPolicies, snapshots - that namespace only),
+  its token, and a ClusterRole to read the SNO's network config. A kubeconfig
+  for that ServiceAccount - the SNO's API and CA, from its admin kubeconfig -
+  goes into `01-hosted-cluster.yaml` as the Secret
+  `spec.platform.kubevirt.credentials` names.
+- The waits, the report and `--tags destroy` look for the VMs on the SNO;
+  destroy also removes the SNO namespace and the ClusterRole.
+
+**The SNO.** It is built by its own root playbook, and two of its defaults
+do not suit this:
+
+- **Storage.** `sno_lvm_storage` follows `use_lvm_storage`, which the Ceph flow
+  sets `false` - leaving the SNO with no StorageClass for the root disks. Pass
+  `-e sno_lvm_storage=true` (or add it later with `--tags snostorage`).
+  `lvms-vg1` is ReadWriteOnce; on one node there is nowhere to migrate to
+  anyway.
+- **Size.** The default 12 vCPU / 32 GiB is mostly taken by OpenShift and
+  OpenShift Virtualization themselves; a 12 GiB worker does not fit beside
+  them. Build it at 64 GiB / 16 vCPU for hcp-kv2's two 4 vCPU / 12 GiB
+  workers if the host has room (`free -g`), or at 48 GiB with one worker
+  (`nodepool_replicas: 1` on hcp-kv2's entry).
+
+[steps.md](steps.md#hcp-kv2-workers-on-the-sno-optional) has the commands.
+
+A run over every cluster leaves hcp-kv2 out, with a message, while the SNO's
+kubeconfig doesn't exist - so building only hcp-kv1 needs no SNO. Other
+infrastructure clusters are a `kubevirt_infras` entry in `vars.yaml` away.
+Only `ingress: route` is wired for them.
+
 ## Before you start
 
 Build the host, Ceph and hub1 with steps 1-6 of [steps.md](steps.md): the
@@ -177,8 +243,8 @@ A plain run does every phase except `destroy`:
 
 | Tag | Does |
 |---|---|
-| `preflight` | Checks only: MCE and MetalLB on the hub, each cluster's API pool, nested KVM, `api.<name>` resolving to its address (and `*.apps` for MetalLB clusters), a StorageClass for the disks |
-| `mgmt` | Hub: OpenShift Virtualization (and a check that some node can run VMs); wildcard routes (`route`); NMState + localnet bridge mapping (`metallb`) |
+| `preflight` | Checks only: MCE and MetalLB on the hub, each cluster's API pool, nested KVM, `api.<name>` resolving to its address (and `*.apps` for MetalLB clusters), an infrastructure cluster that answers, a StorageClass for the disks where the VMs run |
+| `mgmt` | Each cluster that runs worker VMs (the hub; the SNO for `infra: sno`): OpenShift Virtualization (and a check that some node can run VMs); wildcard routes (`route`); NMState + localnet bridge mapping (`metallb`) |
 | `cluster` | Render and apply each cluster, wait for its nodes, MetalLB ingress where set, then the report |
 | `wait` | Just the waits, for clusters already applied |
 | `ingress` | MetalLB inside each `ingress: metallb` cluster |
@@ -214,19 +280,20 @@ root, `setup_bm_host.yaml --tags dns` (its API name) and
 
 ```yaml
 hosted_clusters:
-  - name: hcp-kv2
+  - name: hcp-kv3
     platform: kubevirt
     nodepool_replicas: 3          # optional overrides - see kubevirt/vars.yaml
+    # infra: sno                  # VMs on the SNO instead of the hub
 hosted_cluster_metallb_pools:
-  hcp-kv2:
-    pool: hcp-kv2-api-pool
+  hcp-kv3:
+    pool: hcp-kv3-api-pool
     ip:
-      hub: 252                    # .250-.254 are the free octets
+      hub: 253                    # .250-.254 are the free octets; kv1 .250/.251, kv2 .252
 hosted_cluster_domains:
-  hcp-kv2: "{{ hub_domain }}"     # resolvable from every VM with no network change
+  hcp-kv3: "{{ hub_domain }}"     # resolvable from every VM with no network change
 hosted_cluster_node_keys:
-  hcp-kv2:
-    apps_vip: 253                 # only used with ingress: metallb
+  hcp-kv3:
+    apps_vip: 254                 # only used with ingress: metallb
 ```
 
 The cluster CIDRs (`10.132.0.0/14`, `172.31.0.0/16`) are internal to each
@@ -238,7 +305,7 @@ hub's own pod and service networks.
 The playbook, both roles, their templates and `vars.yaml` are all here. The
 rest of the lab knows about KubeVirt clusters through a few lines:
 
-- **Root `vars.yaml`**: hcp-kv1's entries in `hosted_clusters`,
+- **Root `vars.yaml`**: hcp-kv1's and hcp-kv2's entries in `hosted_clusters`,
   `hosted_cluster_metallb_pools`, `hosted_cluster_domains` and
   `hosted_cluster_node_keys`. That is the data `setup-dns` and `setup-hub-acm`
   already read, so the API name, its zone and the hub's API pool come out the
@@ -264,6 +331,11 @@ including the NAD), and the `hcp-kv1` namespace.
 
 It leaves the hub's OpenShift Virtualization, wildcard-route policy, localnet
 bridge mapping and API pool alone, since other clusters may use them.
+
+For a cluster with `infra` (hcp-kv2) it then also deletes, on the SNO, the VM
+namespace `hcp-kv2-hcp-kv2` (ServiceAccount, Role and token with it) and the
+ClusterRole and binding that read its network config. The SNO's OpenShift
+Virtualization and wildcard-route policy stay.
 
 ## Troubleshooting
 

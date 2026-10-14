@@ -2099,8 +2099,10 @@ directory automates only the rest. Every command, start to finish, in
 
 hcp-kv1 is an ordinary `hosted_clusters` entry with `platform: kubevirt`, so
 `setup-dns` and `setup-hub-acm` give it its API name and pool.
-`create_hosted_cluster.yaml` skips it. Run its playbook from inside the
-directory:
+`create_hosted_cluster.yaml` skips it. `hcp-kv2` is the same with
+`infra: sno`: its control plane on the hub, its worker VMs on the single-node
+cluster ([kubevirt/README.md](kubevirt/README.md#workers-on-another-cluster-hcp-kv2-on-the-sno)).
+Run the playbook from inside the directory:
 
 ```bash
 cd kubevirt

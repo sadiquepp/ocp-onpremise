@@ -61,7 +61,7 @@ already there is applied unchanged.
 `mgmt` runs 8.2 and 8.3 together. 8.5 and 8.6 have no tag of their own,
 because in the playbook they run as one block under `cluster`; by hand you
 apply the rendered files one at a time. 8.7 is MCE's own: you only check it. The [MetalLB variant](#metallb-variant) adds
-three steps.
+three steps; [hcp-kv2](#hcp-kv2-workers-on-the-sno), with its workers on the SNO, changes four.
 
 ## 8.1 Preflight
 
@@ -372,4 +372,68 @@ against hcp-kv1's kubeconfig, with `192.168.122.251` as the address. Then:
 oc --kubeconfig /var/lib/libvirt/images/hcp-kv1/kubeconfig \
   -n openshift-ingress get svc metallb-ingress    # EXTERNAL-IP 192.168.122.251
 curl -kI https://console-openshift-console.apps.hcp-kv1.hub.mylab.com
+```
+
+## hcp-kv2: workers on the SNO
+
+The same steps with `-e kubevirt_cluster=hcp-kv2`, except where its VMs run.
+The control plane, API pool and ACM import are on hub1 as above; the VMs,
+their disks and the `*.apps` Route are on the SNO, so four steps change.
+Before 8.1, the SNO and hcp-kv2's DNS and pool:
+[steps.md, hcp-kv2](steps.md#hcp-kv2-workers-on-the-sno-optional).
+
+```bash
+PB="ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass -e kubevirt_cluster=hcp-kv2"
+SNO=/var/lib/libvirt/images/sno_install/auth/kubeconfig
+```
+
+**8.2 and 8.3 on the SNO.** `$PB --tags mgmt` does both there. By hand, the
+same files as for hub1, applied to the SNO:
+
+```bash
+oc --kubeconfig $SNO apply -f "$M/8.2-cnv-operator.yaml"
+until oc --kubeconfig $SNO get crd hyperconvergeds.hco.kubevirt.io >/dev/null 2>&1; do sleep 10; done
+oc --kubeconfig $SNO apply -f "$M/8.2-hyperconverged.yaml"
+oc --kubeconfig $SNO -n openshift-cnv wait hyperconverged/kubevirt-hyperconverged --for=condition=Available --timeout=20m
+oc --kubeconfig $SNO -n openshift-ingress-operator patch ingresscontroller default --type=merge \
+  --patch-file "$M/8.3-ingresscontroller-wildcards.yaml"
+oc --kubeconfig $SNO -n openshift-ingress rollout status deployment/router-default --timeout=10m
+```
+
+**Between 8.4 and 8.5: HyperShift's access to the SNO.** 8.4 renders a
+fourth file, `00-infra-access.yaml`, for the SNO: the VM namespace
+`hcp-kv2-hcp-kv2`, ServiceAccount `hcp-infra`, its Role and token, and a
+ClusterRole to read the SNO's network config. Apply it there, then render
+again - `01` picks up the token as the `infra-kubeconfig-hcp-kv2` Secret only
+once it exists:
+
+```bash
+oc --kubeconfig $SNO apply -f rendered/hcp-kv2/00-infra-access.yaml
+oc --kubeconfig $SNO -n hcp-kv2-hcp-kv2 get secret hcp-infra-token \
+  -o jsonpath='{.data.token}' | wc -c                              # > 0
+
+$PB --tags cluster -e kubevirt_apply=false
+grep -c 'name: infra-kubeconfig-hcp-kv2' rendered/hcp-kv2/01-hosted-cluster.yaml   # 2: the Secret, and credentials naming it
+```
+
+**8.5** is then the same `oc apply -f rendered/hcp-kv2/01-hosted-cluster.yaml`
+on hub1. Its `spec.platform.kubevirt.credentials` names that Secret and the
+SNO namespace, and `dns.baseDomain` is the SNO's `apps.sno.mylab.com`.
+
+**8.6: watch the VMs on the SNO.** The NodePool is applied on hub1; what it
+creates is on the SNO:
+
+```bash
+oc --kubeconfig $SNO get dv,vm,vmi -n hcp-kv2-hcp-kv2 -w
+oc get nodepool -n hcp-kv2 -w                                     # on hub1
+virtctl --kubeconfig $SNO console -n hcp-kv2-hcp-kv2 \
+  $(oc --kubeconfig $SNO get vmi -n hcp-kv2-hcp-kv2 -o name | head -1 | cut -d/ -f2)
+```
+
+**8.9** probes `console-openshift-console.apps.hcp-kv2.apps.sno.mylab.com`,
+through the SNO's router:
+
+```bash
+oc --kubeconfig $SNO get route -n hcp-kv2-hcp-kv2               # the *.apps passthrough, on the SNO
+curl -kI https://console-openshift-console.apps.hcp-kv2.apps.sno.mylab.com
 ```

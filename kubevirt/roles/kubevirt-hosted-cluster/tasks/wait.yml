@@ -41,9 +41,11 @@
 # The VMs show up within a minute or two of the NodePool; a long gap here is
 # the first sign of a scheduling problem (no kubevirt.io/schedulable node, a
 # PVC with no StorageClass, a NAD the VM cannot attach).
-- name: "{{ kv.name }} | Wait for the worker VMs to exist"
+- name: "{{ kv.name }} | Wait for the worker VMs to exist on {{ kv.infra | default(kubevirt_mgmt, true) }}"
   ansible.builtin.command:
-    cmd: oc -n {{ kv.cp_namespace }} get virtualmachines -o name
+    cmd: >-
+      oc --kubeconfig {{ kv.infra_kubeconfig }} -n {{ kv.vm_namespace }}
+      get virtualmachines -o name
   register: kubevirt_vms
   retries: 30
   delay: 20

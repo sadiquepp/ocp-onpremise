@@ -3,9 +3,11 @@
 # whichever ingress it uses. Nothing here fails the run: a new cluster's
 # operators can take a while after the nodes are Ready.
 
-- name: "{{ kv.name }} | The worker VMs on the management cluster"
+- name: "{{ kv.name }} | The worker VMs on {{ kv.infra | default(kubevirt_mgmt, true) }}"
   ansible.builtin.command:
-    cmd: oc -n {{ kv.cp_namespace }} get virtualmachineinstances -o wide
+    cmd: >-
+      oc --kubeconfig {{ kv.infra_kubeconfig }} -n {{ kv.vm_namespace }}
+      get virtualmachineinstances -o wide
   register: kubevirt_vmis
   changed_when: false
   failed_when: false
@@ -26,8 +28,8 @@
   changed_when: false
   failed_when: false
 
-# route: the hub's router, matched on SNI against HyperShift's wildcard
-# passthrough Route. metallb: the address MetalLB inside the hosted cluster
+# route: the router of the cluster the VMs run on (the hub, or the SNO with
+# 'infra'), matched on SNI against HyperShift's wildcard passthrough Route. metallb: the address MetalLB inside the hosted cluster
 # answers for (../roles/setup-hcp-ingress-metallb probes it too).
 - name: "{{ kv.name }} | Reach the console through its ingress"
   ansible.builtin.uri:
@@ -39,18 +41,18 @@
   failed_when: false
   vars:
     kubevirt_console_host: >-
-      console-openshift-console.apps.{{ kv.name }}.{{ (kv.ingress == 'route') | ternary(kubevirt_mgmt_apps_domain, kv.domain) }}
+      console-openshift-console.apps.{{ kv.name }}.{{ (kv.ingress == 'route') | ternary(kubevirt_apps_domains[kv.infra], kv.domain) }}
 
 - name: "{{ kv.name }} | Report"
   ansible.builtin.debug:
     msg:
       - "API:        https://{{ kv.api_hostname }}:6443 ({{ kv.api_vip }}, MetalLB on the management cluster)"
-      - "Ingress:    {{ kv.ingress }} - *.apps.{{ kv.name }}.{{ (kv.ingress == 'route') | ternary(kubevirt_mgmt_apps_domain ~ ' (the management cluster router)', kv.domain ~ ' -> ' ~ kv.apps_vip ~ ' (MetalLB inside the hosted cluster)') }}"
+      - "Ingress:    {{ kv.ingress }} - *.apps.{{ kv.name }}.{{ (kv.ingress == 'route') | ternary(kubevirt_apps_domains[kv.infra] ~ ' (the router of ' ~ (kv.infra | default(kubevirt_mgmt, true)) ~ ')', kv.domain ~ ' -> ' ~ kv.apps_vip ~ ' (MetalLB inside the hosted cluster)') }}"
+      - "VMs:        on {{ kv.infra | default(kubevirt_mgmt, true) }}, namespace {{ kv.vm_namespace }}"
       - "Console:    {{ kubevirt_console_probe.status | default('no answer') }} {{ kubevirt_console_probe.msg | default('') }}"
       - "Kubeconfig: {{ kubevirt_kubeconfig_dir }}/{{ kv.name }}/kubeconfig"
       - "Password:   oc -n {{ kv.name }} extract secret/{{ kv.name }}-kubeadmin-password --to=-"
       - "Not yet Available: {{ kubevirt_co_pending.stdout_lines | default([]) | join(', ') | default('none', true) }}"
-      - "VMs:"
       - "{{ kubevirt_vmis.stdout_lines | default([]) }}"
       - "Nodes:"
       - "{{ kubevirt_nodes.stdout_lines | default([]) }}"
