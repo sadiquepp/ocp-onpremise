@@ -49,6 +49,10 @@ Virtualization itself.
 | Worker VMs, their root disks | hub, namespace `hcp-kv1-hcp-kv1` | the NodePool (Cluster API KubeVirt provider + CDI) |
 | PVCs inside the hosted cluster | hub, as DataVolumes hot-plugged into the VMs | kubevirt-csi (`storageDriver: Default`) |
 
+hcp-kv2 is built the same way, except that its worker VMs, their disks and
+its `*.apps` Route are on the SNO, and OpenShift Virtualization goes there
+too: [Workers on another cluster](#workers-on-another-cluster-hcp-kv2-on-the-sno).
+
 The kube-apiserver is a MetalLB LoadBalancer on the hub, like the Agent
 clusters' (`hcp-cluster1/2/3`). OAuth, OIDC, Konnectivity and Ignition are
 Routes on the hub's router, under `*.apps.hub.mylab.com`.
@@ -193,6 +197,10 @@ do not suit this:
 
 [steps.md](steps.md#hcp-kv2-workers-on-the-sno-optional) has the commands.
 
+The SNO is the same one the udn-bgp-evpn and spiffe-spire labs build and use
+(`sno_install_folder`). They can share it, but hcp-kv2's workers take most of
+its memory, so size it for both or run one at a time.
+
 A run over every cluster leaves hcp-kv2 out, with a message, while the SNO's
 kubeconfig doesn't exist - so building only hcp-kv1 needs no SNO. Other
 infrastructure clusters are a `kubevirt_infras` entry in `vars.yaml` away.
@@ -226,6 +234,10 @@ What that gives this lab, and why it matters here:
 - **Room on the hub.** Its three workers are 32 vCPU / 48 GiB each, and carry
   both the hosted control plane and the worker VMs (4 vCPU / 16 GiB each by
   default).
+- **For hcp-kv2 only, the SNO** (`../setup_sno.yaml`), with LVM Storage and
+  room for its workers - see
+  [Workers on another cluster](#workers-on-another-cluster-hcp-kv2-on-the-sno).
+  Without it a run builds hcp-kv1 alone and says hcp-kv2 was left out.
 
 The preflight checks all of these and names the step that fixes each one.
 
@@ -347,6 +359,11 @@ Virtualization and wildcard-route policy stay.
 | HostedCluster waits on kube-apiserver with no address | The API pool is missing, or holds another address | `oc -n metallb-system get ipaddresspool hcp-kv1-api-pool -o yaml`; `oc -n hcp-kv1-hcp-kv1 get svc kube-apiserver` |
 | Nodes never join | The VMs can't fetch Ignition or reach the API | `virtctl console -n hcp-kv1-hcp-kv1 <vm>`; from the VM, `curl -k https://api.hcp-kv1.hub.mylab.com:6443/version` |
 | Nodes `Ready,SchedulingDisabled`; routers and console Pending | Auto-repair is replacing the workers (NotReady past `kubevirt_mhc_timeout`) and the drain hangs | `oc -n hcp-kv1-hcp-kv1 get machines.cluster.x-k8s.io` shows `Deleting`; raise the NodePool's `hypershift.openshift.io/machine-health-check-timeout`, then `oc annotate machines.cluster.x-k8s.io -n hcp-kv1-hcp-kv1 --all machine.cluster.x-k8s.io/exclude-node-draining=""` |
+| hcp-kv2: "Leaving out hcp-kv2" | The SNO isn't built (`/var/lib/libvirt/images/sno_install/auth/kubeconfig` is missing) | Build it - [steps.md, hcp-kv2](steps.md#hcp-kv2-workers-on-the-sno-optional) |
+| hcp-kv2: VMs `Pending` on the SNO | Not enough memory beside OpenShift Virtualization, or no StorageClass | `oc --kubeconfig <sno> describe vmi -n hcp-kv2-hcp-kv2`; `oc --kubeconfig <sno> get sc`; a bigger SNO or `nodepool_replicas: 1` |
+| hcp-kv2: HostedCluster or NodePool errors naming the infra kubeconfig, no VMs on the SNO | The hub's pods can't reach `api.sno.mylab.com:6443`, or the token is wrong | `oc debug node/worker1.hub.mylab.com -- chroot /host curl -k https://api.sno.mylab.com:6443/version`; `oc get secret infra-kubeconfig-hcp-kv2 -n hcp-kv2`; `oc --kubeconfig <sno> get sa,secret -n hcp-kv2-hcp-kv2` |
+| hcp-kv2: `ValidKubeVirtInfraNetworkPolicyRBAC=False` | The SNO-side ClusterRole to read its network config is missing | `oc --kubeconfig <sno> apply -f rendered/hcp-kv2/00-infra-access.yaml` |
+| hcp-kv2: console unreachable | The SNO's router doesn't admit the wildcard Route | `oc --kubeconfig <sno> -n hcp-kv2-hcp-kv2 get route`; `oc --kubeconfig <sno> -n openshift-ingress-operator get ingresscontroller default -o jsonpath='{.spec.routeAdmission}'` |
 | `HostedCluster` create fails: `x509: certificate signed by unknown authority` from `operator.hypershift.svc` | HyperShift's webhook serving cert isn't signed by its `webhook-serving-ca` | `openssl verify` the `manager-serving-cert` secret against `webhook-serving-ca` in `hypershift`; delete `manager-serving-cert` and `oc -n hypershift rollout restart deployment/operator` |
 | `route`: console unreachable | The wildcard Route isn't admitted | `oc -n hcp-kv1-hcp-kv1 get route`; `oc -n openshift-ingress-operator get ingresscontroller default -o jsonpath='{.spec.routeAdmission}'` |
 | `metallb`: VMs get no address | The localnet bridge mapping isn't applied, or there's no DHCP on the segment | `oc get nncp kubevirt-lab-bridge-mapping`; `oc -n hcp-kv1-hcp-kv1 get vmi -o wide` |

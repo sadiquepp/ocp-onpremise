@@ -2,7 +2,9 @@
 
 Connected lab, Ceph 9 / ODF external storage on hub1, and a hosted cluster
 (`hcp-kv1`) whose workers are KubeVirt VMs that its NodePool creates on hub1,
-nested on this host. Commands only, start to finish. Explanations:
+nested on this host. Optionally a second one (`hcp-kv2`) with its control
+plane on hub1 and its workers on the single-node cluster:
+[hcp-kv2](#hcp-kv2-workers-on-the-sno-optional). Commands only, start to finish. Explanations:
 [README.md](README.md).
 
 Steps 1-6 are the same commands as steps 1, 3-7 of the backup/restore flow
@@ -113,6 +115,10 @@ On hub1, this:
 
 It takes 30-60 minutes, most of it the nested workers booting. The rendered
 files are in `kubevirt/rendered/hcp-kv1/`.
+
+hcp-kv2 is in `vars.yaml` too, but its workers go on the SNO: until that is
+built, this run says "Leaving out hcp-kv2" and builds hcp-kv1 alone. Once the
+SNO exists, a plain run handles both.
 
 To do this one step at a time instead, by tag or by hand with `oc`, see
 [steps-hosted-cluster.md](steps-hosted-cluster.md).
@@ -240,3 +246,7 @@ ansible-playbook -i inventory/hosts cleanup-hub.yaml
 ansible-playbook -i inventory/hosts cleanup-ceph.yaml
 ansible-playbook -i inventory/hosts cleanup.yaml
 ```
+
+`--tags destroy` removes hcp-kv2 as well while the SNO is up, its SNO side
+included - run it before the SNO goes. `cleanup.yaml` removes the SNO with
+everything else; `cleanup.yaml --tags sno` removes only it.
