@@ -2,70 +2,122 @@
 
 Connected lab, Ceph 9 / ODF external storage on hub1, and a hosted cluster
 (`hcp-kv1`) whose workers are KubeVirt VMs that its NodePool creates on hub1,
-nested on this host. Commands only. Explanations:
+nested on this host. Commands only, start to finish. Explanations:
 [README.md](README.md).
 
-The host, Ceph and hub1 are built exactly as in the backup/restore flow,
-[../steps.md](../steps.md). This file only adds what that flow doesn't do:
-OpenShift Virtualization on the hub, and the KubeVirt hosted cluster itself.
+Steps 1-6 are the same commands as steps 1, 3-7 of the backup/restore flow
+([../steps.md](../steps.md)), repeated here so this file stands alone. They
+run from the repository root; steps 8 onwards run from `kubevirt/`.
 
-## 1. Host, Ceph and hub1 - from ../steps.md
-
-Run these from the repository root, unchanged:
-
-| ../steps.md | |
-|---|---|
-| 1. Prepare | as written |
-| 2. S3 bucket and IAM user | only if you will also back the cluster up |
-| 3. Credentials and lab variables | as written - `use_lvm_storage: false` is what puts the hub on Ceph |
-| 4. Bare metal host | as written |
-| 5. Ceph cluster | as written |
-| 6. Hub1 | as written |
-| 7. Attach Ceph to hub1 | as written |
-| 8. ACM inventory | **skip** - AgentServiceConfig and bminfra are for Agent clusters |
-| 9. Hosted cluster | **skip** - that is the Agent cluster; this file replaces it |
-
-`hcp-kv1` is already in the root `vars.yaml`, so step 4 publishes
-`api.hcp-kv1.hub.mylab.com` and step 6 creates its API address pool on hub1.
-
-## 2. Check the hub can host it
+## 1. Prepare
 
 ```bash
-cat /sys/module/kvm_intel/parameters/nested        # Y   (kvm_amd on AMD)
-dig +short api.hcp-kv1.hub.mylab.com @192.168.122.21    # 192.168.122.250
+subscription-manager register
+yum install ansible-core -y
+ansible-galaxy collection install community.libvirt
+ansible-galaxy collection install community.crypto
+
+git clone https://github.com/sadiquepp/ocp-onpremise.git
+cd ocp-onpremise
+mkdir -p /opt/lab-images
+cp rhel-9.8-x86_64-kvm.qcow2 /opt/lab-images/   # base_image_dir in vars.yaml
+```
+
+## 2. Credentials and lab variables
+
+```bash
+ansible-vault create vault.yaml
+```
+
+```yaml
+org_id: XXXX
+activation_key: YYYYY
+pull_secret: 'ZZZZZ...'
+ssh_key:
+ceph_dashboard_password: '...'
+```
+
+The `oadp_*` keys from ../steps.md are only needed to back the cluster up;
+add them if you will.
+
+In `vars.yaml`:
+
+```yaml
+use_lvm_storage: false        # hub on Ceph, not LVM Storage
+```
+
+`hcp-kv1` is already in `vars.yaml` (`hosted_clusters`, with
+`platform: kubevirt`), so the next steps give it its API name and API address
+pool along with everything else.
+
+## 3. Bare metal host
+
+```bash
+ansible-playbook -i inventory/hosts setup_bm_host.yaml --ask-vault-pass
+
+cat /sys/module/kvm_intel/parameters/nested              # Y   (kvm_amd on AMD)
+dig +short api.hcp-kv1.hub.mylab.com @192.168.122.21     # 192.168.122.250
+```
+
+If `nested` is `N`, reboot the host now, before any VM exists: this step wrote
+`/etc/modprobe.d/kvm-nested.conf`, and it applies when the module loads.
+
+## 4. Ceph cluster
+
+```bash
+ansible-playbook -i inventory/hosts setup_ceph.yaml --ask-vault-pass
+ssh root@192.168.122.27 ceph -s          # HEALTH_OK, 3 mons, 9 OSDs
+```
+
+## 5. Hub1
+
+```bash
+ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass
 
 export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
 oc get ipaddresspool hcp-kv1-api-pool -n metallb-system \
-  -o jsonpath='{.spec.addresses}{"\n"}'            # ["192.168.122.250-192.168.122.250"]
-oc get sc                                          # ocs-external-storagecluster-ceph-rbd (default)
+  -o jsonpath='{.spec.addresses}{"\n"}'  # ["192.168.122.250-192.168.122.250"]
 ```
 
-If `nested` is `N`: stop every VM and reboot the host (step 4 wrote
-`/etc/modprobe.d/kvm-nested.conf`; it applies when the module loads).
-
-If the pool is missing (a hub built before `hcp-kv1` was in `vars.yaml`):
+## 6. Attach Ceph to hub1
 
 ```bash
-ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --tags acm --ask-vault-pass
+export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
+ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass
+oc get storagecluster -n openshift-storage
+oc get sc                                 # ocs-external-storagecluster-ceph-rbd (default)
 ```
 
-## 3. OpenShift Virtualization and the hosted cluster
+No AgentServiceConfig, bminfra or libvirt worker VMs: those are for Agent
+clusters. The NodePool creates this cluster's workers itself.
+
+## 7. Check the hub can run the workers
+
+```bash
+oc get nodes -o wide                      # 3 masters, 3 workers, Ready
+oc debug node/worker1.hub.mylab.com -- grep -c -E 'vmx|svm' /proc/cpuinfo   # > 0
+```
+
+## 8. OpenShift Virtualization and the hosted cluster
 
 ```bash
 cd kubevirt
 ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass
 ```
 
-This does, on hub1: the checks above, OpenShift Virtualization, wildcard
-routes on its router; then renders and applies hcp-kv1's HostedCluster and
-NodePool, and waits for both workers to be Ready. 30-60 minutes, most of it
-the nested workers booting.
+On hub1, this:
+- re-checks steps 3-7;
+- installs OpenShift Virtualization and lets the router admit wildcard routes;
+- renders and applies hcp-kv1's HostedCluster and NodePool;
+- waits for both worker VMs to join as Ready nodes.
 
-Rendered files: `kubevirt/rendered/hcp-kv1/`.
+It takes 30-60 minutes, most of it the nested workers booting. The rendered
+files are in `kubevirt/rendered/hcp-kv1/`.
 
-## 4. Verify
+## 9. Verify
 
 ```bash
+export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
 oc get hostedcluster,nodepool -n hcp-kv1
 oc get vm,vmi,dv -n hcp-kv1-hcp-kv1                # the workers, from the hub
 
@@ -77,9 +129,9 @@ curl -kI https://console-openshift-console.apps.hcp-kv1.apps.hub.mylab.com
 ```
 
 `*.apps.hcp-kv1.apps.hub.mylab.com` reaches the hosted cluster through hub1's
-router - no DNS record of its own.
+router, so it needs no DNS record of its own.
 
-## 5. Workload
+## 10. Workload
 
 ```bash
 export KUBECONFIG=/var/lib/libvirt/images/hcp-kv1/kubeconfig
@@ -92,12 +144,13 @@ oc get route frontend -n online-boutique -o jsonpath='{.spec.host}{"\n"}'
 
 ## MetalLB ingress instead (optional)
 
-`*.apps.hcp-kv1.hub.mylab.com` on `192.168.122.251`, from MetalLB inside the
-hosted cluster, with the workers on the lab network through a localnet NAD.
-`baseDomainPassthrough` is immutable, so a cluster built the default way is
-destroyed first:
+This serves `*.apps.hcp-kv1.hub.mylab.com` on `192.168.122.251`, from MetalLB
+inside the hosted cluster, with the workers on the lab network through a
+localnet NAD. `baseDomainPassthrough` can't be changed after creation, so a
+cluster built the default way is destroyed first:
 
 ```bash
+cd kubevirt
 ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass \
   --tags destroy -e kubevirt_cluster=hcp-kv1
 ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass \
@@ -107,7 +160,8 @@ dig +short x.apps.hcp-kv1.hub.mylab.com @192.168.122.21  # 192.168.122.251
 curl -kI https://console-openshift-console.apps.hcp-kv1.hub.mylab.com
 ```
 
-To keep it, set `ingress: metallb` on hcp-kv1's `hosted_clusters` entry.
+To keep it that way, set `ingress: metallb` on hcp-kv1's `hosted_clusters`
+entry in `vars.yaml`.
 
 ## Cleanup
 
@@ -115,6 +169,9 @@ To keep it, set `ingress: metallb` on hcp-kv1's `hosted_clusters` entry.
 cd kubevirt
 ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass \
   --tags destroy
-```
 
-Then the hub, Ceph and host as in [../steps.md](../steps.md#cleanup).
+cd ..
+ansible-playbook -i inventory/hosts cleanup-hub.yaml
+ansible-playbook -i inventory/hosts cleanup-ceph.yaml
+ansible-playbook -i inventory/hosts cleanup.yaml
+```

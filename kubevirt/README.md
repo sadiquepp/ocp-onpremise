@@ -16,8 +16,9 @@ L0  RHEL host            kvm nested=1 (roles/setup-bm-host)
      └─ L2  worker VMs    hcp-kv1's nodes, one per NodePool replica
 ```
 
-**Commands only: [steps.md](steps.md).** The host, Ceph and the hub come from
-the backup/restore flow's [../steps.md](../steps.md), unchanged; this directory
+**Commands only, start to finish: [steps.md](steps.md).** The host, Ceph and
+the hub are built with the same root playbooks as the backup/restore flow
+([../steps.md](../steps.md)), and their commands are repeated there; this directory
 automates only what that flow doesn't do.
 
 Nested virtualisation is fine for learning the flow (ingress, kubevirt-csi,
@@ -38,7 +39,7 @@ Virtualization itself.
 
 | Piece | Where | Comes from |
 |---|---|---|
-| Host, Ceph, hub1, ODF on Ceph | | [../steps.md](../steps.md) steps 1-7 |
+| Host, Ceph, hub1, ODF on Ceph | | root playbooks, [steps.md](steps.md) steps 1-6 |
 | API address `192.168.122.250` | hub MetalLB, pool `hcp-kv1-api-pool` | `setup_hub_cluster.yaml` (step 6), from `hosted_cluster_metallb_pools` |
 | `api.hcp-kv1.hub.mylab.com` | helper DNS | `setup_bm_host.yaml` (step 4) |
 | OpenShift Virtualization | hub, `openshift-cnv` | `--tags mgmt` (`roles/kubevirt-mgmt`) |
@@ -128,10 +129,11 @@ modes, destroy it and create it again.
 
 ## Before you start
 
-Build the host, Ceph and hub1 with steps 1-7 of [../steps.md](../steps.md),
-unchanged. Skip its steps 8 and 9: AgentServiceConfig, bminfra and the
-libvirt worker VMs are for Agent clusters. [steps.md](steps.md) lists exactly
-which steps, and the checks to run before this playbook.
+Build the host, Ceph and hub1 with steps 1-6 of [steps.md](steps.md): the
+same root playbooks, and the same commands, as steps 1 and 3-7 of the
+backup/restore flow ([../steps.md](../steps.md)). Its steps 8 and 9
+(AgentServiceConfig, bminfra, libvirt worker VMs) are for Agent clusters and
+are not needed here.
 
 What that gives this lab, and why it matters here:
 
@@ -238,7 +240,8 @@ rest of the lab knows about KubeVirt clusters through a few lines:
   Naming one with `-e hcp_cluster_name` fails with the command to use instead.
 
 Everything else - the host, Ceph, the hub, MCE, MetalLB, the API pool, DNS,
-ODF - comes from [../steps.md](../steps.md) and is not repeated here.
+ODF - comes from the root playbooks ([steps.md](steps.md) steps 1-6) and is
+not repeated here.
 
 ## Remove a cluster
 

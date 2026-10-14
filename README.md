@@ -2092,9 +2092,9 @@ workers are KubeVirt VMs that its NodePool creates on the hub's OpenShift
 Virtualization. On this lab they are nested VMs, so there's no ISO and no
 Agent to approve. Ingress goes through the hub's router by default, with
 MetalLB inside the hosted cluster as a per-cluster toggle. The host, Ceph and
-hub1 come from steps 1-7 of [steps.md](steps.md), unchanged; the directory
-automates only the rest. Commands in
-[kubevirt/steps.md](kubevirt/steps.md), explanations in
+hub1 are built with the same playbooks as [steps.md](steps.md); the
+directory automates only the rest. Every command, start to finish, in
+[kubevirt/steps.md](kubevirt/steps.md); explanations in
 [kubevirt/README.md](kubevirt/README.md).
 
 hcp-kv1 is an ordinary `hosted_clusters` entry with `platform: kubevirt`, so
