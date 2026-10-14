@@ -223,10 +223,25 @@ virtctl console -n hcp-kv1-hcp-kv1 $(oc get vmi -n hcp-kv1-hcp-kv1 -o name | hea
 
 ## 8.7 Import into ACM
 
+MCE's hypershift add-on usually does this by itself: it creates the
+ManagedCluster once hcp-kv1's control plane is available, so it may already
+be there:
+
+```bash
+oc get managedcluster hcp-kv1          # JOINED/AVAILABLE True
+oc get klusterletaddonconfig -n hcp-kv1
+```
+
+`04` is the same ManagedCluster (hosted on `local-cluster`, klusterlet in
+Hosted mode) plus the KlusterletAddonConfig, so applying it either way is
+harmless: it merges into what is there and adds anything missing.
+
 ```bash
 oc apply -f rendered/hcp-kv1/04-acm-import.yaml
-oc get managedcluster hcp-kv1          # JOINED/AVAILABLE True once the cluster is up
 ```
+
+JOINED/AVAILABLE only need hcp-kv1's API: in Hosted mode the klusterlet runs
+on hub1, not on the workers. 8.8 is what waits for the nodes.
 
 ## 8.8 Wait, and get the kubeconfig
 
