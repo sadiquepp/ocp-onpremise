@@ -50,7 +50,7 @@
 
   pre_tasks:
     - name: Work out which clusters this run handles
-      ansible.builtin.include_tasks: tasks/select-clusters.yml
+      ansible.builtin.import_tasks: tasks/select-clusters.yml
       tags: always
 
     # baseDomain for 'ingress: route' clusters, and the console URL the report
