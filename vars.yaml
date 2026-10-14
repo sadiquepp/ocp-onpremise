@@ -218,6 +218,15 @@ hosted_clusters:
   ## the compact cluster's zone (hosted_cluster_domains). Walkthrough:
   ## compact-cluster/compact-cluster-hcp.md.
   - hcp-compact1
+  ## KubeVirt platform: the NodePool creates its workers as VMs on the hub's
+  ## OpenShift Virtualization (nested, on this lab). Rendered and applied by
+  ## kubevirt/setup_hosted_cluster_kubevirt.yaml, NOT by create_hosted_cluster
+  ## - roles/create-hosted-cluster skips 'platform: kubevirt' entries. Listed
+  ## here so setup-dns and setup-hub-acm give it its api name and API pool like
+  ## any other hosted cluster. Ingress through the hub's router by default; add
+  ## 'ingress: metallb' for MetalLB inside it. kubevirt/README.md.
+  - name: hcp-kv1
+    platform: kubevirt
 hosted_clusters_disconnected:
   - hcp-cluster1-d
   - hcp-cluster2-d
@@ -996,6 +1005,16 @@ hosted_cluster_metallb_pools:
     ip:
       compact: 100
 
+  ## The KubeVirt-platform cluster (kubevirt/). Its kube-apiserver is a
+  ## LoadBalancer on the hub like the Agent clusters'. .250 because no two-digit
+  ## octet is left: .250-.254 sit above libvirt's DHCP range (.201-.249) and
+  ## outside every other pool and ip_list entry. .251 is its *.apps address
+  ## when it runs with 'ingress: metallb' (hosted_cluster_node_keys below).
+  hcp-kv1:
+    pool: hcp-kv1-api-pool
+    ip:
+      hub: 250
+
 ## Network the pool addresses sit on, per hub. Anything not listed here uses
 ## lab_network_prefix, which is why this is empty by default - in this lab all
 ## three hubs share virbr0. Set an entry when a hub really is on its own
@@ -1451,6 +1470,14 @@ hosted_cluster_node_keys:
   hcp-compact1:
     workers: [hcpc1worker1, hcpc1worker2]
     apps_vip: 101
+  ## No workers: its VMs are created by the NodePool and take whatever address
+  ## they are given - the hub's pod network with ingress: route, libvirt's DHCP
+  ## (.201-.249) with ingress: metallb. apps_vip is used only with
+  ## 'ingress: metallb' (MetalLB inside the hosted cluster, the same role as
+  ## hcp-compact1); with the default ingress its apps live under the hub's
+  ## *.apps instead, and this record is simply never asked for.
+  hcp-kv1:
+    apps_vip: 251
 
 ## The DNS domain each hosted cluster sits under, when it is not base_domain.
 ## The HostedCluster's dns.baseDomain, its zone (<name>.<this>), its
@@ -1464,6 +1491,11 @@ hosted_cluster_node_keys:
 ## compact cluster is on.
 hosted_cluster_domains:
   hcp-compact1: "{{ compact_name }}.{{ base_domain }}"
+  ## Under the hub's zone for the same reason: the libvirt network already
+  ## forwards hub.<base_domain> to the helper, so api.hcp-kv1.hub.mylab.com
+  ## resolves from every VM - the hub's nodes, and the worker VMs - with no
+  ## change to the running network.
+  hcp-kv1: "{{ hub_domain }}"
 
 ## LEGACY: hosted_domain / hosted_domain2 / hosted_domain3 above are the same
 ## information as hosted_clusters, written twice. Nothing renders from them any

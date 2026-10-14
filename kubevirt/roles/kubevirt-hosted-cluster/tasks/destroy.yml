@@ -1,0 +1,43 @@
+---
+# Remove one cluster: its ACM import, NodePool (which deletes the worker VMs
+# and their disks), HostedCluster (which deletes the control-plane namespace,
+# NAD included) and its own namespace.
+#
+# Left in place on purpose: the API pool (the hub's 'acm' tag owns it as much
+# as this lab does, and it holds nothing once the Service is gone), and the
+# management-cluster prerequisites - OpenShift Virtualization, the wildcard
+# route policy and the localnet bridge mapping - which other clusters may use.
+
+- name: "{{ kv.name }} | Remove the ACM import"
+  ansible.builtin.command:
+    cmd: oc delete managedcluster {{ kv.name }} --ignore-not-found --wait --timeout=600s
+  changed_when: "'deleted' in kubevirt_del_mc.stdout"
+  register: kubevirt_del_mc
+  failed_when: false
+
+- name: "{{ kv.name }} | Delete the NodePool and wait for its VMs to go"
+  ansible.builtin.command:
+    cmd: oc -n {{ kv.name }} delete nodepool --all --wait --timeout=1800s
+  register: kubevirt_del_np
+  changed_when: "'deleted' in kubevirt_del_np.stdout"
+  failed_when: kubevirt_del_np.rc != 0 and 'NotFound' not in kubevirt_del_np.stderr and 'not found' not in kubevirt_del_np.stderr
+
+- name: "{{ kv.name }} | Delete the HostedCluster and wait for its control plane to go"
+  ansible.builtin.command:
+    cmd: oc -n {{ kv.name }} delete hostedcluster {{ kv.name }} --ignore-not-found --wait --timeout=1800s
+  register: kubevirt_del_hc
+  changed_when: "'deleted' in kubevirt_del_hc.stdout"
+
+- name: "{{ kv.name }} | Delete its namespace"
+  ansible.builtin.command:
+    cmd: oc delete namespace {{ kv.name }} --ignore-not-found --wait --timeout=600s
+  register: kubevirt_del_ns
+  changed_when: "'deleted' in kubevirt_del_ns.stdout"
+
+- name: "{{ kv.name }} | Remove the rendered bundle and kubeconfig"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ kubevirt_render_dir }}/{{ kv.name }}"
+    - "{{ kubevirt_kubeconfig_dir }}/{{ kv.name }}/kubeconfig"

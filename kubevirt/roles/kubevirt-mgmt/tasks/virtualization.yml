@@ -1,0 +1,76 @@
+---
+# OpenShift Virtualization on the management cluster - the same install
+# udn-bgp-evpn's prep phase does on the hub, so a hub that already ran it is a
+# no-op here.
+
+- name: Check whether the HyperConverged API is already present
+  ansible.builtin.command:
+    cmd: oc get crd hyperconvergeds.hco.kubevirt.io
+  register: kubevirt_hco_crd
+  changed_when: false
+  failed_when: false
+
+- name: Create the namespace, OperatorGroup and Subscription
+  ansible.builtin.command:
+    cmd: oc apply -f -
+    stdin: "{{ lookup('ansible.builtin.template', 'cnv-operator.yaml.j2') }}"
+  when: kubevirt_hco_crd.rc != 0
+
+# The HyperConverged CRD does not exist until the CSV has installed, and
+# applying the CR before that fails with "no matches for kind".
+- name: Wait for the operator to install its CRD
+  ansible.builtin.command:
+    cmd: oc get crd hyperconvergeds.hco.kubevirt.io
+  register: kubevirt_hco_crd_after
+  retries: "{{ kubevirt_operator_retries }}"
+  delay: "{{ kubevirt_operator_delay }}"
+  until: kubevirt_hco_crd_after.rc == 0
+  changed_when: false
+  when: kubevirt_hco_crd.rc != 0
+
+# spec: {} - the defaults are what the lab wants, live migration included.
+- name: Create the HyperConverged instance
+  ansible.builtin.command:
+    cmd: oc apply -f -
+    stdin: |
+      apiVersion: hco.kubevirt.io/v1beta1
+      kind: HyperConverged
+      metadata:
+        name: kubevirt-hyperconverged
+        namespace: openshift-cnv
+      spec: {}
+  register: kubevirt_hco_apply
+  changed_when: "' unchanged' not in kubevirt_hco_apply.stdout"
+
+- name: Wait for OpenShift Virtualization to report Available
+  ansible.builtin.command:
+    cmd: >-
+      oc -n openshift-cnv wait hyperconverged/kubevirt-hyperconverged
+      --for=condition=Available --timeout=1200s
+  changed_when: false
+
+# A node is labelled schedulable only when virt-handler found /dev/kvm on it.
+# On these nodes that means nested virtualisation reached the hub VM; without
+# it every worker VM sits Pending with no obvious reason.
+- name: Count the nodes KubeVirt can schedule a VM on
+  ansible.builtin.command:
+    cmd: oc get nodes -l kubevirt.io/schedulable=true -o name
+  register: kubevirt_vm_nodes
+  retries: 30
+  delay: 10
+  until: kubevirt_vm_nodes.stdout_lines | length > 0
+  changed_when: false
+  failed_when: false
+
+- name: Fail if no node can run a VM
+  ansible.builtin.assert:
+    that:
+      - kubevirt_vm_nodes.stdout_lines | length > 0
+    fail_msg: >-
+      No node is labelled kubevirt.io/schedulable=true, so the NodePool's VMs
+      would never start. The hub VMs need the host CPU's virtualisation
+      extensions: check `grep -c -E 'vmx|svm' /proc/cpuinfo` on this host and
+      on a worker (`oc debug node/<worker> -- grep -c -E 'vmx|svm' /proc/cpuinfo`),
+      and that the hub VMs were created with --cpu host-passthrough.
+    success_msg: >-
+      {{ kubevirt_vm_nodes.stdout_lines | length }} node(s) can run the worker VMs.

@@ -1,0 +1,180 @@
+---
+## Hosted clusters on the KubeVirt platform: control plane as pods on the
+## management cluster (the hub), workers as KubeVirt VMs the NodePool creates
+## there. On this lab the hub's nodes are themselves VMs, so the workers are
+## nested - see vars.yaml and README.md in this directory.
+##
+##   cd kubevirt
+##   ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass
+##
+## From inside kubevirt/, like compact-cluster/: ansible.cfg is read from the
+## working directory, and the one here adds ../roles to roles_path.
+##
+## The clusters are the 'platform: kubevirt' entries in the root vars.yaml's
+## hosted_clusters (hcp-kv1 out of the box). Before the first run, from the
+## repository root, publish their API names - once per new cluster:
+##
+##   ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns --ask-vault-pass
+##
+## Phases - a plain run does all of them except destroy, in this order:
+##   --tags preflight  checks only: MCE and MetalLB on the hub, nested KVM on
+##                     this host, api.<name> resolving to its MetalLB address,
+##                     a StorageClass for the disks
+##   --tags mgmt       the hub: OpenShift Virtualization; wildcard routes on
+##                     its router (ingress: route); NMState and the localnet
+##                     bridge mapping (ingress: metallb)
+##   --tags cluster    render + apply each cluster, wait for its nodes, then
+##                     the metallb ingress and the report below
+##   --tags wait       just wait for clusters already applied
+##   --tags ingress    'ingress: metallb' clusters: MetalLB inside the hosted
+##                     cluster (../roles/setup-hcp-ingress-metallb)
+##   --tags verify     report VMs, nodes, operators; reach the console
+##   --tags destroy    delete the clusters (never runs unless named)
+##
+## Narrow to one cluster:   -e kubevirt_cluster=hcp-kv1
+## Render only, apply none: -e kubevirt_apply=false   (files in kubevirt/rendered/)
+## MetalLB ingress for one: -e kubevirt_ingress=metallb, or 'ingress: metallb'
+##                          on its hosted_clusters entry
+
+- name: Hosted clusters on the KubeVirt platform
+  hosts: localhost
+  become: true
+  vars_files:
+    - ../vars.yaml
+    - vars.yaml
+    - ../vault.yaml
+  environment:
+    KUBECONFIG: "{{ kubevirt_mgmt_kubeconfig }}"
+
+  pre_tasks:
+    - name: Work out which clusters this run handles
+      ansible.builtin.include_tasks: tasks/select-clusters.yml
+      tags: always
+
+    # baseDomain for 'ingress: route' clusters, and the console URL the report
+    # probes. Read from the cluster rather than derived from hub_domain, so a
+    # management cluster other than the hub works unchanged.
+    - name: Read the management cluster's apps domain
+      ansible.builtin.command:
+        cmd: oc get ingresses.config.openshift.io cluster -o jsonpath={.spec.domain}
+      register: kubevirt_mgmt_apps_domain_read
+      changed_when: false
+      failed_when: false
+      tags: always
+
+    - name: Note it
+      ansible.builtin.set_fact:
+        kubevirt_mgmt_apps_domain: "{{ kubevirt_mgmt_apps_domain_read.stdout | default('', true) | trim }}"
+      tags: always
+
+  tasks:
+    - name: Preflight
+      ansible.builtin.include_role:
+        name: kubevirt-mgmt
+        tasks_from: preflight
+        apply:
+          tags: [preflight]
+      tags: [preflight]
+
+    - name: Fail if the management cluster's apps domain could not be read
+      ansible.builtin.assert:
+        that:
+          - kubevirt_mgmt_apps_domain | length > 0
+        fail_msg: >-
+          `oc get ingresses.config.openshift.io cluster` returned no domain
+          ({{ kubevirt_mgmt_apps_domain_read.stderr | default('') | trim }}).
+          'ingress: route' clusters take their base domain from it.
+      when: kubevirt_any_route | bool
+      tags: [preflight, mgmt, cluster, verify]
+
+    - name: OpenShift Virtualization on the management cluster
+      ansible.builtin.include_role:
+        name: kubevirt-mgmt
+        tasks_from: virtualization
+        apply:
+          tags: [mgmt]
+      tags: [mgmt]
+
+    - name: Wildcard routes on the management cluster's router (ingress route)
+      ansible.builtin.include_role:
+        name: kubevirt-mgmt
+        tasks_from: route-ingress
+        apply:
+          tags: [mgmt]
+      when: kubevirt_any_route | bool
+      tags: [mgmt]
+
+    - name: Localnet bridge mapping on the management cluster (ingress metallb)
+      ansible.builtin.include_role:
+        name: kubevirt-mgmt
+        tasks_from: localnet
+        apply:
+          tags: [mgmt]
+      when: kubevirt_any_metallb | bool
+      tags: [mgmt]
+
+    - name: Render and apply each hosted cluster
+      ansible.builtin.include_role:
+        name: kubevirt-hosted-cluster
+        tasks_from: create
+        apply:
+          tags: [cluster]
+      loop: "{{ kubevirt_specs }}"
+      loop_control:
+        loop_var: kv
+        label: "{{ kv.name }}"
+      tags: [cluster]
+
+    - name: Wait for each hosted cluster's control plane, VMs and nodes
+      ansible.builtin.include_role:
+        name: kubevirt-hosted-cluster
+        tasks_from: wait
+        apply:
+          tags: [cluster, wait]
+      loop: "{{ kubevirt_specs }}"
+      loop_control:
+        loop_var: kv
+        label: "{{ kv.name }}"
+      when: kubevirt_apply | bool
+      tags: [cluster, wait]
+
+    # The shared role compact-cluster-hcp.md uses for hcp-compact1, unchanged:
+    # MetalLB operator inside the hosted cluster, the apps_vip pool, and the
+    # metallb-ingress LoadBalancer Service in front of its routers.
+    - name: MetalLB ingress inside each hosted cluster set to ingress metallb
+      ansible.builtin.include_role:
+        name: setup-hcp-ingress-metallb
+        apply:
+          tags: [cluster, ingress]
+      vars:
+        hcp_ingress_mgmt_kubeconfig: "{{ kubevirt_mgmt_kubeconfig }}"
+      loop: "{{ kubevirt_specs | selectattr('ingress', 'eq', 'metallb') | map(attribute='name') | list }}"
+      loop_control:
+        loop_var: hcp_ingress_cluster
+      when: kubevirt_apply | bool
+      tags: [cluster, ingress]
+
+    - name: Report each hosted cluster
+      ansible.builtin.include_role:
+        name: kubevirt-hosted-cluster
+        tasks_from: verify
+        apply:
+          tags: [cluster, verify]
+      loop: "{{ kubevirt_specs }}"
+      loop_control:
+        loop_var: kv
+        label: "{{ kv.name }}"
+      when: kubevirt_apply | bool
+      tags: [cluster, verify]
+
+    - name: Delete each hosted cluster
+      ansible.builtin.include_role:
+        name: kubevirt-hosted-cluster
+        tasks_from: destroy
+        apply:
+          tags: [destroy]
+      loop: "{{ kubevirt_specs }}"
+      loop_control:
+        loop_var: kv
+        label: "{{ kv.name }}"
+      tags: [destroy, never]

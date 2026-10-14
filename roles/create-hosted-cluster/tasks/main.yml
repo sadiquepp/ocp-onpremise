@@ -168,6 +168,38 @@
          or [{'name': hcp_cluster_name}] }}
   when: hcp_cluster_name is defined
 
+# 'platform: kubevirt' entries (hcp-kv1) are hosted clusters too - setup-dns
+# and setup-hub-acm read them like any other - but their bundle is a KubeVirt
+# HostedCluster and NodePool, rendered and applied by
+# kubevirt/setup_hosted_cluster_kubevirt.yaml. Rendering one here as an Agent
+# cluster would give it a NodePool waiting for Agents that never come.
+- name: Leave the KubeVirt-platform clusters to kubevirt/
+  ansible.builtin.set_fact:
+    hosted_cluster_kubevirt_skipped: >-
+      {{ hosted_cluster_specs | selectattr('platform', 'defined')
+         | selectattr('platform', 'eq', 'kubevirt') | map(attribute='name') | list }}
+    hosted_cluster_specs: >-
+      {{ hosted_cluster_specs | rejectattr('platform', 'defined') | list
+         + (hosted_cluster_specs | selectattr('platform', 'defined')
+            | rejectattr('platform', 'eq', 'kubevirt') | list) }}
+
+- name: Fail if the cluster named on the command line is a KubeVirt one
+  ansible.builtin.assert:
+    that:
+      - hcp_cluster_name not in hosted_cluster_kubevirt_skipped
+    fail_msg: >-
+      {{ hcp_cluster_name }} is 'platform: kubevirt'. Create it with
+      `cd kubevirt && ansible-playbook -i ../inventory/hosts
+      setup_hosted_cluster_kubevirt.yaml --ask-vault-pass -e kubevirt_cluster={{ hcp_cluster_name }}`.
+  when: hcp_cluster_name is defined
+
+- name: Say which clusters are left to kubevirt/
+  ansible.builtin.debug:
+    msg: >-
+      Not rendered here ('platform: kubevirt' - see kubevirt/README.md):
+      {{ hosted_cluster_kubevirt_skipped | join(', ') }}.
+  when: hosted_cluster_kubevirt_skipped | length > 0
+
 - name: Fail fast if there is nothing to render
   ansible.builtin.assert:
     that:

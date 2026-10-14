@@ -1,0 +1,16 @@
+---
+# One KubeVirt-platform hosted cluster, 'kv' (an entry of kubevirt_specs from
+# ../../tasks/select-clusters.yml). setup_hosted_cluster_kubevirt.yaml loops
+# each file below over the clusters under its own tag; this file is the whole
+# create path for a single cluster, in order.
+
+- name: Render and apply
+  ansible.builtin.include_tasks: create.yml
+
+- name: Wait for the control plane, the VMs and the nodes
+  ansible.builtin.include_tasks: wait.yml
+  when: kubevirt_apply | bool
+
+- name: Report
+  ansible.builtin.include_tasks: verify.yml
+  when: kubevirt_apply | bool

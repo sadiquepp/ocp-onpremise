@@ -1,0 +1,56 @@
+---
+# Report one cluster's state, and reach its console from outside through
+# whichever ingress it uses. Nothing here fails the run: a new cluster's
+# operators can take a while after the nodes are Ready.
+
+- name: "{{ kv.name }} | The worker VMs on the management cluster"
+  ansible.builtin.command:
+    cmd: oc -n {{ kv.cp_namespace }} get virtualmachineinstances -o wide
+  register: kubevirt_vmis
+  changed_when: false
+  failed_when: false
+
+- name: "{{ kv.name }} | The hosted cluster's nodes"
+  ansible.builtin.command:
+    cmd: oc --kubeconfig {{ kubevirt_kubeconfig_dir }}/{{ kv.name }}/kubeconfig get nodes -o wide
+  register: kubevirt_nodes
+  changed_when: false
+  failed_when: false
+
+- name: "{{ kv.name }} | ClusterOperators not yet Available"
+  ansible.builtin.shell:
+    cmd: >-
+      oc --kubeconfig {{ kubevirt_kubeconfig_dir }}/{{ kv.name }}/kubeconfig get co --no-headers
+      | awk '$3 != "True" {print $1}'
+  register: kubevirt_co_pending
+  changed_when: false
+  failed_when: false
+
+# route: the hub's router, matched on SNI against HyperShift's wildcard
+# passthrough Route. metallb: the address MetalLB inside the hosted cluster
+# answers for (../roles/setup-hcp-ingress-metallb probes it too).
+- name: "{{ kv.name }} | Reach the console through its ingress"
+  ansible.builtin.uri:
+    url: "https://{{ kubevirt_console_host }}"
+    validate_certs: false
+    follow_redirects: none
+    status_code: [200, 302, 303]
+  register: kubevirt_console_probe
+  failed_when: false
+  vars:
+    kubevirt_console_host: >-
+      console-openshift-console.apps.{{ kv.name }}.{{ (kv.ingress == 'route') | ternary(kubevirt_mgmt_apps_domain, kv.domain) }}
+
+- name: "{{ kv.name }} | Report"
+  ansible.builtin.debug:
+    msg:
+      - "API:        https://{{ kv.api_hostname }}:6443 ({{ kv.api_vip }}, MetalLB on the management cluster)"
+      - "Ingress:    {{ kv.ingress }} - *.apps.{{ kv.name }}.{{ (kv.ingress == 'route') | ternary(kubevirt_mgmt_apps_domain ~ ' (the management cluster router)', kv.domain ~ ' -> ' ~ kv.apps_vip ~ ' (MetalLB inside the hosted cluster)') }}"
+      - "Console:    {{ kubevirt_console_probe.status | default('no answer') }} {{ kubevirt_console_probe.msg | default('') }}"
+      - "Kubeconfig: {{ kubevirt_kubeconfig_dir }}/{{ kv.name }}/kubeconfig"
+      - "Password:   oc -n {{ kv.name }} extract secret/{{ kv.name }}-kubeadmin-password --to=-"
+      - "Not yet Available: {{ kubevirt_co_pending.stdout_lines | default([]) | join(', ') | default('none', true) }}"
+      - "VMs:"
+      - "{{ kubevirt_vmis.stdout_lines | default([]) }}"
+      - "Nodes:"
+      - "{{ kubevirt_nodes.stdout_lines | default([]) }}"

@@ -61,6 +61,7 @@ In a hurry? [steps.md](steps.md) is the same end-to-end run as commands only.
   - [Verifying](#verifying-1)
   - [Notes and constraints](#notes-and-constraints-1)
 - [Three-node compact cluster](#three-node-compact-cluster)
+- [Hosted clusters on the KubeVirt platform](#hosted-clusters-on-the-kubevirt-platform)
 - [UDN over BGP, VRF-Lite and EVPN (containerlab fabric)](#udn-over-bgp-vrf-lite-and-evpn-containerlab-fabric)
   - [Can this be simulated on this lab? Yes - here is the honest shape of it](#can-this-be-simulated-on-this-lab-yes---here-is-the-honest-shape-of-it)
   - [The one idea to drop first: you do not move a UDN's default gateway](#the-one-idea-to-drop-first-you-do-not-move-a-udns-default-gateway)
@@ -2082,6 +2083,25 @@ flows reads it. Run its playbooks from inside the directory:
 ```bash
 cd compact-cluster
 ansible-playbook -i ../inventory/hosts setup_compact_cluster.yaml --ask-vault-pass
+```
+
+## Hosted clusters on the KubeVirt platform
+
+**Lives in [`kubevirt/`](kubevirt/).** A hosted cluster (`hcp-kv1`) whose
+workers are KubeVirt VMs that its NodePool creates on the hub's OpenShift
+Virtualization. On this lab they are nested VMs, so there's no ISO and no
+Agent to approve. Ingress goes through the hub's router by default, with
+MetalLB inside the hosted cluster as a per-cluster toggle. Start with
+[kubevirt/README.md](kubevirt/README.md).
+
+hcp-kv1 is an ordinary `hosted_clusters` entry with `platform: kubevirt`, so
+`setup-dns` and `setup-hub-acm` give it its API name and pool.
+`create_hosted_cluster.yaml` skips it. Run its playbook from inside the
+directory:
+
+```bash
+cd kubevirt
+ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass
 ```
 
 ## UDN over BGP, VRF-Lite and EVPN (containerlab fabric)

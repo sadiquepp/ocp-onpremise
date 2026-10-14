@@ -1,0 +1,57 @@
+{# The worker VMs. On the KubeVirt platform the NodePool CREATES them: for
+   each replica the Cluster API KubeVirt provider in the control-plane
+   namespace makes a VirtualMachine there, CDI fills its root disk from the
+   RHCOS image in the release payload, and it fetches its Ignition from the
+   ignition-server Route and joins. Scaling, repair and upgrade are all done by
+   changing this object - no ISO, no Agents to approve. #}
+---
+apiVersion: hypershift.openshift.io/v1beta1
+kind: NodePool
+metadata:
+  name: nodepool-{{ kv.name }}-1
+  namespace: {{ kv.name }}
+spec:
+  clusterName: {{ kv.name }}
+  replicas: {{ kv.replicas }}
+  management:
+{# A failed VM is deleted and replaced. Upgrades are Replace: new VMs from
+   the new release's image, rather than an in-place update of the old ones. #}
+    autoRepair: true
+    upgradeType: Replace
+  release:
+    image: {{ kv.release_image }}
+  platform:
+    type: KubeVirt
+    kubevirt:
+      compute:
+        cores: {{ kv.cores }}
+        memory: {{ kv.memory }}
+      rootVolume:
+        type: Persistent
+        persistent:
+          size: {{ kv.root_volume_size }}
+{% if kv.root_volume_storage_class | length > 0 %}
+          storageClass: {{ kv.root_volume_storage_class }}
+{% endif %}
+{% if kv.root_volume_access_mode | length > 0 %}
+          accessModes:
+            - {{ kv.root_volume_access_mode }}
+{% endif %}
+{% if kv.root_volume_mode | length > 0 %}
+          volumeMode: {{ kv.root_volume_mode }}
+{% endif %}
+{% if kv.ingress == 'metallb' %}
+{# One NIC, on the lab network: the localnet NAD in the control-plane
+   namespace (nad.yaml.j2), and none on the hub's pod network. MetalLB inside
+   the hosted cluster then answers ARP for the *.apps address where clients
+   can see it, the node's default route is on the same NIC so replies leave
+   the way requests came in, and libvirt's dnsmasq hands out the address
+   (.201-.249) and the resolver. #}
+      attachDefaultNetwork: false
+      additionalNetworks:
+        - name: {{ kv.cp_namespace }}/{{ kubevirt_localnet_nad }}
+{% else %}
+{# The hub's pod network only. The Service behind HyperShift's wildcard
+   passthrough Route selects these VMs' virt-launcher pods there. #}
+      attachDefaultNetwork: true
+{% endif %}

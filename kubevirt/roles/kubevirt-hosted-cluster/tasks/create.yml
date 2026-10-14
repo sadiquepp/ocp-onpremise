@@ -1,0 +1,112 @@
+---
+# Render, then apply, one cluster's bundle. 'kv' is its entry in
+# kubevirt_specs. Order matters on the management cluster:
+#
+#   1. the API pool        - so the kube-apiserver Service gets its address the
+#                            moment HyperShift creates it
+#   2. the HostedCluster   - HyperShift creates the control-plane namespace
+#   3. the NAD             - 'ingress: metallb' only; it lives in that namespace
+#   4. the NodePool        - its VMs refer to the NAD, so it goes last
+#   5. the ACM import
+#
+# With kubevirt_apply false it stops after rendering, and the files under
+# kubevirt/rendered/<name>/ are the whole of what would have been applied.
+
+- name: "{{ kv.name }} | Make the render directory"
+  ansible.builtin.file:
+    path: "{{ kubevirt_render_dir }}/{{ kv.name }}"
+    state: directory
+    mode: '0700'
+
+# ManagedCluster comes with MCE; KlusterletAddonConfig only with ACM.
+- name: "{{ kv.name }} | Check which ACM import kinds the management cluster has"
+  ansible.builtin.command:
+    cmd: oc get crd {{ item }}
+  loop:
+    - managedclusters.cluster.open-cluster-management.io
+    - klusterletaddonconfigs.agent.open-cluster-management.io
+  register: kubevirt_import_crds
+  changed_when: false
+  failed_when: false
+
+- name: "{{ kv.name }} | Note them"
+  ansible.builtin.set_fact:
+    kubevirt_has_managedcluster: "{{ kubevirt_import_crds.results[0].rc == 0 }}"
+    kubevirt_has_klusterletaddonconfig: "{{ kubevirt_import_crds.results[1].rc == 0 }}"
+
+# 0600: the HostedCluster file carries the pull secret.
+- name: "{{ kv.name }} | Render the bundle"
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ kubevirt_render_dir }}/{{ kv.name }}/{{ item.dest }}"
+    mode: '0600'
+  loop:
+    - {src: api-pool.yaml.j2, dest: 01-api-pool.yaml}
+    - {src: hosted-cluster.yaml.j2, dest: 02-hosted-cluster.yaml}
+    - {src: nad.yaml.j2, dest: 03-nad.yaml, when: "{{ kv.ingress == 'metallb' }}"}
+    - {src: nodepool.yaml.j2, dest: 04-nodepool.yaml}
+    - {src: acm-import.yaml.j2, dest: 05-acm-import.yaml}
+  loop_control:
+    label: "{{ item.dest }}"
+  when: item.when | default(true) | bool
+
+# A cluster switched to 'route' after being rendered as 'metallb' must not
+# leave a NAD file behind that a hand `oc apply -f rendered/<name>/` would pick up.
+- name: "{{ kv.name }} | Remove a NAD left from an earlier MetalLB render"
+  ansible.builtin.file:
+    path: "{{ kubevirt_render_dir }}/{{ kv.name }}/03-nad.yaml"
+    state: absent
+  when: kv.ingress != 'metallb'
+
+- name: "{{ kv.name }} | Stop here when not applying"
+  ansible.builtin.debug:
+    msg: >-
+      kubevirt_apply is false - rendered {{ kubevirt_render_dir }}/{{ kv.name }}/,
+      applied nothing. Apply by hand in file order (the NAD only after the
+      HostedCluster has created {{ kv.cp_namespace }}), or re-run without
+      -e kubevirt_apply=false.
+  when: not (kubevirt_apply | bool)
+
+- name: "{{ kv.name }} | Apply"
+  when: kubevirt_apply | bool
+  block:
+    - name: "{{ kv.name }} | Apply the API pool"
+      ansible.builtin.command:
+        cmd: oc apply -f {{ kubevirt_render_dir }}/{{ kv.name }}/01-api-pool.yaml
+      register: kubevirt_apply_pool
+      changed_when: "kubevirt_apply_pool.stdout_lines | reject('search', ' unchanged$') | list | length > 0"
+
+    - name: "{{ kv.name }} | Apply the HostedCluster"
+      ansible.builtin.command:
+        cmd: oc apply -f {{ kubevirt_render_dir }}/{{ kv.name }}/02-hosted-cluster.yaml
+      register: kubevirt_apply_hc
+      changed_when: "kubevirt_apply_hc.stdout_lines | reject('search', ' unchanged$') | list | length > 0"
+
+    - name: "{{ kv.name }} | Wait for HyperShift to create the control-plane namespace"
+      ansible.builtin.command:
+        cmd: oc get namespace {{ kv.cp_namespace }}
+      register: kubevirt_cp_ns
+      retries: 30
+      delay: 10
+      until: kubevirt_cp_ns.rc == 0
+      changed_when: false
+
+    - name: "{{ kv.name }} | Apply the localnet NAD"
+      ansible.builtin.command:
+        cmd: oc apply -f {{ kubevirt_render_dir }}/{{ kv.name }}/03-nad.yaml
+      register: kubevirt_apply_nad
+      changed_when: "kubevirt_apply_nad.stdout_lines | reject('search', ' unchanged$') | list | length > 0"
+      when: kv.ingress == 'metallb'
+
+    - name: "{{ kv.name }} | Apply the NodePool"
+      ansible.builtin.command:
+        cmd: oc apply -f {{ kubevirt_render_dir }}/{{ kv.name }}/04-nodepool.yaml
+      register: kubevirt_apply_np
+      changed_when: "kubevirt_apply_np.stdout_lines | reject('search', ' unchanged$') | list | length > 0"
+
+    - name: "{{ kv.name }} | Apply the ACM import"
+      ansible.builtin.command:
+        cmd: oc apply -f {{ kubevirt_render_dir }}/{{ kv.name }}/05-acm-import.yaml
+      register: kubevirt_apply_import
+      changed_when: "kubevirt_apply_import.stdout_lines | reject('search', ' unchanged$') | list | length > 0"
+      when: kubevirt_has_managedcluster | bool or kubevirt_has_klusterletaddonconfig | bool

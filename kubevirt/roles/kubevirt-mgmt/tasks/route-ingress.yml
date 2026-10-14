@@ -1,0 +1,29 @@
+---
+# ingress: route. A hosted cluster with baseDomainPassthrough gets its apps
+# under the management cluster's *.apps, and HyperShift creates a WILDCARD
+# passthrough Route (*.apps.<name>.<mgmt apps domain>) in its control-plane
+# namespace. The default IngressController refuses wildcard routes unless
+# told otherwise, and an unadmitted route simply never answers.
+#
+# Changing routeAdmission rolls the router pods, one at a time.
+
+- name: Read the default IngressController's wildcard policy
+  ansible.builtin.command:
+    cmd: >-
+      oc -n openshift-ingress-operator get ingresscontroller default
+      -o jsonpath={.spec.routeAdmission.wildcardPolicy}
+  register: kubevirt_wildcard_policy
+  changed_when: false
+
+- name: Let the default IngressController admit wildcard routes
+  ansible.builtin.command:
+    cmd: >-
+      oc -n openshift-ingress-operator patch ingresscontroller default --type=merge
+      -p '{"spec":{"routeAdmission":{"wildcardPolicy":"WildcardsAllowed"}}}'
+  when: kubevirt_wildcard_policy.stdout != 'WildcardsAllowed'
+
+- name: Wait for the routers to roll out with it
+  ansible.builtin.command:
+    cmd: oc -n openshift-ingress rollout status deployment/router-default --timeout=600s
+  changed_when: false
+  when: kubevirt_wildcard_policy.stdout != 'WildcardsAllowed'

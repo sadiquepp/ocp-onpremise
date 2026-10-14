@@ -1,0 +1,34 @@
+{# The kube-apiserver's single-address MetalLB pool, for one cluster.
+
+   IDENTICAL to what ../../../../roles/setup-hub-acm/templates/metal-lb/05-ip-pool.yaml.j2
+   and 06-L2Advertisement.yaml.j2 render for this cluster from the same
+   hosted_cluster_metallb_pools entry: same names, same address, same
+   serviceAllocation. Applying it here means a KubeVirt cluster added after the
+   hub was built does not need the hub's 'acm' tag re-run first; when that tag
+   does run, its apply is a no-op for this pool. Change one, change the other. #}
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  namespace: metallb-system
+  name: {{ kv.api_pool }}
+spec:
+  addresses:
+  # {{ kubevirt_mgmt }}'s address for {{ kv.name }}.
+  - {{ kv.api_vip }}-{{ kv.api_vip }}
+  autoAssign: true
+  avoidBuggyIPs: true
+  serviceAllocation:
+    priority: 10
+    namespaces:
+      # The control-plane namespace, where the kube-apiserver Service is.
+      - {{ kv.cp_namespace }}
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: {{ kv.api_pool }}-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+   - {{ kv.api_pool }}
