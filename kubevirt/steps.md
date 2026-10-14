@@ -151,6 +151,47 @@ oc get pods -n online-boutique
 oc get route frontend -n online-boutique -o jsonpath='{.spec.host}{"\n"}'
 ```
 
+### Storage passthrough: a PVC from hub1's storage
+
+`hello-openshift-pvc.yaml` is hello-openshift with its page on a PVC. The PVC
+uses `kubevirt-csi-infra-default`, which kubevirt-csi turns into a disk on
+hub1's default StorageClass (Ceph RBD here) hotplugged into the worker VM.
+Each pod start appends a line to the page, so it shows whether the data
+followed the pod:
+
+```bash
+export KUBECONFIG=/var/lib/libvirt/images/hcp-kv1/kubeconfig
+oc apply -f hello-openshift-pvc.yaml
+oc get pvc -n hello-pvc                       # Bound, kubevirt-csi-infra-default
+oc get pod -n hello-pvc -o wide               # Running - note the NODE
+URL=https://$(oc get route hello-openshift -n hello-pvc -o jsonpath='{.spec.host}')
+curl -k $URL                                  # one line: pod and node
+
+# the same volume, seen from hub1
+HUB=/var/lib/libvirt/images/hub_install/auth/kubeconfig
+oc --kubeconfig $HUB get dv,pvc -n hcp-kv1-hcp-kv1   # a new pvc-... beside the two -rhcos disks, on ocs-external-storagecluster-ceph-rbd
+oc --kubeconfig $HUB get vmi -n hcp-kv1-hcp-kv1 \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.volumeStatus[*].name}{"\n"}{end}'   # hotplugged into one VM
+```
+
+Then move the pod to the other worker. The disk detaches from one VM and
+attaches to the other:
+
+```bash
+NODE=$(oc get pod -n hello-pvc -o jsonpath='{.items[0].spec.nodeName}')
+oc adm cordon $NODE
+oc delete pod -n hello-pvc -l app=hello-openshift
+oc get pod -n hello-pvc -o wide -w            # Running on the other node
+curl -k $URL                                  # two lines, two nodes: same data
+oc adm uncordon $NODE
+oc delete -f hello-openshift-pvc.yaml         # the PVC goes, and its disk on hub1 with it
+```
+
+On a hub built with LVM Storage instead of Ceph the first half works the
+same, but the move fails with an attach error whenever the two worker VMs
+run on different hub workers: the disk lives on one hub worker's local
+storage, and only a VM on that worker can attach it.
+
 ## hcp-kv2: workers on the SNO (optional)
 
 A second hosted cluster beside hcp-kv1: its control plane on hub1 too, its

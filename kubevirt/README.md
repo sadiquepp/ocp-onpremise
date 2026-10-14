@@ -224,7 +224,10 @@ What that gives this lab, and why it matters here:
 - **Ceph RBD as the default StorageClass** (step 7, with
   `use_lvm_storage: false`). CDI gives the worker root disks ReadWriteMany
   block, so the VMs live-migrate when a hub node drains, and kubevirt-csi
-  volumes inside the hosted cluster come from the same pool. A hub on LVM
+  volumes inside the hosted cluster come from the same pool.
+  `hello-openshift-pvc.yaml` tests that passthrough: a PVC in the hosted
+  cluster, its disk on hub1's Ceph, moved between workers
+  ([steps.md, step 10](steps.md#storage-passthrough-a-pvc-from-hub1s-storage)). A hub on LVM
   Storage works too, but its RWO disks can't migrate, so a drain stops the
   workers on that node.
 - **Nested KVM** on the host. Step 4 writes `options kvm-intel nested=1`; it
