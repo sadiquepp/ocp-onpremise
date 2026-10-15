@@ -3,13 +3,33 @@
 Connected lab, Ceph 9 / ODF external storage on hub1, and a hosted cluster
 (`hcp-kv1`) whose workers are KubeVirt VMs that its NodePool creates on hub1,
 nested on this host. Optionally a second one (`hcp-kv2`) with its control
-plane on hub1 and its workers on the single-node cluster:
-[hcp-kv2](#hcp-kv2-workers-on-the-sno-optional). Commands only, start to finish. Explanations:
+plane on hub1 and its workers on the single-node cluster, and a third
+(`hcp-kv3`) with its control plane on a second SNO running MCE, managed from
+hub1's ACM. Commands only, start to finish. Explanations:
 [README.md](README.md).
 
 Steps 1-6 are the same commands as steps 1, 3-7 of the backup/restore flow
 ([../steps.md](../steps.md)), repeated here so this file stands alone. They
 run from the repository root; steps 8 onwards run from `kubevirt/`.
+
+## Contents
+
+- [1. Prepare](#1-prepare)
+- [2. Credentials and lab variables](#2-credentials-and-lab-variables)
+- [3. Bare metal host](#3-bare-metal-host)
+- [4. Ceph cluster](#4-ceph-cluster)
+- [5. Hub1](#5-hub1)
+- [6. Attach Ceph to hub1](#6-attach-ceph-to-hub1)
+- [7. Check the hub can run the workers](#7-check-the-hub-can-run-the-workers)
+- [8. OpenShift Virtualization and the hosted cluster](#8-openshift-virtualization-and-the-hosted-cluster)
+  - step by step: [steps-hosted-cluster.md](steps-hosted-cluster.md)
+- [9. Verify](#9-verify)
+- [10. Workload](#10-workload)
+  - [Storage passthrough: a PVC from hub1's storage](#storage-passthrough-a-pvc-from-hub1s-storage)
+- [hcp-kv2: workers on the SNO (optional)](#hcp-kv2-workers-on-the-sno-optional)
+- [hcp-kv3: control plane on sno3, VMs on the SNO, managed from hub1 (optional)](#hcp-kv3-control-plane-on-sno3-vms-on-the-sno-managed-from-hub1-optional)
+- [MetalLB ingress instead (optional)](#metallb-ingress-instead-optional)
+- [Cleanup](#cleanup)
 
 ## 1. Prepare
 
