@@ -61,7 +61,9 @@ already there is applied unchanged.
 `mgmt` runs 8.2 and 8.3 together. 8.5 and 8.6 have no tag of their own,
 because in the playbook they run as one block under `cluster`; by hand you
 apply the rendered files one at a time. 8.7 is MCE's own: you only check it. The [MetalLB variant](#metallb-variant) adds
-three steps; [hcp-kv2](#hcp-kv2-workers-on-the-sno), with its workers on the SNO, changes four.
+three steps; [hcp-kv2](#hcp-kv2-workers-on-the-sno), with its workers on the SNO, changes four;
+[sno3 and hcp-kv3](#sno3-and-hcp-kv3-control-plane-on-an-mce-cluster) builds the MCE cluster
+step by step, then runs these against it.
 
 ## 8.1 Preflight
 
@@ -457,3 +459,388 @@ through the SNO's router:
 oc --kubeconfig $SNO get route -n hcp-kv2-hcp-kv2               # the *.apps passthrough, on the SNO
 curl -kI https://console-openshift-console.apps.hcp-kv2.apps.sno.mylab.com
 ```
+
+## sno3 and hcp-kv3: control plane on an MCE cluster
+
+The three-cluster layout ([steps.md, hcp-kv3](steps.md#hcp-kv3-control-plane-on-sno3-vms-on-the-sno-managed-from-hub1-optional)):
+hub1's ACM manages, sno3 runs MCE alone and hosts hcp-kv3's control plane, and
+the SNO runs its worker VM. First sno3 itself - `setup_sno3_mce.yaml`, one tag
+per step - then hcp-kv3, which is 8.1-8.9 against sno3.
+
+Before S.1: the SNO built (the hcp-kv2 section of [steps.md](steps.md#hcp-kv2-workers-on-the-sno-optional)),
+and, from the repository root, sno3's zone and hcp-kv3's API name
+(`setup_bm_host.yaml --tags dns`).
+
+```bash
+SNO3PB="ansible-playbook -i ../inventory/hosts setup_sno3_mce.yaml --ask-vault-pass"
+HUB=/var/lib/libvirt/images/hub_install/auth/kubeconfig
+SNO3=/var/lib/libvirt/images/sno3_install/auth/kubeconfig
+SNO=/var/lib/libvirt/images/sno_install/auth/kubeconfig
+M3=/root/kubevirt-manifests/sno3; mkdir -p "$M3"
+```
+
+| Step | What | Tag |
+|---|---|---|
+| S.1 | Build sno3 | `sno` |
+| S.2 | MCE on sno3 | `mce` |
+| S.3 | MetalLB on sno3, hcp-kv3's API pool | `metallb` |
+| S.4 | Import sno3 into hub1's ACM, with hosted-cluster discovery | `import` |
+| S.5 | Import the SNO into hub1's ACM | `import-infra` |
+| K.1-K.9 | hcp-kv3: 8.1-8.9 against sno3 | the KubeVirt playbook's tags |
+
+### S.1 Build sno3
+
+```bash
+$SNO3PB --tags sno
+```
+
+`roles/setup-sno` with sno3's values - the same build as the SNO's, by hand
+too: [../setup_sno.yaml](../setup_sno.yaml) and its role. Skipped once
+`$SNO3` exists. Check:
+
+```bash
+oc --kubeconfig $SNO3 get nodes                 # sno3 Ready
+oc --kubeconfig $SNO3 get sc                    # lvms-vg1 (default) - the control planes' etcd lands here
+dig +short api.sno3.hub.mylab.com @192.168.122.21   # 192.168.122.63
+```
+
+### S.2 MCE on sno3
+
+```bash
+$SNO3PB --tags mce
+```
+
+By hand - MCE alone, no ACM; no channel, so OLM follows the package's default:
+
+```bash
+cat > "$M3/s2-mce-operator.yaml" <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: multicluster-engine
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: multicluster-engine
+  namespace: multicluster-engine
+spec:
+  targetNamespaces:
+    - multicluster-engine
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: multicluster-engine
+  namespace: multicluster-engine
+spec:
+  name: multicluster-engine
+  installPlanApproval: Automatic
+  source: ${CATALOG}
+  sourceNamespace: ${CATALOG_NS}
+EOF
+oc --kubeconfig $SNO3 apply -f "$M3/s2-mce-operator.yaml"
+until oc --kubeconfig $SNO3 get crd multiclusterengines.multicluster.openshift.io >/dev/null 2>&1; do sleep 10; done
+
+cat > "$M3/s2-multiclusterengine.yaml" <<EOF
+apiVersion: multicluster.openshift.io/v1
+kind: MultiClusterEngine
+metadata:
+  name: multiclusterengine
+spec:
+  overrides:
+    components:
+      - name: hypershift
+        enabled: true
+EOF
+oc --kubeconfig $SNO3 apply -f "$M3/s2-multiclusterengine.yaml"
+oc --kubeconfig $SNO3 get multiclusterengine -w                 # PHASE Available
+oc --kubeconfig $SNO3 -n hypershift rollout status deployment/operator
+```
+
+Then turn off MCE's own import of the hosted clusters it creates - hub1
+imports them (S.4, K.7), and two importers would fight over the klusterlet.
+Add `autoImportDisabled` to the variables already there:
+
+```bash
+oc --kubeconfig $SNO3 -n multicluster-engine get addondeploymentconfig hypershift-addon-deploy-config \
+  -o jsonpath='{.spec.customizedVariables}{"\n"}'               # what is there now
+oc --kubeconfig $SNO3 -n multicluster-engine patch addondeploymentconfig hypershift-addon-deploy-config \
+  --type=json -p '[{"op":"add","path":"/spec/customizedVariables/-","value":{"name":"autoImportDisabled","value":"true"}}]'
+```
+
+(`/spec/customizedVariables/-` needs the list to exist; if the first command
+printed nothing, use `--type=merge -p '{"spec":{"customizedVariables":[{"name":"autoImportDisabled","value":"true"}]}}'`.)
+
+### S.3 MetalLB on sno3, and hcp-kv3's API pool
+
+```bash
+$SNO3PB --tags metallb
+```
+
+By hand - the operator, then the instance, then hcp-kv3's single-address
+pool, bound to its control-plane namespace exactly as on hub1:
+
+```bash
+cat > "$M3/s3-metallb-operator.yaml" <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: metallb-system
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: metallb-operator
+  namespace: metallb-system
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: metallb-operator-sub
+  namespace: metallb-system
+spec:
+  channel: stable
+  name: metallb-operator
+  source: ${CATALOG}
+  sourceNamespace: ${CATALOG_NS}
+EOF
+oc --kubeconfig $SNO3 apply -f "$M3/s3-metallb-operator.yaml"
+until oc --kubeconfig $SNO3 get crd ipaddresspools.metallb.io >/dev/null 2>&1; do sleep 10; done
+
+cat > "$M3/s3-metallb-hcp-kv3.yaml" <<EOF
+apiVersion: metallb.io/v1beta1
+kind: MetalLB
+metadata:
+  name: metallb
+  namespace: metallb-system
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: hcp-kv3-api-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 192.168.122.253-192.168.122.253
+  autoAssign: true
+  avoidBuggyIPs: true
+  serviceAllocation:
+    priority: 10
+    namespaces:
+      - hcp-kv3-hcp-kv3
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: hcp-kv3-api-pool-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - hcp-kv3-api-pool
+EOF
+oc --kubeconfig $SNO3 apply -f "$M3/s3-metallb-hcp-kv3.yaml"
+oc --kubeconfig $SNO3 get ipaddresspool -n metallb-system      # hcp-kv3-api-pool
+```
+
+### S.4 Import sno3 into hub1's ACM, with hosted-cluster discovery
+
+```bash
+$SNO3PB --tags import
+```
+
+By hand, on hub1. An MCE cluster already runs its own klusterlet and
+add-ons, so ACM's go beside them: a `noOperator` KlusterletConfig, and the
+add-ons' agents in their own namespace. The hypershift-addon reports sno3's
+hosted clusters to hub1 and leaves sno3's HyperShift operator to sno3's MCE.
+Red Hat's procedure sets these hub-wide; hub1 hosts its own hosted clusters,
+so they are attached to sno3's add-ons only (`spec.configs`):
+
+```bash
+cat > "$M3/s4-hub-import.yaml" <<EOF
+apiVersion: config.open-cluster-management.io/v1alpha1
+kind: KlusterletConfig
+metadata:
+  name: mce-import-klusterlet-config
+spec:
+  installMode:
+    type: noOperator
+    noOperator:
+      postfix: mce-import
+---
+apiVersion: addon.open-cluster-management.io/v1alpha1
+kind: AddOnDeploymentConfig
+metadata:
+  name: mce-addon-ns-config
+  namespace: multicluster-engine
+spec:
+  agentInstallNamespace: open-cluster-management-agent-addon-discovery
+---
+apiVersion: addon.open-cluster-management.io/v1alpha1
+kind: AddOnDeploymentConfig
+metadata:
+  name: mce-hypershift-addon-config
+  namespace: multicluster-engine
+spec:
+  agentInstallNamespace: open-cluster-management-agent-addon-discovery
+  customizedVariables:
+    - name: disableHOManagement
+      value: "true"
+    - name: disableMetrics
+      value: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sno3
+EOF
+for a in work-manager managed-serviceaccount cluster-proxy; do
+cat >> "$M3/s4-hub-import.yaml" <<EOF
+---
+apiVersion: addon.open-cluster-management.io/v1alpha1
+kind: ManagedClusterAddOn
+metadata:
+  name: ${a}
+  namespace: sno3
+spec:
+  configs:
+    - group: addon.open-cluster-management.io
+      resource: addondeploymentconfigs
+      name: mce-addon-ns-config
+      namespace: multicluster-engine
+EOF
+done
+cat >> "$M3/s4-hub-import.yaml" <<EOF
+---
+apiVersion: addon.open-cluster-management.io/v1alpha1
+kind: ManagedClusterAddOn
+metadata:
+  name: hypershift-addon
+  namespace: sno3
+spec:
+  configs:
+    - group: addon.open-cluster-management.io
+      resource: addondeploymentconfigs
+      name: mce-hypershift-addon-config
+      namespace: multicluster-engine
+---
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: sno3
+  annotations:
+    agent.open-cluster-management.io/klusterlet-config: mce-import-klusterlet-config
+  labels:
+    cloud: auto-detect
+    vendor: auto-detect
+    cluster.open-cluster-management.io/clusterset: default
+spec:
+  hubAcceptsClient: true
+  leaseDurationSeconds: 60
+EOF
+oc --kubeconfig $HUB apply -f "$M3/s4-hub-import.yaml"
+
+# the import itself: hub1 uses sno3's kubeconfig once to install its klusterlet
+oc --kubeconfig $HUB -n sno3 create secret generic auto-import-secret \
+  --from-literal=autoImportRetry=5 --from-file=kubeconfig=$SNO3
+
+oc --kubeconfig $HUB get managedcluster sno3 -w                  # JOINED, AVAILABLE True
+oc --kubeconfig $HUB get managedclusteraddon -n sno3             # hypershift-addon Available
+oc --kubeconfig $SNO3 get pods -n open-cluster-management-agent-addon-discovery   # ACM's agents, beside MCE's own
+```
+
+If the add-ons stay unavailable, this per-cluster scoping is the first thing
+to check: `oc --kubeconfig $HUB get managedclusteraddon -n sno3 -o yaml`
+shows the config each one resolved.
+
+### S.5 Import the SNO into hub1's ACM
+
+```bash
+$SNO3PB --tags import-infra
+```
+
+An ordinary import, so ACM's search and virtualization views show the VMs it
+runs. By hand:
+
+```bash
+cat > "$M3/s5-sno-import.yaml" <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sno
+---
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: sno
+  labels:
+    cloud: auto-detect
+    vendor: auto-detect
+    cluster.open-cluster-management.io/clusterset: default
+spec:
+  hubAcceptsClient: true
+---
+apiVersion: agent.open-cluster-management.io/v1
+kind: KlusterletAddonConfig
+metadata:
+  name: sno
+  namespace: sno
+spec:
+  clusterName: sno
+  clusterNamespace: sno
+  clusterLabels:
+    cloud: auto-detect
+    vendor: auto-detect
+  applicationManager:
+    enabled: true
+  policyController:
+    enabled: true
+  searchCollector:
+    enabled: true
+  certPolicyController:
+    enabled: true
+EOF
+oc --kubeconfig $HUB apply -f "$M3/s5-sno-import.yaml"
+oc --kubeconfig $HUB -n sno create secret generic auto-import-secret \
+  --from-literal=autoImportRetry=5 --from-file=kubeconfig=$SNO
+oc --kubeconfig $HUB get managedcluster sno -w                   # JOINED, AVAILABLE True
+```
+
+### K.1-K.9 hcp-kv3: 8.1-8.9 against sno3
+
+The steps above, with three differences: the control-plane side runs against
+sno3, the VM side against the SNO (as for hcp-kv2), and the ACM import is
+hub1 adopting what it discovered on sno3.
+
+```bash
+PB="ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass -e kubevirt_mgmt=sno3 -e kubevirt_cluster=hcp-kv3"
+```
+
+| Step | For hcp-kv3 |
+|---|---|
+| K.1 (8.1) | `$PB --tags preflight` - MCE, MetalLB and `hcp-kv3-api-pool` (`.253`) on **sno3**, the SNO answering with a StorageClass |
+| K.2, K.3 (8.2, 8.3) | On the **SNO** - already done for hcp-kv2; `$PB --tags mgmt` confirms |
+| K.4 (8.4) | Two passes, as for hcp-kv2: render, `oc --kubeconfig $SNO apply -f rendered/hcp-kv3/00-infra-access.yaml`, render again |
+| K.5 (8.5) | `oc --kubeconfig $SNO3 apply -f rendered/hcp-kv3/01-hosted-cluster.yaml` - **sno3**; `oc --kubeconfig $SNO3 get pods -n hcp-kv3-hcp-kv3` (one of each: SingleReplica), `get svc kube-apiserver` (`.253`) |
+| K.6 (8.6) | `oc --kubeconfig $SNO3 apply -f rendered/hcp-kv3/03-nodepool.yaml`; watch the VM on the **SNO**: `oc --kubeconfig $SNO get dv,vm,vmi -n hcp-kv3-hcp-kv3 -w` |
+| K.7 (8.7) | **hub1 imports it from discovery** (below) - MCE on sno3 does not, it was turned off in S.2 |
+| K.8 (8.8) | `$PB --tags wait` - waits, extracts the kubeconfig from **sno3**, and does K.7 |
+| K.9 (8.9) | `$PB --tags verify`; console at `https://console-openshift-console.apps.hcp-kv3.apps.sno.mylab.com` |
+
+**K.7 by hand.** Once hcp-kv3's API is up, sno3's hypershift-addon reports it
+to hub1 as a DiscoveredCluster named `sno3-hcp-kv3`; setting
+`importAsManagedCluster` on it imports it:
+
+```bash
+oc --kubeconfig $HUB get discoveredcluster -n sno3 \
+  -o custom-columns=NAME:.metadata.name,DISPLAY:.spec.displayName,TYPE:.spec.type,STATUS:.spec.status
+DC=$(oc --kubeconfig $HUB get discoveredcluster -n sno3 \
+  -o jsonpath='{.items[?(@.spec.displayName=="sno3-hcp-kv3")].metadata.name}')
+oc --kubeconfig $HUB -n sno3 patch discoveredcluster $DC --type=merge \
+  -p '{"spec":{"importAsManagedCluster":true}}'
+oc --kubeconfig $HUB get managedcluster sno3-hcp-kv3 -w          # JOINED, AVAILABLE True
+```
+
+Remove it with `$PB --tags destroy`: that deletes `sno3-hcp-kv3` from hub1
+first, then the NodePool and HostedCluster on sno3, then its namespace and
+access on the SNO.
