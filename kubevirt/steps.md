@@ -332,8 +332,9 @@ curl -kI https://console-openshift-console.apps.hcp-kv3.apps.sno.mylab.com
 ```
 
 Remove it with `--tags destroy -e kubevirt_mgmt=sno3`. sno3 goes with
-`virsh destroy sno3; virsh undefine sno3 --remove-all-storage`, after
-`oc delete managedcluster sno3` on hub1.
+`cleanup.yaml --tags sno3`, from the repository root (see Cleanup).
+That also takes anything hcp-kv3 left behind: its ManagedClusters on hub1,
+its VM namespace on the SNO.
 
 ## MetalLB ingress instead (optional)
 
@@ -362,6 +363,8 @@ entry in `vars.yaml`.
 cd kubevirt
 ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass \
   --tags destroy
+ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass \
+  --tags destroy -e kubevirt_mgmt=sno3          # hcp-kv3, if built
 
 cd ..
 ansible-playbook -i inventory/hosts cleanup-hub.yaml
@@ -372,3 +375,14 @@ ansible-playbook -i inventory/hosts cleanup.yaml
 `--tags destroy` removes hcp-kv2 as well while the SNO is up, its SNO side
 included - run it before the SNO goes. `cleanup.yaml` removes the SNO with
 everything else; `cleanup.yaml --tags sno` removes only it.
+
+`cleanup.yaml` removes sno3 too; `cleanup.yaml --tags sno3` removes only it:
+- **On hub1:** its ManagedCluster, and `sno3-hcp-kv3`.
+- **On the SNO:** hcp-kv3's VM namespace and ClusterRole.
+- **On the host:** the VM and its disks, `sno3/` and `sno3_install/`.
+- **In kubevirt/:** the rendered files for sno3 and hcp-kv3.
+
+Each cluster is only touched while it still answers, so it is safe in
+any order. The `--tags destroy -e kubevirt_mgmt=sno3` above is still the
+clean way to remove hcp-kv3: it deletes the HostedCluster on sno3 before
+the VM goes.

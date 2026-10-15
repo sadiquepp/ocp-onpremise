@@ -8,6 +8,9 @@
 ## tags to remove everything, or narrow it:
 ##
 ##   --tags sno      the single-node OpenShift cluster only
+##   --tags sno3     the extra single-node clusters (sno_extra_clusters: sno3,
+##                   the MCE cluster of kubevirt/setup_sno3_mce.yaml), with
+##                   what their hosted clusters left on hub1 and on the SNO
 ##   --tags compact  the three-node compact cluster only, with the worker VMs
 ##                   of the hosted cluster it manages (hcp-compact1)
 ##   --tags compacthcp  just those hosted cluster worker VMs and their cached
@@ -265,6 +268,90 @@
         virsh undefine {{ sno_name }} >/dev/null 2>&1 || true
       rm -rf {{ sno_vm_folder | default(download_dir ~ '/' ~ sno_name) }}
       rm -rf {{ sno_install_folder }}
+
+  ## -------------------------------------------------------------------------
+  ## The extra single-node clusters (sno_extra_clusters) - sno3, the MCE
+  ## cluster of kubevirt/setup_sno3_mce.yaml
+  ## -------------------------------------------------------------------------
+  ## sno3 hosts the control planes of the hosted clusters whose API address in
+  ## hosted_cluster_metallb_pools is keyed by its name (hcp-kv3). Their worker
+  ## VMs run on another cluster (infra: sno) and hub1's ACM imported them, so
+  ## destroying sno3 alone would leave both behind: VMs on the SNO with no
+  ## control plane, and ManagedClusters on hub1 that never come back. Those go
+  ## first, each only while its cluster still answers - in a full run hub1 and
+  ## the SNO are already gone, and there is nothing left to tidy.
+  - name: Find the hosted clusters whose control plane runs on an extra SNO
+    tags: [sno3]
+    ansible.builtin.set_fact:
+      sno_extra_hosted: >-
+        {{ sno_extra_hosted | default({}) | combine({item.name: (hosted_cluster_metallb_pools | default({})
+             | dict2items | selectattr('value.ip', 'defined')
+             | selectattr('value.ip', 'contains', item.name)
+             | map(attribute='key') | list)}) }}
+    loop: "{{ sno_extra_clusters | default([]) }}"
+    loop_control:
+      label: "{{ item.name }}"
+
+  ## The ManagedCluster of the SNO itself, and the ones hub1 imported from its
+  ## discovery (<sno>-<hosted cluster>, the hypershift-addon's default prefix).
+  ## --wait=false: with the cluster about to go, the klusterlet can't confirm
+  ## its own removal, and ACM finishes without it.
+  - name: Remove the extra SNOs and their hosted clusters from hub1's ACM
+    tags: [sno3]
+    shell: |
+      export KUBECONFIG={{ hub_install_folder }}/auth/kubeconfig
+      [ -f "$KUBECONFIG" ] || exit 0
+      oc --request-timeout=15s get managedclusters >/dev/null 2>&1 || exit 0
+      {% for s in sno_extra_clusters | default([]) %}
+      {% for hc in sno_extra_hosted[s.name] %}
+      oc delete managedcluster {{ s.name }}-{{ hc }} --ignore-not-found --wait=false
+      {% endfor %}
+      oc delete managedcluster {{ s.name }} --ignore-not-found --wait=false
+      {% endfor %}
+      true
+
+  ## Their worker VMs, disks and access on the SNO: the VM namespace
+  ## (<name>-<name>, as kubevirt/ creates it) and the ClusterRole to read the
+  ## SNO's network config. Only for those whose 'infra' is the SNO.
+  - name: Remove their worker VMs and access from the SNO
+    tags: [sno3]
+    shell: |
+      export KUBECONFIG={{ sno_install_folder }}/auth/kubeconfig
+      [ -f "$KUBECONFIG" ] || exit 0
+      oc --request-timeout=15s get namespaces >/dev/null 2>&1 || exit 0
+      {% for s in sno_extra_clusters | default([]) %}
+      {% for hc in hosted_clusters | default([]) if hc is mapping and hc.name in sno_extra_hosted[s.name] and hc.infra | default('') == sno_name %}
+      oc delete namespace {{ hc.name }}-{{ hc.name }} --ignore-not-found --wait=false
+      oc delete clusterrolebinding,clusterrole hcp-infra-network-reader-{{ hc.name }} --ignore-not-found
+      {% endfor %}
+      {% endfor %}
+      true
+
+  ## The VM, its disks (root and LVMS) and its install folder - the same
+  ## reasoning as the SNO above for taking the kubeconfig with it. The paths
+  ## are the ones kubevirt/setup_sno3_mce.yaml builds it with.
+  - name: Destroy the extra single-node OpenShift VMs
+    tags: [sno3]
+    shell: |
+      {% for s in sno_extra_clusters | default([]) %}
+      virsh destroy  {{ s.name }} >/dev/null 2>&1 || true
+      virsh undefine {{ s.name }} --remove-all-storage >/dev/null 2>&1 || \
+        virsh undefine {{ s.name }} >/dev/null 2>&1 || true
+      rm -rf {{ download_dir }}/{{ s.name }}
+      rm -rf {{ download_dir }}/{{ s.name }}_install
+      {% endfor %}
+      true
+
+  ## kubevirt/'s rendered files for them, which hold the old cluster's
+  ## kubeconfig (the hub1 import) and token.
+  - name: Remove kubevirt/'s rendered files for the extra SNOs and their hosted clusters
+    tags: [sno3]
+    ansible.builtin.file:
+      path: "{{ playbook_dir }}/kubevirt/rendered/{{ item }}"
+      state: absent
+    loop: >-
+      {{ (sno_extra_clusters | default([]) | map(attribute='name') | list)
+         + (sno_extra_hosted.values() | flatten) }}
 
   ## -------------------------------------------------------------------------
   ## The three-node compact cluster (compact-cluster/setup_compact_cluster.yaml)
