@@ -538,23 +538,31 @@ Before S.1: the SNO built (the hcp-kv2 section of [steps.md](steps.md#hcp-kv2-wo
 and, from the repository root, sno3's zone and hcp-kv3's API name
 (`setup_bm_host.yaml --tags dns`).
 
+Once, write the variables every step below uses to a file:
+
 ```bash
-# from kubevirt/, as at the top
+mkdir -p /root/kubevirt-manifests/sno3
+cat > /root/kubevirt-manifests/sno3.env <<'EOF'
+cd /root/ocp-onpremise/kubevirt
 SNO3PB="ansible-playbook -i ../inventory/hosts setup_sno3_mce.yaml --ask-vault-pass"
-HUB=/var/lib/libvirt/images/hub_install/auth/kubeconfig
-SNO3=/var/lib/libvirt/images/sno3_install/auth/kubeconfig
-SNO=/var/lib/libvirt/images/sno_install/auth/kubeconfig
-M3=/root/kubevirt-manifests/sno3; mkdir -p "$M3"
-CATALOG=redhat-operators         # kubevirt_catalog_source
-CATALOG_NS=openshift-marketplace # kubevirt_catalog_source_namespace
+HUB=/var/lib/libvirt/images/hub_install/auth/kubeconfig     # hub1: ACM
+SNO3=/var/lib/libvirt/images/sno3_install/auth/kubeconfig   # sno3: MCE, hcp-kv3's control plane
+SNO=/var/lib/libvirt/images/sno_install/auth/kubeconfig     # the SNO: the VMs
+M3=/root/kubevirt-manifests/sno3                            # the by-hand files
+CATALOG=redhat-operators                                    # kubevirt_catalog_source
+CATALOG_NS=openshift-marketplace                            # kubevirt_catalog_source_namespace
+EOF
 ```
 
-This block sets everything S.1-S.5 use, so it works in a fresh shell. Every
-`oc` names its cluster with `--kubeconfig`. Check the catalog variables are
-set before a `cat > ...` (an empty one gives `spec.source: Required value`):
+(Change the `cd` if your clone is not `/root/ocp-onpremise`.) Every block
+from S.1 on starts by loading that file, so each works in a fresh shell, or
+on its own when you jump to it. Every `oc` names its cluster with
+`--kubeconfig`; an empty `$HUB` shows up as `unknown shorthand flag: 'f' in
+-f`, an empty `$CATALOG` as `spec.source: Required value`. To check:
 
 ```bash
-echo "CATALOG=$CATALOG CATALOG_NS=$CATALOG_NS"
+. /root/kubevirt-manifests/sno3.env
+echo "HUB=$HUB SNO3=$SNO3 SNO=$SNO M3=$M3 CATALOG=$CATALOG/$CATALOG_NS"
 ```
 
 | Step | What | Tag |
@@ -569,6 +577,7 @@ echo "CATALOG=$CATALOG CATALOG_NS=$CATALOG_NS"
 ### S.1 Build sno3
 
 ```bash
+. /root/kubevirt-manifests/sno3.env
 $SNO3PB --tags sno
 ```
 
@@ -577,6 +586,7 @@ too: [../setup_sno.yaml](../setup_sno.yaml) and its role. Skipped once
 `$SNO3` exists. Check:
 
 ```bash
+. /root/kubevirt-manifests/sno3.env
 oc --kubeconfig $SNO3 get nodes                 # sno3 Ready
 oc --kubeconfig $SNO3 get sc                    # lvms-vg1 (default) - the control planes' etcd lands here
 dig +short api.sno3.hub.mylab.com @192.168.122.21   # 192.168.122.63
@@ -585,12 +595,14 @@ dig +short api.sno3.hub.mylab.com @192.168.122.21   # 192.168.122.63
 ### S.2 MCE on sno3
 
 ```bash
+. /root/kubevirt-manifests/sno3.env
 $SNO3PB --tags mce
 ```
 
 By hand - MCE alone, no ACM; no channel, so OLM follows the package's default:
 
 ```bash
+. /root/kubevirt-manifests/sno3.env
 cat > "$M3/s2-mce-operator.yaml" <<EOF
 apiVersion: v1
 kind: Namespace
@@ -641,6 +653,7 @@ imports them (S.4, K.7), and two importers would fight over the klusterlet.
 Add `autoImportDisabled` to the variables already there:
 
 ```bash
+. /root/kubevirt-manifests/sno3.env
 oc --kubeconfig $SNO3 -n multicluster-engine get addondeploymentconfig hypershift-addon-deploy-config \
   -o jsonpath='{.spec.customizedVariables}{"\n"}'               # what is there now
 oc --kubeconfig $SNO3 -n multicluster-engine patch addondeploymentconfig hypershift-addon-deploy-config \
@@ -653,6 +666,7 @@ printed nothing, use `--type=merge -p '{"spec":{"customizedVariables":[{"name":"
 ### S.3 MetalLB on sno3, and hcp-kv3's API pool
 
 ```bash
+. /root/kubevirt-manifests/sno3.env
 $SNO3PB --tags metallb
 ```
 
@@ -660,6 +674,7 @@ By hand - the operator, then the instance, then hcp-kv3's single-address
 pool, bound to its control-plane namespace exactly as on hub1:
 
 ```bash
+. /root/kubevirt-manifests/sno3.env
 cat > "$M3/s3-metallb-operator.yaml" <<EOF
 apiVersion: v1
 kind: Namespace
@@ -724,6 +739,7 @@ oc --kubeconfig $SNO3 get ipaddresspool -n metallb-system      # hcp-kv3-api-poo
 ### S.4 Import sno3 into hub1's ACM, with hosted-cluster discovery
 
 ```bash
+. /root/kubevirt-manifests/sno3.env
 $SNO3PB --tags import
 ```
 
@@ -735,6 +751,7 @@ Red Hat's procedure sets these hub-wide; hub1 hosts its own hosted clusters,
 so they are attached to sno3's add-ons only (`spec.configs`):
 
 ```bash
+. /root/kubevirt-manifests/sno3.env
 cat > "$M3/s4-hub-import.yaml" <<EOF
 apiVersion: config.open-cluster-management.io/v1alpha1
 kind: KlusterletConfig
@@ -834,6 +851,7 @@ shows the config each one resolved.
 ### S.5 Import the SNO into hub1's ACM
 
 ```bash
+. /root/kubevirt-manifests/sno3.env
 $SNO3PB --tags import-infra
 ```
 
@@ -841,6 +859,7 @@ An ordinary import, so ACM's search and virtualization views show the VMs it
 runs. By hand:
 
 ```bash
+. /root/kubevirt-manifests/sno3.env
 cat > "$M3/s5-sno-import.yaml" <<EOF
 apiVersion: v1
 kind: Namespace
@@ -891,11 +910,8 @@ sno3, the VM side against the SNO (as for hcp-kv2), and the ACM import is
 hub1 adopting what it discovered on sno3.
 
 ```bash
-# from kubevirt/, as at the top
+. /root/kubevirt-manifests/sno3.env    # HUB, SNO3, SNO; cd kubevirt/
 PB="ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass -e kubevirt_mgmt=sno3 -e kubevirt_cluster=hcp-kv3"
-HUB=/var/lib/libvirt/images/hub_install/auth/kubeconfig
-SNO3=/var/lib/libvirt/images/sno3_install/auth/kubeconfig
-SNO=/var/lib/libvirt/images/sno_install/auth/kubeconfig
 ```
 
 | Step | For hcp-kv3 |
@@ -914,6 +930,7 @@ to hub1 as a DiscoveredCluster named `sno3-hcp-kv3`; setting
 `importAsManagedCluster` on it imports it:
 
 ```bash
+. /root/kubevirt-manifests/sno3.env
 oc --kubeconfig $HUB get discoveredcluster -n sno3 \
   -o custom-columns=NAME:.metadata.name,DISPLAY:.spec.displayName,TYPE:.spec.type,STATUS:.spec.status
 DC=$(oc --kubeconfig $HUB get discoveredcluster -n sno3 \
