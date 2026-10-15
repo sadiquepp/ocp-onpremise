@@ -378,7 +378,9 @@ curl -kI https://console-openshift-console.apps.hcp-kv1.hub.mylab.com
 
 The same steps with `-e kubevirt_cluster=hcp-kv2`, except where its VMs run.
 The control plane, API pool and ACM import are on hub1 as above; the VMs,
-their disks and the `*.apps` Route are on the SNO, so four steps change.
+their disks and the `*.apps` Route are on the SNO, so four steps change:
+8.2/8.3 run on the SNO, 8.4 runs twice with `00` applied to the SNO in
+between, 8.6 is watched on the SNO, and 8.9 probes the SNO's router.
 Before 8.1, the SNO and hcp-kv2's DNS and pool:
 [steps.md, hcp-kv2](steps.md#hcp-kv2-workers-on-the-sno-optional).
 
@@ -400,21 +402,39 @@ oc --kubeconfig $SNO -n openshift-ingress-operator patch ingresscontroller defau
 oc --kubeconfig $SNO -n openshift-ingress rollout status deployment/router-default --timeout=10m
 ```
 
-**Between 8.4 and 8.5: HyperShift's access to the SNO.** 8.4 renders a
-fourth file, `00-infra-access.yaml`, for the SNO: the VM namespace
-`hcp-kv2-hcp-kv2`, ServiceAccount `hcp-infra`, its Role and token, and a
-ClusterRole to read the SNO's network config. Apply it there, then render
-again - `01` picks up the token as the `infra-kubeconfig-hcp-kv2` Secret only
-once it exists:
+**8.4 renders one more file, and runs twice.** For a cluster with
+`infra: sno`, the same render command also writes `00-infra-access.yaml`:
+what HyperShift needs on the SNO (the VM namespace `hcp-kv2-hcp-kv2`, a
+ServiceAccount `hcp-infra` with its Role and token, and read access to the
+SNO's network config). `01` needs that ServiceAccount's token for its
+`infra-kubeconfig-hcp-kv2` Secret, and the token only exists once `00` is
+applied - so render, apply `00`, render again:
 
-```bash
-oc --kubeconfig $SNO apply -f rendered/hcp-kv2/00-infra-access.yaml
-oc --kubeconfig $SNO -n hcp-kv2-hcp-kv2 get secret hcp-infra-token \
-  -o jsonpath='{.data.token}' | wc -c                              # > 0
+1. Render - the same command as 8.4:
 
-$PB --tags cluster -e kubevirt_apply=false
-grep -c 'name: infra-kubeconfig-hcp-kv2' rendered/hcp-kv2/01-hosted-cluster.yaml   # 2: the Secret, and credentials naming it
-```
+   ```bash
+   $PB --tags cluster -e kubevirt_apply=false
+   ls rendered/hcp-kv2/          # 00-infra-access.yaml  01-hosted-cluster.yaml  03-nodepool.yaml
+   grep -A1 'not here yet' rendered/hcp-kv2/01-hosted-cluster.yaml   # no Secret yet: apply 00, render again
+   ```
+
+2. Apply `00` to the SNO, and check it issued the token:
+
+   ```bash
+   oc --kubeconfig $SNO apply -f rendered/hcp-kv2/00-infra-access.yaml
+   oc --kubeconfig $SNO -n hcp-kv2-hcp-kv2 get secret hcp-infra-token \
+     -o jsonpath='{.data.token}' | wc -c                  # > 0
+   ```
+
+3. Render again - the same command. It now reads the token from the SNO, and
+   `01` carries the Secret:
+
+   ```bash
+   $PB --tags cluster -e kubevirt_apply=false
+   grep -c 'name: infra-kubeconfig-hcp-kv2' rendered/hcp-kv2/01-hosted-cluster.yaml   # 2: the Secret, and the credentials naming it
+   ```
+
+(A full run - no `-e kubevirt_apply=false` - does all three itself.)
 
 **8.5** is then the same `oc apply -f rendered/hcp-kv2/01-hosted-cluster.yaml`
 on hub1. Its `spec.platform.kubevirt.credentials` names that Secret and the
