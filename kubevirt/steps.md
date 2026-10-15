@@ -233,6 +233,9 @@ oc get nodes                                  # sno Ready
 oc get sc                                     # lvms-vg1 (default)
 ```
 
+LVMS's disk is `sno_storage_disk_gb`, 512 GB, thin on the host. An SNO built
+with a smaller one: [README, Grow the SNO's storage disk](README.md#grow-the-snos-storage-disk).
+
 hcp-kv2's API name and API pool. A lab built from steps 3-5 already has
 them; on a hub1 built before hcp-kv2 was in `vars.yaml`, render both again:
 

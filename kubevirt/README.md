@@ -29,6 +29,7 @@ Virtualization itself.
 - [What it builds](#what-it-builds)
 - [Ingress: the hub's router, or MetalLB](#ingress-the-hubs-router-or-metallb)
 - [Workers on another cluster: hcp-kv2 on the SNO](#workers-on-another-cluster-hcp-kv2-on-the-sno)
+  - [Grow the SNO's storage disk](#grow-the-snos-storage-disk)
 - [Three clusters: ACM on hub1, MCE on sno3, VMs on the SNO (hcp-kv3)](#three-clusters-acm-on-hub1-mce-on-sno3-vms-on-the-sno-hcp-kv3)
 - [Before you start](#before-you-start)
 - [Run it](#run-it)
@@ -196,7 +197,45 @@ do not suit this:
   workers if the host has room (`free -g`), or at 48 GiB with one worker
   (`nodepool_replicas: 1` on hcp-kv2's entry).
 
+- **Disk.** The worker VMs' root disks (32Gi each) come out of LVMS's thin
+  pool, which is 90% of the SNO's second disk. `sno_storage_disk_gb` is 512,
+  so hcp-kv2's and hcp-kv3's workers fit. The disk is a thin qcow2 on the
+  host, so it uses host space only as it fills. OpenShift Virtualization's
+  built-in OS images, ~55 GB, are turned off (`kubevirt_common_boot_images`).
+  They filled a 100 GB pool and paused hcp-kv2's workers.
+
 [steps.md](steps.md#hcp-kv2-workers-on-the-sno-optional) has the commands.
+
+### Grow the SNO's storage disk
+
+`sno_storage_disk_gb` sizes the disk only when it is created. To grow the
+disk of a running SNO, here from 100 GB to 512 GB, without a rebuild or
+reboot:
+
+```bash
+# on the host: grow the disk under the running VM - still thin, the file grows as written
+virsh domblklist sno                    # vdb -> .../sno_storage.qcow2
+virsh blockresize sno vdb 512G
+
+# in the SNO: let LVM see the new size
+SNO=/var/lib/libvirt/images/sno_install/auth/kubeconfig
+oc --kubeconfig $SNO debug node/sno -q -- chroot /host sh -c \
+  'lsblk /dev/vdb; pvresize /dev/vdb; vgs vg1; lvs -o lv_name,lv_size,data_percent,metadata_percent vg1/thin-pool-1'
+```
+
+`vgs` should show `vg1` at ~512g with most of it free. LVMS may extend the
+thin pool to 90% of the larger VG by itself within a few minutes. If `lvs`
+still shows `thin-pool-1` at 89.90g, extend it and its metadata yourself:
+
+```bash
+oc --kubeconfig $SNO debug node/sno -q -- chroot /host sh -c \
+  'lvextend -l 90%VG vg1/thin-pool-1; lvextend --poolmetadatasize +1G vg1/thin-pool-1;
+   lvs -o lv_name,lv_size,data_percent,metadata_percent vg1/thin-pool-1'
+oc --kubeconfig $SNO get lvmcluster -n openshift-storage -o jsonpath='{.items[0].status.state}{"\n"}'   # Ready
+```
+
+The metadata must grow with the data: a thin pool whose metadata fills up
+fails the same way as a full one.
 
 The SNO is the same one the udn-bgp-evpn and spiffe-spire labs build and use
 (`sno_install_folder`). They can share it, but hcp-kv2's workers take most of

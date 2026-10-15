@@ -794,8 +794,14 @@ sno_disk_gb: 200
 ## lvms-vg1 the default StorageClass. Follows use_lvm_storage; set
 ## sno_lvm_storage: false to keep the SNO without storage.
 ## Add it to a running SNO with: setup_sno.yaml --tags snostorage
+##
+## Thin on the host (qcow2, metadata preallocated only), so the file takes
+## space only as LVMS writes. 512: the worker VMs of hcp-kv2 and hcp-kv3 run
+## here, a 32Gi root disk each, and LVMS gives the thin pool 90% of this disk.
+## Only a new disk gets this size; kubevirt/README.md, "Grow the SNO's
+## storage disk", for one that exists.
 sno_lvm_storage: "{{ use_lvm_storage }}"
-sno_storage_disk_gb: 100
+sno_storage_disk_gb: 512
 
 ## Further single-node clusters beside the one above, each with its own
 ## ip_list entry. setup-dns serves a zone for each (<name>.<domain>, every name
