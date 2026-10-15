@@ -259,6 +259,15 @@ kubevirt_acm_import: false
 kubevirt_catalog_source: "{{ acm_catalog_source | default('redhat-operators', true) }}"
 kubevirt_catalog_source_namespace: "{{ acm_catalog_source_namespace | default('openshift-marketplace', true) }}"
 kubevirt_cnv_channel: stable
+
+## OpenShift Virtualization's built-in OS images (CentOS Stream, Fedora, RHEL
+## 8/9/10 - one 30Gi PVC each in openshift-virtualization-os-images) are for
+## VMs people create by hand; the NodePools' workers boot RHCOS and never use
+## them. On an LVMS cluster they fill the thin pool: on the SNO's 90 GB pool
+## they took ~60 GB, and the hcp-kv2 workers were paused with "not enough
+## space on volume: rhcos". Off on every cluster this playbook sets up for VMs;
+## true downloads them again.
+kubevirt_common_boot_images: false
 kubevirt_nmstate_channel: stable
 
 ## ---------------------------------------------------------------------------

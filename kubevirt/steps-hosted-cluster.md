@@ -161,7 +161,8 @@ kind: HyperConverged
 metadata:
   name: kubevirt-hyperconverged
   namespace: openshift-cnv
-spec: {}
+spec:
+  enableCommonBootImageImport: false   # kubevirt_common_boot_images
 EOF
 oc apply -f "$M/8.2-hyperconverged.yaml"
 
@@ -172,6 +173,13 @@ oc get nodes -l kubevirt.io/schedulable=true               # the 3 workers
 
 A worker missing from that list has no `/dev/kvm`: nested virtualisation did
 not reach it.
+
+`enableCommonBootImageImport: false` stops OpenShift Virtualization
+downloading its CentOS, Fedora and RHEL images, one 30Gi PVC each. The worker
+VMs boot RHCOS and never use them, and on an LVMS cluster such as the SNO they
+fill the thin pool until the workers are paused. On a cluster where they were
+already downloaded, delete them:
+`oc delete dv,pvc --all -n openshift-virtualization-os-images`.
 
 ## 8.3 Wildcard routes on hub1's router
 

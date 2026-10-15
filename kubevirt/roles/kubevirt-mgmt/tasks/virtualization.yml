@@ -28,7 +28,9 @@
   changed_when: false
   when: kubevirt_hco_crd.rc != 0
 
-# spec: {} - the defaults are what the lab wants, live migration included.
+# The defaults are what the lab wants, live migration included - except the
+# built-in OS images, which the worker VMs never use and which fill an LVMS
+# thin pool (kubevirt_common_boot_images in vars.yaml).
 - name: Create the HyperConverged instance
   ansible.builtin.command:
     cmd: oc apply -f -
@@ -38,7 +40,8 @@
       metadata:
         name: kubevirt-hyperconverged
         namespace: openshift-cnv
-      spec: {}
+      spec:
+        enableCommonBootImageImport: {{ kubevirt_common_boot_images | bool | lower }}
   register: kubevirt_hco_apply
   changed_when: "' unchanged' not in kubevirt_hco_apply.stdout"
 
