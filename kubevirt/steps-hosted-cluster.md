@@ -848,6 +848,13 @@ If the add-ons stay unavailable, this per-cluster scoping is the first thing
 to check: `oc --kubeconfig $HUB get managedclusteraddon -n sno3 -o yaml`
 shows the config each one resolved.
 
+The console's Nodes column for sno3 reads 0 for a few minutes after it
+joins: the count comes from `ManagedClusterInfo`, which the work-manager agent
+fills in once it runs in `open-cluster-management-agent-addon-discovery`. It
+should change to 1 by itself. If it stays at 0, check the
+`klusterlet-addon-workmgr` pod there, and
+`oc --kubeconfig $HUB get managedclusterinfo sno3 -n sno3 -o jsonpath='{.status.nodeList[*].name}'`.
+
 ### S.5 Import the SNO into hub1's ACM
 
 ```bash
