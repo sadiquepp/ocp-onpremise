@@ -7,6 +7,27 @@ stop and look between steps.
 
 Starting point: steps 1-7 of [steps.md](steps.md) done.
 
+## Contents
+
+- [8.1 Preflight](#81-preflight)
+- [8.2 OpenShift Virtualization](#82-openshift-virtualization)
+- [8.3 Wildcard routes on hub1's router](#83-wildcard-routes-on-hub1s-router)
+- [8.4 Render the bundle](#84-render-the-bundle)
+- [8.5 HostedCluster - the control plane](#85-hostedcluster---the-control-plane)
+- [8.6 NodePool - the worker VMs](#86-nodepool---the-worker-vms)
+- [8.7 Import into ACM](#87-import-into-acm)
+- [8.8 Wait, and get the kubeconfig](#88-wait-and-get-the-kubeconfig)
+- [8.9 Verify](#89-verify)
+- [MetalLB variant](#metallb-variant)
+- [hcp-kv2: workers on the SNO](#hcp-kv2-workers-on-the-sno)
+- [sno3 and hcp-kv3: control plane on an MCE cluster](#sno3-and-hcp-kv3-control-plane-on-an-mce-cluster)
+  - [S.1 Build sno3](#s1-build-sno3)
+  - [S.2 MCE on sno3](#s2-mce-on-sno3)
+  - [S.3 MetalLB on sno3, and hcp-kv3's API pool](#s3-metallb-on-sno3-and-hcp-kv3s-api-pool)
+  - [S.4 Import sno3 into hub1's ACM, with hosted-cluster discovery](#s4-import-sno3-into-hub1s-acm-with-hosted-cluster-discovery)
+  - [S.5 Import the SNO into hub1's ACM](#s5-import-the-sno-into-hub1s-acm)
+  - [K.1-K.9 hcp-kv3: 8.1-8.9 against sno3](#k1-k9-hcp-kv3-81-89-against-sno3)
+
 ```bash
 cd kubevirt
 export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig   # hub1
