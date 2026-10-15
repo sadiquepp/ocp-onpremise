@@ -1130,6 +1130,12 @@ oc --kubeconfig $HUB -n sno3 patch discoveredcluster $DC --type=merge \
 oc --kubeconfig $HUB get managedcluster sno3-hcp-kv3 -w  # JOINED, AVAILABLE True
 ```
 
+sno3's own console lists hcp-kv3 as **Pending import**, and keeps doing so.
+That is expected: with its auto-import off (S.2), sno3's MCE hosts hcp-kv3 but
+does not manage it. Hub1 does. Do not import it from sno3's console: a cluster
+registers with one hub only, and a second import would give it a second
+klusterlet competing with hub1's.
+
 No DiscoveredCluster after a few minutes: check S.4's hypershift-addon
 (`oc --kubeconfig $HUB get managedclusteraddon hypershift-addon -n sno3`).
 As in 8.7, JOINED/AVAILABLE need only hcp-kv3's API, not the worker.
