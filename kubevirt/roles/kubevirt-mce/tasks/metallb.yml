@@ -21,7 +21,8 @@
 
 # The hubs' own MetalLB tasks, unchanged: the MetalLB instance, then one
 # single-address pool per hosted cluster with an address for this cluster,
-# bound to its control-plane namespace.
+# bound to its control-plane namespace. The CRDs above exist before the
+# operator's webhook serves; the instance's apply retries until it does.
 - name: The MetalLB instance and the hosted clusters' API pools
   ansible.builtin.include_role:
     name: setup-hub-acm

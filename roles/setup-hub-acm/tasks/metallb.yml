@@ -138,9 +138,19 @@
     src: metal-lb/06-L2Advertisement.yaml.j2
     dest: "{{ role_path }}/files/.rendered-06-l2advertisement.yaml"
 
+# The operator's validating webhook answers only once its controller-manager
+# pod is ready, which is some time after its CRDs exist: until then the apply
+# fails with 'no endpoints available for service
+# "metallb-operator-controller-manager-service"'. The hub's install sleeps
+# long enough before it gets here; sno3's (kubevirt/setup_sno3_mce.yaml) and a
+# --tags metallb run on a fresh hub do not, so retry until the webhook takes it.
 - name: Setup MetalLB Resource
   shell: |
     oc apply -f "{{ role_path }}/files/metal-lb/04-metalLB.yaml"
+  register: metallb_instance_apply
+  retries: 30
+  delay: 10
+  until: metallb_instance_apply.rc == 0
 
 # The old shared hcp-ip-pool covered a whole range per hub (.60-.63 on hub,
 # .64-.67 on hubd, .90-.93 on hub2), which the per-cluster pools now claim one
@@ -156,10 +166,18 @@
     oc delete ipaddresspool "{{ metallb_legacy_pool_name }}" -n metallb-system --ignore-not-found
   when: metallb_remove_legacy_shared_pool | bool
 
+# Validated by MetalLB's own webhook, which the instance applied above starts:
+# on a fresh MetalLB it is not serving yet, so retry. set -e, so a failed pool
+# apply is not hidden by the advertisements' rc.
 - name: Setup per-hosted-cluster MetalLB IPAddressPools and L2Advertisements
   shell: |
+    set -e
     oc apply -f "{{ role_path }}/files/.rendered-05-ip-pool.yaml"
     oc apply -f "{{ role_path }}/files/.rendered-06-l2advertisement.yaml"
+  register: metallb_pools_apply
+  retries: 30
+  delay: 10
+  until: metallb_pools_apply.rc == 0
 
 # `oc apply` never prunes, so a hub built before the install mode narrowed this
 # selection keeps whatever it was given then - a hub2 built when both sets were
