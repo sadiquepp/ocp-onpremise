@@ -174,6 +174,21 @@
       when: kubevirt_apply | bool
       tags: [cluster, wait]
 
+    # Control plane on an MCE cluster (sno3): hub1's ACM discovers the
+    # hosted cluster there and imports it.
+    - name: Import each hosted cluster on an MCE cluster into hub1's ACM
+      ansible.builtin.include_role:
+        name: kubevirt-hosted-cluster
+        tasks_from: discovery-import
+        apply:
+          tags: [cluster, wait]
+      loop: "{{ kubevirt_specs | selectattr('discovery') | list }}"
+      loop_control:
+        loop_var: kv
+        label: "{{ kv.name }}"
+      when: kubevirt_apply | bool
+      tags: [cluster, wait]
+
     # The shared role compact-cluster-hcp.md uses for hcp-compact1, unchanged:
     # MetalLB operator inside the hosted cluster, the apps_vip pool, and the
     # metallb-ingress LoadBalancer Service in front of its routers.

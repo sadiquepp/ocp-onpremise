@@ -47,10 +47,14 @@
 ## The management cluster
 ## ---------------------------------------------------------------------------
 
-## Kubeconfig of the cluster that runs the control planes AND the worker VMs.
-## The hub by default. Point it at another cluster that has MCE, MetalLB and
-## room for VMs (the compact cluster, say) and set kubevirt_mgmt to match.
-kubevirt_mgmt_kubeconfig: "{{ hub_install_folder }}/auth/kubeconfig"
+## Kubeconfig of the cluster that runs the control planes (and, without
+## 'infra', the worker VMs). The hub by default; with -e kubevirt_mgmt=sno3,
+## the MCE cluster's from kubevirt_mce_clusters below. Any other cluster with
+## MCE and MetalLB: set both kubevirt_mgmt and this.
+kubevirt_mgmt_kubeconfig: >-
+  {{ kubevirt_mce_clusters[kubevirt_mgmt].kubeconfig
+     if kubevirt_mgmt in kubevirt_mce_clusters
+     else hub_install_folder ~ '/auth/kubeconfig' }}
 
 ## The key this management cluster has in hosted_cluster_metallb_pools[<name>].ip
 ## - the same 'hub'/'hub2'/'compact' selector roles/setup-hub-acm calls
@@ -61,6 +65,46 @@ kubevirt_mgmt: "{{ target_hub | default('hub') }}"
 ## entry in hosted_clusters that has an address for kubevirt_mgmt. Narrow a run
 ## to one with -e kubevirt_cluster=hcp-kv1.
 kubevirt_cluster: ""
+
+## ---------------------------------------------------------------------------
+## Control planes on a separate MCE cluster (sno3)
+## ---------------------------------------------------------------------------
+##
+## The three-cluster layout: hub1 runs ACM and stays the one place everything
+## is managed from; sno3 runs MCE alone and hosts the control planes of the
+## clusters whose hosted_cluster_metallb_pools entry has an 'sno3' address
+## (hcp-kv3); their worker VMs run on an infrastructure cluster ('infra: sno').
+## setup_sno3_mce.yaml builds sno3, installs MCE and MetalLB there, and imports
+## it into hub1's ACM, which then discovers sno3's hosted clusters and imports
+## them too. Build hcp-kv3 with -e kubevirt_mgmt=sno3.
+##
+## Its name, address and domain are the root vars.yaml's (ip_list.sno3,
+## sno_extra_clusters); this is what only this directory needs.
+kubevirt_mce_clusters:
+  sno3:
+    kubeconfig: "{{ download_dir }}/sno3_install/auth/kubeconfig"
+    ## SNO + MCE + MetalLB + LVM Storage + one SingleReplica control plane.
+    memory: 40960
+    vcpus: 12
+    disk_gb: 200
+    storage_disk_gb: 100
+
+## hub1 - the ACM hub the MCE clusters are imported into, and where their
+## hosted clusters show up as DiscoveredClusters.
+kubevirt_acm_hub_kubeconfig: "{{ hub_install_folder }}/auth/kubeconfig"
+
+## On an MCE cluster imported into ACM, ACM's add-on agents run in this
+## namespace, so they do not collide with the MCE cluster's own (local-cluster)
+## add-ons in open-cluster-management-agent-addon. Applied to the MCE
+## clusters' add-ons only - hub1's own and every other managed cluster's
+## stay where they are.
+kubevirt_mce_addon_namespace: open-cluster-management-agent-addon-discovery
+
+## A discovered hosted cluster is imported into ACM as
+## <kubevirt_mce_discovery_prefix>-<name> - sno3-hcp-kv3. Empty uses the MCE
+## cluster's name, which is the same thing here; Red Hat's docs warn against an
+## empty prefix where names could collide.
+kubevirt_mce_discovery_prefix: ""
 
 ## ---------------------------------------------------------------------------
 ## Workers on another cluster ('external infrastructure')

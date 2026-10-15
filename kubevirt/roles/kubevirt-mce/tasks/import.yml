@@ -1,0 +1,49 @@
+---
+# Import the MCE cluster into hub1's ACM, with hosted-cluster discovery
+# (templates/hub-import.yaml.j2 says why it is shaped this way). Runs with
+# KUBECONFIG pointed at hub1.
+
+- name: Make the render directory
+  ansible.builtin.file:
+    path: "{{ kubevirt_render_dir }}/{{ kubevirt_mce_name }}"
+    state: directory
+    mode: '0700'
+
+- name: Render the import for hub1
+  ansible.builtin.template:
+    src: hub-import.yaml.j2
+    dest: "{{ kubevirt_render_dir }}/{{ kubevirt_mce_name }}/hub-import.yaml"
+    mode: '0600'
+
+- name: Check hub1 has ACM's import APIs
+  ansible.builtin.command:
+    cmd: oc get crd klusterletconfigs.config.open-cluster-management.io addondeploymentconfigs.addon.open-cluster-management.io
+  changed_when: false
+
+- name: Apply it to hub1
+  ansible.builtin.command:
+    cmd: oc apply -f {{ kubevirt_render_dir }}/{{ kubevirt_mce_name }}/hub-import.yaml
+  register: kubevirt_mce_import
+  changed_when: "kubevirt_mce_import.stdout_lines | reject('search', ' unchanged$') | list | length > 0"
+
+- name: Wait for {{ kubevirt_mce_name }} to join hub1
+  ansible.builtin.command:
+    cmd: >-
+      oc get managedcluster {{ kubevirt_mce_name }}
+      -o jsonpath='{.status.conditions[?(@.type=="ManagedClusterConditionAvailable")].status}'
+  register: kubevirt_mce_joined
+  retries: 60
+  delay: 20
+  until: kubevirt_mce_joined.stdout == 'True'
+  changed_when: false
+
+- name: Wait for its hypershift-addon (hosted-cluster discovery)
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ kubevirt_mce_name }} get managedclusteraddon hypershift-addon
+      -o jsonpath='{.status.conditions[?(@.type=="Available")].status}'
+  register: kubevirt_mce_addon
+  retries: 60
+  delay: 20
+  until: kubevirt_mce_addon.stdout == 'True'
+  changed_when: false

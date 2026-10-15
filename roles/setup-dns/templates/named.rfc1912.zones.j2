@@ -82,6 +82,17 @@ zone "{{ sno_name }}.{{ base_domain }}" IN {
 	allow-update { none; };
 };
 {% endif %}
+{# Further single-node clusters, on the same condition tasks/main.yml renders
+   their zone files on. #}
+{% for s in sno_extra_clusters | default([]) %}
+{% if ip_list[s.name] is defined %}
+zone "{{ s.name }}.{{ s.domain }}" IN {
+	type master;
+	file "{{ s.name }}.{{ s.domain }}.db";
+	allow-update { none; };
+};
+{% endif %}
+{% endfor %}
 {# The three-node compact clusters, on the same condition tasks/main.yml renders
    their zone files on - both VIP keys present in ip_list. #}
 {% for c in compact_clusters | default([]) %}

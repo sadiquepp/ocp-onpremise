@@ -11,9 +11,13 @@
 # prerequisites - OpenShift Virtualization, the wildcard route policy and the
 # localnet bridge mapping - which other clusters may use.
 
+# On hub1 for a cluster imported by discovery from an MCE cluster (as
+# <prefix>-<name>); on the management cluster itself otherwise.
 - name: "{{ kv.name }} | Remove the ACM import"
   ansible.builtin.command:
-    cmd: oc delete managedcluster {{ kv.name }} --ignore-not-found --wait --timeout=600s
+    cmd: >-
+      oc {{ ('--kubeconfig ' ~ kubevirt_acm_hub_kubeconfig) if kv.discovery else '' }}
+      delete managedcluster {{ kv.acm_name }} --ignore-not-found --wait --timeout=600s
   changed_when: "'deleted' in kubevirt_del_mc.stdout"
   register: kubevirt_del_mc
   failed_when: false

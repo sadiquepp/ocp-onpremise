@@ -1,0 +1,47 @@
+---
+# A cluster whose control plane is on an MCE cluster (sno3) is imported into
+# hub1's ACM by discovery: the hypershift-addon on sno3 reports it to hub1 as a
+# DiscoveredCluster (type MultiClusterEngineHCP) once its kube-apiserver is up,
+# and setting importAsManagedCluster on that object imports it - as
+# <prefix>-<name>, sno3-hcp-kv3. Red Hat's procedure does this with a hub-wide
+# auto-import Policy; here it is just this cluster, done directly.
+
+- name: "{{ kv.name }} | Wait for hub1 to discover it on {{ kubevirt_mgmt }}"
+  ansible.builtin.command:
+    cmd: >-
+      oc --kubeconfig {{ kubevirt_acm_hub_kubeconfig }} -n {{ kubevirt_mgmt }}
+      get discoveredclusters -o json
+  register: kubevirt_discovered
+  retries: 60
+  delay: 20
+  until: >-
+    kubevirt_discovered.rc == 0 and
+    (kubevirt_discovered.stdout | from_json)['items']
+    | selectattr('spec.type', 'eq', 'MultiClusterEngineHCP')
+    | selectattr('spec.displayName', 'eq', kv.acm_name) | list | length > 0
+  changed_when: false
+
+- name: "{{ kv.name }} | Import it into hub1's ACM"
+  ansible.builtin.command:
+    cmd: >-
+      oc --kubeconfig {{ kubevirt_acm_hub_kubeconfig }} -n {{ kubevirt_mgmt }}
+      patch discoveredcluster {{ kv_dc.metadata.name }} --type=merge
+      -p '{"spec":{"importAsManagedCluster":true}}'
+  vars:
+    kv_dc: >-
+      {{ (kubevirt_discovered.stdout | from_json)['items']
+         | selectattr('spec.type', 'eq', 'MultiClusterEngineHCP')
+         | selectattr('spec.displayName', 'eq', kv.acm_name) | first }}
+  when: not (kv_dc.spec.importAsManagedCluster | default(false) | bool)
+
+- name: "{{ kv.name }} | Wait for {{ kv.acm_name }} to join hub1"
+  ansible.builtin.command:
+    cmd: >-
+      oc --kubeconfig {{ kubevirt_acm_hub_kubeconfig }}
+      get managedcluster {{ kv.acm_name }}
+      -o jsonpath='{.status.conditions[?(@.type=="ManagedClusterConditionAvailable")].status}'
+  register: kubevirt_discovered_joined
+  retries: 60
+  delay: 20
+  until: kubevirt_discovered_joined.stdout == 'True'
+  changed_when: false

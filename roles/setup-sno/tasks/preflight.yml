@@ -95,7 +95,7 @@
     sno_ip: "{{ lab_network_prefix }}.{{ ip_list[sno_name] }}"
     sno_mgmt_mac: "{{ (sno_mgmt_mac_prefix ~ ':' ~ ip_list[sno_name]) | lower }}"
     sno_ssh_key: "{{ sno_ssh_out.stdout }}"
-    sno_cluster_domain: "{{ sno_name }}.{{ base_domain }}"
+    sno_cluster_domain: "{{ sno_name }}.{{ sno_base_domain }}"
 
 # The API server certificate is issued for api.<cluster>.<base_domain>, and the
 # installer's own wait-for resolves that name. If DNS is not serving the zone

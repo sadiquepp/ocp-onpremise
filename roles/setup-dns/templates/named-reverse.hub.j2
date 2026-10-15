@@ -68,6 +68,11 @@ $TTL    600
 {% if (sno_name | default('')) and (ip_list[sno_name] is defined) %}
 {{ ip_list[sno_name] }} 		IN PTR 		{{ sno_name }}.{{ sno_name }}.{{ base_domain }}.
 {% endif %}
+{% for s in sno_extra_clusters | default([]) %}
+{% if ip_list[s.name] is defined %}
+{{ ip_list[s.name] }} 		IN PTR 		{{ s.name }}.{{ s.name }}.{{ s.domain }}.
+{% endif %}
+{% endfor %}
 {# The three-node compact clusters. Each node's PTR is <hostname>.<zone>, the A
    record compact_domain.j2 renders. The API VIP points back at api.<zone>;
    the ingress VIP at ingress.apps.<zone>, which the *.apps wildcard answers -

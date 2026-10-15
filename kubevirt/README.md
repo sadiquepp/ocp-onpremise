@@ -29,6 +29,7 @@ Virtualization itself.
 - [What it builds](#what-it-builds)
 - [Ingress: the hub's router, or MetalLB](#ingress-the-hubs-router-or-metallb)
 - [Workers on another cluster: hcp-kv2 on the SNO](#workers-on-another-cluster-hcp-kv2-on-the-sno)
+- [Three clusters: ACM on hub1, MCE on sno3, VMs on the SNO (hcp-kv3)](#three-clusters-acm-on-hub1-mce-on-sno3-vms-on-the-sno-hcp-kv3)
 - [Before you start](#before-you-start)
 - [Run it](#run-it)
 - [Add a cluster](#add-a-cluster)
@@ -206,6 +207,60 @@ kubeconfig doesn't exist - so building only hcp-kv1 needs no SNO. Other
 infrastructure clusters are a `kubevirt_infras` entry in `vars.yaml` away.
 Only `ingress: route` is wired for them.
 
+## Three clusters: ACM on hub1, MCE on sno3, VMs on the SNO (hcp-kv3)
+
+The layout where the cluster that manages, the cluster that hosts control
+planes and the cluster that runs VMs are three different ones:
+
+| Cluster | Role | Built by |
+|---|---|---|
+| hub1 | ACM: manages sno3, the SNO and every hosted cluster | `../setup_hub_cluster.yaml`, unchanged |
+| sno3 (`192.168.122.63`, `sno3.hub.mylab.com`) | MCE only: hcp-kv3's control plane, MetalLB for its API (`.253`) | `setup_sno3_mce.yaml` |
+| sno | OpenShift Virtualization: hcp-kv3's worker VM | `../setup_sno.yaml`, as for hcp-kv2 |
+
+```
+hub1 (ACM) ── imports ──> sno3 (MCE)   hypershift-addon on sno3 reports its hosted
+     │                     │            clusters to hub1 as DiscoveredClusters
+     │                     └ hcp-kv3-hcp-kv3: etcd, kube-apiserver (.253), ...
+     │                         └ Secret infra-kubeconfig ──> sno (VMs)
+     └─ imports ──> sno3-hcp-kv3 (the hosted cluster), and sno (to see its VMs)
+```
+
+`setup_sno3_mce.yaml`:
+
+- **builds sno3** with `roles/setup-sno` - 40 GiB / 12 vCPU, LVM Storage, under
+  `hub.mylab.com` so the existing DNS forwarder covers it (no libvirt network
+  rebuild). Skipped once its kubeconfig exists, so the playbook re-runs.
+- **installs MCE alone** (no ACM), with MCE's own import of the hosted clusters
+  it creates turned off (`autoImportDisabled`) - hub1 imports them instead.
+- **installs MetalLB** and, through `roles/setup-hub-acm`'s own MetalLB tasks
+  with `metallb_hub=sno3`, the API pool of every hosted cluster with an `sno3`
+  address: `hcp-kv3-api-pool` at `.253`.
+- **imports sno3 into hub1's ACM** the way Red Hat documents for MCE clusters:
+  a `noOperator` KlusterletConfig (`postfix: mce-import`) so ACM's klusterlet
+  sits beside MCE's own, ACM's add-on agents in their own namespace, and the
+  hypershift-addon set to discover hosted clusters (`disableHOManagement`,
+  `disableMetrics`). Red Hat applies those add-on settings hub-wide; hub1 hosts
+  its own hosted clusters, so here they are attached to sno3's add-ons only.
+- **imports the SNO into hub1's ACM**, so ACM's search and virtualization views
+  show the VMs it runs.
+
+hcp-kv3 is then the KubeVirt playbook run against sno3
+(`-e kubevirt_mgmt=sno3`): the same steps as hcp-kv2, with the control plane
+on sno3 (`SingleReplica` - one node), and at the end hub1's discovered copy of
+it imported (`importAsManagedCluster`) as `sno3-hcp-kv3`. Runs against the hub
+leave hcp-kv3 out, and runs against sno3 leave hcp-kv1/kv2 out, each saying so.
+
+**What ACM manages.** The hosted cluster (`sno3-hcp-kv3`) fully - policies,
+apps, search, console. Its lifecycle is the HostedCluster and NodePool on sno3.
+Its worker VM shows up under the SNO in ACM's VM views; change it through the
+NodePool, not there, since the NodePool owns it.
+
+**Not tested on a real lab.** The import and discovery follow Red Hat's
+documented procedure as implemented in Red Hat's own test suite (ocs-ci); the
+per-cluster scoping of the add-on settings is this repository's, and is the
+part to watch on a first run: `oc get managedclusteraddon -n sno3` on hub1.
+
 ## Before you start
 
 Build the host, Ceph and hub1 with steps 1-6 of [steps.md](steps.md): the
@@ -295,20 +350,17 @@ root, `setup_bm_host.yaml --tags dns` (its API name) and
 
 ```yaml
 hosted_clusters:
-  - name: hcp-kv3
+  - name: hcp-kv4
     platform: kubevirt
     nodepool_replicas: 3          # optional overrides - see kubevirt/vars.yaml
     # infra: sno                  # VMs on the SNO instead of the hub
 hosted_cluster_metallb_pools:
-  hcp-kv3:
-    pool: hcp-kv3-api-pool
+  hcp-kv4:
+    pool: hcp-kv4-api-pool
     ip:
-      hub: 253                    # .250-.254 are the free octets; kv1 .250/.251, kv2 .252
+      hub: 254                    # .250 kv1, .251 kv1's apps, .252 kv2, .253 kv3 (on sno3): .254 is the last
 hosted_cluster_domains:
-  hcp-kv3: "{{ hub_domain }}"     # resolvable from every VM with no network change
-hosted_cluster_node_keys:
-  hcp-kv3:
-    apps_vip: 254                 # only used with ingress: metallb
+  hcp-kv4: "{{ hub_domain }}"     # resolvable from every VM with no network change
 ```
 
 The cluster CIDRs (`10.132.0.0/14`, `172.31.0.0/16`) are internal to each

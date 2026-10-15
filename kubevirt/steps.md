@@ -254,6 +254,64 @@ curl -kI https://console-openshift-console.apps.hcp-kv2.apps.sno.mylab.com
 Remove it with `--tags destroy -e kubevirt_cluster=hcp-kv2`; that also clears
 its namespace and ServiceAccount off the SNO.
 
+## hcp-kv3: control plane on sno3, VMs on the SNO, managed from hub1 (optional)
+
+Three clusters: hub1's ACM manages, a second SNO (`sno3`) runs MCE alone and
+hosts hcp-kv3's control plane, and the SNO from the hcp-kv2 section runs its
+worker VM. Explanation:
+[README.md](README.md#three-clusters-acm-on-hub1-mce-on-sno3-vms-on-the-sno-hcp-kv3).
+The SNO first (the hcp-kv2 section above), then, from the repository root,
+sno3's DNS zone and hcp-kv3's API name - under `hub.mylab.com`, so no network
+rebuild:
+
+```bash
+ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns --ask-vault-pass
+dig +short api.sno3.hub.mylab.com @192.168.122.21        # 192.168.122.63
+dig +short api.hcp-kv3.hub.mylab.com @192.168.122.21     # 192.168.122.253
+```
+
+sno3 - built, MCE and MetalLB on it, and imported into hub1 with hosted-cluster
+discovery (40 GiB / 12 vCPU, about an hour):
+
+```bash
+cd kubevirt
+ansible-playbook -i ../inventory/hosts setup_sno3_mce.yaml --ask-vault-pass
+
+export KUBECONFIG=/var/lib/libvirt/images/sno3_install/auth/kubeconfig
+oc get multiclusterengine                                 # Available
+oc -n hypershift get deploy operator                      # the HyperShift operator
+oc -n metallb-system get ipaddresspool                    # hcp-kv3-api-pool
+
+export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
+oc get managedcluster sno3 sno                            # both JOINED, AVAILABLE True
+oc get managedclusteraddon -n sno3                        # hypershift-addon Available
+```
+
+hcp-kv3 - the KubeVirt playbook, against sno3:
+
+```bash
+ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass \
+  -e kubevirt_mgmt=sno3
+```
+
+Verify, on each of the three:
+
+```bash
+oc --kubeconfig /var/lib/libvirt/images/sno3_install/auth/kubeconfig \
+  get hostedcluster,nodepool -n hcp-kv3                   # control plane: sno3
+oc --kubeconfig /var/lib/libvirt/images/sno_install/auth/kubeconfig \
+  get vm,vmi -n hcp-kv3-hcp-kv3                           # worker VM: the SNO
+oc --kubeconfig /var/lib/libvirt/images/hub_install/auth/kubeconfig \
+  get discoveredcluster -n sno3                           # hub1 found it ...
+oc --kubeconfig /var/lib/libvirt/images/hub_install/auth/kubeconfig \
+  get managedcluster sno3-hcp-kv3                         # ... and manages it
+curl -kI https://console-openshift-console.apps.hcp-kv3.apps.sno.mylab.com
+```
+
+Remove it with `--tags destroy -e kubevirt_mgmt=sno3`. sno3 goes with
+`virsh destroy sno3; virsh undefine sno3 --remove-all-storage`, after
+`oc delete managedcluster sno3` on hub1.
+
 ## MetalLB ingress instead (optional)
 
 This serves `*.apps.hcp-kv1.hub.mylab.com` on `192.168.122.251`, from MetalLB

@@ -1,0 +1,51 @@
+{# Applied to hub1 (ACM): import an infrastructure cluster ({{ kubevirt_infra_import }})
+   as an ordinary managed cluster, so ACM's search and virtualization views show
+   the VMs on it - the hosted clusters' workers among them. Holds its admin
+   kubeconfig (the auto-import Secret), so it is written 0600. #}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ kubevirt_infra_import }}
+---
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: {{ kubevirt_infra_import }}
+  labels:
+    cloud: auto-detect
+    vendor: auto-detect
+    cluster.open-cluster-management.io/clusterset: {{ hosted_cluster_clusterset | default('default') }}
+spec:
+  hubAcceptsClient: true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: auto-import-secret
+  namespace: {{ kubevirt_infra_import }}
+type: Opaque
+stringData:
+  autoImportRetry: "5"
+  kubeconfig: |
+    {{ lookup('ansible.builtin.file', kubevirt_infras[kubevirt_infra_import].kubeconfig) | indent(4) }}
+---
+apiVersion: agent.open-cluster-management.io/v1
+kind: KlusterletAddonConfig
+metadata:
+  name: {{ kubevirt_infra_import }}
+  namespace: {{ kubevirt_infra_import }}
+spec:
+  clusterName: {{ kubevirt_infra_import }}
+  clusterNamespace: {{ kubevirt_infra_import }}
+  clusterLabels:
+    cloud: auto-detect
+    vendor: auto-detect
+  applicationManager:
+    enabled: true
+  policyController:
+    enabled: true
+  searchCollector:
+    enabled: true
+  certPolicyController:
+    enabled: true

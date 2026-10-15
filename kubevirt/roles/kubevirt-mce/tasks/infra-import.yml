@@ -1,0 +1,33 @@
+---
+# Import an infrastructure cluster (kubevirt_infra_import - the SNO) into
+# hub1's ACM as an ordinary managed cluster, so ACM's search and
+# virtualization views show its VMs. Runs with KUBECONFIG pointed at hub1.
+
+- name: Make the render directory
+  ansible.builtin.file:
+    path: "{{ kubevirt_render_dir }}/{{ kubevirt_infra_import }}"
+    state: directory
+    mode: '0700'
+
+- name: Render the import of {{ kubevirt_infra_import }} for hub1
+  ansible.builtin.template:
+    src: infra-import.yaml.j2
+    dest: "{{ kubevirt_render_dir }}/{{ kubevirt_infra_import }}/hub-import.yaml"
+    mode: '0600'
+
+- name: Apply it to hub1
+  ansible.builtin.command:
+    cmd: oc apply -f {{ kubevirt_render_dir }}/{{ kubevirt_infra_import }}/hub-import.yaml
+  register: kubevirt_infra_import_apply
+  changed_when: "kubevirt_infra_import_apply.stdout_lines | reject('search', ' unchanged$') | list | length > 0"
+
+- name: Wait for {{ kubevirt_infra_import }} to join hub1
+  ansible.builtin.command:
+    cmd: >-
+      oc get managedcluster {{ kubevirt_infra_import }}
+      -o jsonpath='{.status.conditions[?(@.type=="ManagedClusterConditionAvailable")].status}'
+  register: kubevirt_infra_joined
+  retries: 60
+  delay: 20
+  until: kubevirt_infra_joined.stdout == 'True'
+  changed_when: false

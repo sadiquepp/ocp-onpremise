@@ -162,6 +162,26 @@
   notify:
     -  Restart_Named
 
+# Further single-node clusters (sno_extra_clusters in vars.yaml), each in its
+# own domain. The same template as the SNO above, with sno_name and
+# base_domain set to this one's, and the same guard as its stanza in
+# named.rfc1912.zones.j2.
+- name: Deploy the further single-node clusters' forward zonefiles
+  template:
+    src: sno_domain.j2
+    dest: "/var/named/{{ item.name }}.{{ item.domain }}.db"
+    owner: root
+    group: named
+    mode: u=rw,g=r,o=r
+  loop: "{{ sno_extra_clusters | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}.{{ item.domain }}"
+  vars:
+    sno_name: "{{ item.name }}"
+  when: ip_list[item.name] is defined
+  notify:
+    -  Restart_Named
+
 # The three-node compact clusters (compact-cluster/setup_compact_cluster.yaml
 # and compact-cluster/setup_compact_cluster_disconnected.yaml), one zone per compact_clusters
 # entry. Same guard discipline as the SNO above: this condition is repeated in

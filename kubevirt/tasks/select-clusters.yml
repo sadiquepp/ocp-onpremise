@@ -50,6 +50,31 @@
                         | map(attribute='key') | list)
          | list }}
 
+# A cluster whose API address is keyed by another management cluster - hcp-kv3,
+# whose control plane is on sno3 - belongs to that cluster's runs
+# (-e kubevirt_mgmt=sno3). A run over every cluster leaves it out and says
+# so; naming it with -e kubevirt_cluster still fails below, as does a cluster
+# with no address anywhere.
+- name: Say which clusters belong to another management cluster
+  ansible.builtin.debug:
+    msg: >-
+      Leaving out {{ item.name }}: its control plane runs on
+      {{ hosted_cluster_metallb_pools[item.name].ip | list | join(', ') }}, not on
+      {{ kubevirt_mgmt }}. Build it with -e kubevirt_mgmt={{ hosted_cluster_metallb_pools[item.name].ip | list | first }}.
+  loop: >-
+    {{ kubevirt_entries | rejectattr('name', 'in', kubevirt_entries_here)
+       | selectattr('name', 'in', hosted_cluster_metallb_pools | default({}) | list) | list }}
+  loop_control:
+    label: "{{ item.name }}"
+  when: kubevirt_cluster | length == 0
+
+- name: Leave them out of a run over every cluster
+  ansible.builtin.set_fact:
+    kubevirt_entries: >-
+      {{ kubevirt_entries | selectattr('name', 'in', kubevirt_entries_here) | list
+         + kubevirt_entries | rejectattr('name', 'in', hosted_cluster_metallb_pools | default({}) | list) | list }}
+  when: kubevirt_cluster | length == 0
+
 - name: Fail fast if a KubeVirt cluster has no API address here
   ansible.builtin.assert:
     that:
@@ -143,6 +168,9 @@
            'api_vip': kv_prefix ~ '.' ~ kv_pool.ip[kubevirt_mgmt],
            'api_pool': kv_pool.pool,
            'cp_namespace': kv_cp_namespace,
+           'discovery': kubevirt_mgmt in kubevirt_mce_clusters,
+           'acm_name': ((kubevirt_mce_discovery_prefix | default('', true)) or kubevirt_mgmt) ~ '-' ~ item.name
+                       if kubevirt_mgmt in kubevirt_mce_clusters else item.name,
            'infra': item.infra | default(''),
            'infra_kubeconfig': kubevirt_infras[item.infra].kubeconfig if item.infra is defined else kubevirt_mgmt_kubeconfig,
            'vm_namespace': item.infra_namespace | default(kv_cp_namespace) if item.infra is defined else kv_cp_namespace,

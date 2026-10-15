@@ -1,0 +1,30 @@
+---
+# MetalLB on the MCE cluster (KUBECONFIG points at it), for the API addresses of
+# the hosted clusters it hosts - their hosted_cluster_metallb_pools entries
+# carry an address keyed by this cluster's name.
+
+- name: Subscribe to the MetalLB operator
+  ansible.builtin.command:
+    cmd: oc apply -f -
+    stdin: "{{ lookup('ansible.builtin.template', 'metallb-operator.yaml.j2') }}"
+  register: kubevirt_mce_metallb_sub
+  changed_when: "kubevirt_mce_metallb_sub.stdout_lines | reject('search', ' unchanged$') | list | length > 0"
+
+- name: Wait for the MetalLB APIs
+  ansible.builtin.command:
+    cmd: oc get crd metallbs.metallb.io ipaddresspools.metallb.io l2advertisements.metallb.io
+  register: kubevirt_mce_metallb_crd
+  retries: "{{ kubevirt_operator_retries }}"
+  delay: "{{ kubevirt_operator_delay }}"
+  until: kubevirt_mce_metallb_crd.rc == 0
+  changed_when: false
+
+# The hubs' own MetalLB tasks, unchanged: the MetalLB instance, then one
+# single-address pool per hosted cluster with an address for this cluster,
+# bound to its control-plane namespace.
+- name: The MetalLB instance and the hosted clusters' API pools
+  ansible.builtin.include_role:
+    name: setup-hub-acm
+    tasks_from: metallb
+  vars:
+    metallb_hub: "{{ kubevirt_mce_name }}"

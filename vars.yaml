@@ -238,6 +238,19 @@ hosted_clusters:
     platform: kubevirt
     infra: sno
     memory: 12Gi
+  ## The three-cluster layout: its control plane on sno3, a second SNO that
+  ## runs MCE alone (kubevirt/setup_sno3_mce.yaml); its worker VMs on the SNO
+  ## like hcp-kv2's; hub1's ACM discovers it on sno3 and imports it. Its only
+  ## API address is keyed 'sno3', so hub runs leave it alone - build it with
+  ## kubevirt/setup_hosted_cluster_kubevirt.yaml -e kubevirt_mgmt=sno3.
+  ## SingleReplica: sno3 has one node. One worker, so it fits on the SNO
+  ## beside hcp-kv2's two.
+  - name: hcp-kv3
+    platform: kubevirt
+    infra: sno
+    availability_policy: SingleReplica
+    nodepool_replicas: 1
+    memory: 12Gi
 hosted_clusters_disconnected:
   - hcp-cluster1-d
   - hcp-cluster2-d
@@ -402,6 +415,11 @@ ip_list:
   ## TWO DIGITS, because this lab's MAC scheme appends the octet verbatim
   ## (52:54:00:e2:54:<octet>) and a three-digit octet is not a valid MAC.
   sno: 20
+  ## A second single-node cluster, for the 'separate MCE cluster' layout
+  ## (kubevirt/setup_sno3_mce.yaml): MCE hosts hcp-kv3's control plane here,
+  ## the workers run on the SNO above. .63 - the last free two-digit octet;
+  ## see the note on the disconnected clusters below.
+  sno3: 63
   c1worker1: 41
   c1worker2: 42
   c1worker3: 43
@@ -434,7 +452,8 @@ ip_list:
   # (64-66, plus 17 and 18, are now the compact cluster, added below. 64-66
   #  sit between the hub MetalLB band at 60-62 and the hubd band at 67-69,
   #  which is why setup-compact-cluster's pre-flight refuses to build if a
-  #  pool ever claims one. .63 is the last free two-digit octet.)
+  #  pool ever claims one. .63 was the last free two-digit octet, and is
+  #  now sno3's.)
   c1dworker1: 44
   c1dworker2: 45
   c1dworker3: 46
@@ -778,6 +797,17 @@ sno_disk_gb: 200
 sno_lvm_storage: "{{ use_lvm_storage }}"
 sno_storage_disk_gb: 100
 
+## Further single-node clusters beside the one above, each with its own
+## ip_list entry. setup-dns serves a zone for each (<name>.<domain>, every name
+## on the node's address, as for the SNO above); the playbook that builds one
+## passes the same name and domain to roles/setup-sno.
+##   sno3 - kubevirt/setup_sno3_mce.yaml: MCE only, hosting hcp-kv3's control
+##          plane. Under hub_domain, which the libvirt network already
+##          forwards, so adding it needs no network rebuild.
+sno_extra_clusters:
+  - name: sno3
+    domain: "{{ hub_domain }}"
+
 ## A second, unconfigured NIC on the containerlab fabric, added at build time.
 ## Off by default: this builds a cluster and nothing about a cluster needs the
 ## fabric.
@@ -1035,6 +1065,12 @@ hosted_cluster_metallb_pools:
     pool: hcp-kv2-api-pool
     ip:
       hub: 252
+  ## Control plane on sno3 (MetalLB there, kubevirt/setup_sno3_mce.yaml), so
+  ## its address is keyed 'sno3' and no hub renders a pool for it.
+  hcp-kv3:
+    pool: hcp-kv3-api-pool
+    ip:
+      sno3: 253
 
 ## Network the pool addresses sit on, per hub. Anything not listed here uses
 ## lab_network_prefix, which is why this is empty by default - in this lab all
@@ -1518,6 +1554,7 @@ hosted_cluster_domains:
   ## change to the running network.
   hcp-kv1: "{{ hub_domain }}"
   hcp-kv2: "{{ hub_domain }}"
+  hcp-kv3: "{{ hub_domain }}"
 
 ## LEGACY: hosted_domain / hosted_domain2 / hosted_domain3 above are the same
 ## information as hosted_clusters, written twice. Nothing renders from them any

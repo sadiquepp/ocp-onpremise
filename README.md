@@ -2109,6 +2109,9 @@ hcp-kv1 is an ordinary `hosted_clusters` entry with `platform: kubevirt`, so
 `create_hosted_cluster.yaml` skips it. `hcp-kv2` is the same with
 `infra: sno`: its control plane on the hub, its worker VMs on the single-node
 cluster ([kubevirt/README.md](kubevirt/README.md#workers-on-another-cluster-hcp-kv2-on-the-sno)).
+`hcp-kv3` adds a third cluster: its control plane on `sno3`, a second SNO that
+runs MCE alone, managed from hub1's ACM
+([kubevirt/README.md](kubevirt/README.md#three-clusters-acm-on-hub1-mce-on-sno3-vms-on-the-sno-hcp-kv3)).
 Run the playbook from inside the directory:
 
 ```bash
