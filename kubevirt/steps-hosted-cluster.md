@@ -156,13 +156,14 @@ Then the instance, and wait for it:
 
 ```bash
 cat > "$M/8.2-hyperconverged.yaml" <<EOF
-apiVersion: hco.kubevirt.io/v1beta1
+apiVersion: hco.kubevirt.io/v1
 kind: HyperConverged
 metadata:
   name: kubevirt-hyperconverged
   namespace: openshift-cnv
 spec:
-  enableCommonBootImageImport: false   # kubevirt_common_boot_images
+  workloadSources:
+    enableCommonBootImageImport: false   # kubevirt_common_boot_images
 EOF
 oc apply -f "$M/8.2-hyperconverged.yaml"
 
@@ -178,8 +179,16 @@ not reach it.
 downloading its CentOS, Fedora and RHEL images, one 30Gi PVC each. The worker
 VMs boot RHCOS and never use them, and on an LVMS cluster such as the SNO they
 fill the thin pool until the workers are paused. On a cluster where they were
-already downloaded, delete them:
+already downloaded, check the DataImportCrons have gone, then delete them:
+`oc get dataimportcron -n openshift-virtualization-os-images` (empty), then
 `oc delete dv,pvc --all -n openshift-virtualization-os-images`.
+
+The field is under `spec.workloadSources` in the `hco.kubevirt.io/v1` API,
+which OpenShift Virtualization 4.22 serves. An operator that serves only
+`v1beta1` has it at the top of `spec` instead
+(`spec.enableCommonBootImageImport`); the playbook picks the right one. To
+see which applies: `oc get crd hyperconvergeds.hco.kubevirt.io -o
+jsonpath='{.spec.versions[*].name}'`.
 
 ## 8.3 Wildcard routes on hub1's router
 

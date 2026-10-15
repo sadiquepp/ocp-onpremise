@@ -28,6 +28,19 @@
   changed_when: false
   when: kubevirt_hco_crd.rc != 0
 
+# Where the boot-image switch lives depends on the operator's API. The v1 API
+# (OpenShift Virtualization 4.22 serves it, and oc uses it) has it at
+# spec.workloadSources.enableCommonBootImageImport. The top-level
+# spec.enableCommonBootImageImport is the older v1beta1 spelling: v1 warns
+# 'unknown field' and drops it. So v1 where it is served, v1beta1 otherwise.
+- name: Check whether the HyperConverged v1 API is served
+  ansible.builtin.command:
+    cmd: >-
+      oc get crd hyperconvergeds.hco.kubevirt.io
+      -o 'jsonpath={.spec.versions[?(@.name=="v1")].served}'
+  register: kubevirt_hco_v1
+  changed_when: false
+
 # The defaults are what the lab wants, live migration included - except the
 # built-in OS images, which the worker VMs never use and which fill an LVMS
 # thin pool (kubevirt_common_boot_images in vars.yaml).
@@ -35,6 +48,16 @@
   ansible.builtin.command:
     cmd: oc apply -f -
     stdin: |
+      {% if kubevirt_hco_v1.stdout == 'true' %}
+      apiVersion: hco.kubevirt.io/v1
+      kind: HyperConverged
+      metadata:
+        name: kubevirt-hyperconverged
+        namespace: openshift-cnv
+      spec:
+        workloadSources:
+          enableCommonBootImageImport: {{ kubevirt_common_boot_images | bool | lower }}
+      {% else %}
       apiVersion: hco.kubevirt.io/v1beta1
       kind: HyperConverged
       metadata:
@@ -42,6 +65,7 @@
         namespace: openshift-cnv
       spec:
         enableCommonBootImageImport: {{ kubevirt_common_boot_images | bool | lower }}
+      {% endif %}
   register: kubevirt_hco_apply
   changed_when: "' unchanged' not in kubevirt_hco_apply.stdout"
 
