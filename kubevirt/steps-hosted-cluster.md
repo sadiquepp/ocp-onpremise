@@ -571,7 +571,7 @@ echo "HUB=$HUB SNO3=$SNO3 SNO=$SNO M3=$M3 CATALOG=$CATALOG/$CATALOG_NS"
 | S.2 | MCE on sno3 | `mce` |
 | S.3 | MetalLB on sno3, hcp-kv3's API pool | `metallb` |
 | S.4 | Import sno3 into hub1's ACM, with hosted-cluster discovery | `import` |
-| S.5 | Import the SNO into hub1's ACM | `import-infra` |
+| S.5 | Import the SNO into hub1's ACM - optional, for ACM's view of the VMs | `import-infra` |
 | K.1-K.9 | hcp-kv3: 8.1-8.9 against sno3 | the KubeVirt playbook's tags |
 
 ### S.1 Build sno3
@@ -855,8 +855,11 @@ shows the config each one resolved.
 $SNO3PB --tags import-infra
 ```
 
-An ordinary import, so ACM's search and virtualization views show the VMs it
-runs. By hand:
+Optional: hcp-kv3 does not need it. HyperShift reaches the SNO through the
+infra kubeconfig Secret, not through ACM, and K.7's import of hcp-kv3 rests on
+S.4 alone. What this adds is visibility: an ordinary import, so ACM's search
+and virtualization views show the VMs the SNO runs, hcp-kv3's worker among
+them. Skip it and come back any time. By hand:
 
 ```bash
 . /root/kubevirt-manifests/sno3.env
