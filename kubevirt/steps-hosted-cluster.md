@@ -408,9 +408,17 @@ Before 8.1, the SNO and hcp-kv2's DNS and pool:
 [steps.md, hcp-kv2](steps.md#hcp-kv2-workers-on-the-sno-optional).
 
 ```bash
+# from kubevirt/, as at the top
+export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig   # hub1
 PB="ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass -e kubevirt_cluster=hcp-kv2"
 SNO=/var/lib/libvirt/images/sno_install/auth/kubeconfig
+M=/root/kubevirt-manifests/hub1   # the 8.2/8.3 files below were written there for hub1
 ```
+
+This block sets everything the section uses, so it works in a fresh shell.
+The 8.2/8.3 files must exist; written once for hub1, they are reused here
+unchanged. If you never did 8.2 and 8.3 by hand, run their `cat > ...`
+blocks first, after the setup block at the top of this file.
 
 **8.2 and 8.3 on the SNO.** `$PB --tags mgmt` does both there. By hand, the
 same files as for hub1, applied to the SNO:
@@ -531,11 +539,22 @@ and, from the repository root, sno3's zone and hcp-kv3's API name
 (`setup_bm_host.yaml --tags dns`).
 
 ```bash
+# from kubevirt/, as at the top
 SNO3PB="ansible-playbook -i ../inventory/hosts setup_sno3_mce.yaml --ask-vault-pass"
 HUB=/var/lib/libvirt/images/hub_install/auth/kubeconfig
 SNO3=/var/lib/libvirt/images/sno3_install/auth/kubeconfig
 SNO=/var/lib/libvirt/images/sno_install/auth/kubeconfig
 M3=/root/kubevirt-manifests/sno3; mkdir -p "$M3"
+CATALOG=redhat-operators         # kubevirt_catalog_source
+CATALOG_NS=openshift-marketplace # kubevirt_catalog_source_namespace
+```
+
+This block sets everything S.1-S.5 use, so it works in a fresh shell. Every
+`oc` names its cluster with `--kubeconfig`. Check the catalog variables are
+set before a `cat > ...` (an empty one gives `spec.source: Required value`):
+
+```bash
+echo "CATALOG=$CATALOG CATALOG_NS=$CATALOG_NS"
 ```
 
 | Step | What | Tag |
@@ -872,7 +891,11 @@ sno3, the VM side against the SNO (as for hcp-kv2), and the ACM import is
 hub1 adopting what it discovered on sno3.
 
 ```bash
+# from kubevirt/, as at the top
 PB="ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass -e kubevirt_mgmt=sno3 -e kubevirt_cluster=hcp-kv3"
+HUB=/var/lib/libvirt/images/hub_install/auth/kubeconfig
+SNO3=/var/lib/libvirt/images/sno3_install/auth/kubeconfig
+SNO=/var/lib/libvirt/images/sno_install/auth/kubeconfig
 ```
 
 | Step | For hcp-kv3 |
