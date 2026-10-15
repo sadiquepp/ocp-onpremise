@@ -101,6 +101,31 @@ oc get ipaddresspool hcp-kv1-api-pool -n metallb-system \
   -o jsonpath='{.spec.addresses}{"\n"}'  # ["192.168.122.250-192.168.122.250"]
 ```
 
+> **Testing hcp-kv2 or hcp-kv3 too? Start their SNOs now, in parallel.**
+> Each install takes the better part of an hour, and none of them needs
+> hub1. Step 3 already gave both SNOs their DNS and DHCP entries, and each
+> build keeps its own installer in its own folder. In two more terminals
+> (tmux), from the repository root:
+>
+> ```bash
+> # the SNO - hcp-kv2's and hcp-kv3's worker VMs (hcp-kv2 section below)
+> ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass \
+>   -e sno_lvm_storage=true -e sno_memory=65536 -e sno_vcpus=16
+>
+> # sno3 - hcp-kv3's control plane: build, MCE and MetalLB, all without hub1
+> cd kubevirt
+> ansible-playbook -i ../inventory/hosts setup_sno3_mce.yaml --ask-vault-pass --tags sno,mce,metallb
+> ```
+>
+> Check the host has the memory first (`free -g`): 64 GiB for the SNO and
+> 40 GiB for sno3, on top of hub1 and Ceph. Three installs at once also share
+> the host's disks, so each runs a little slower than on its own.
+>
+> sno3's import into hub1's ACM waits for hub1. The hcp-kv3 section below runs
+> the whole `setup_sno3_mce.yaml`: it skips the build, finds MCE and MetalLB
+> already there, and does the import. Likewise the hcp-kv2 section's
+> `setup_sno.yaml` is then already done.
+
 ## 6. Attach Ceph to hub1
 
 ```bash
@@ -222,7 +247,8 @@ From the repository root. The SNO needs LVM Storage (the Ceph flow turns it
 off) and room for hcp-kv2's workers beside OpenShift and OpenShift
 Virtualization: 64 GiB for two 12 GiB workers. Check the host has it
 (`free -g`); with less, build it at 48 GiB (`-e sno_memory=49152`) and set
-`nodepool_replicas: 1` on hcp-kv2's entry in `vars.yaml`:
+`nodepool_replicas: 1` on hcp-kv2's entry in `vars.yaml`. Started in
+[step 5](#5-hub1)? Then only the checks below are left:
 
 ```bash
 ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass \
@@ -294,7 +320,8 @@ dig +short api.hcp-kv3.hub.mylab.com @192.168.122.21     # 192.168.122.253
 ```
 
 sno3 - built, MCE and MetalLB on it, and imported into hub1 with hosted-cluster
-discovery (40 GiB / 12 vCPU, about an hour):
+discovery (40 GiB / 12 vCPU, about an hour). Started in [step 5](#5-hub1)? The
+same command then skips the build and only does the import:
 
 ```bash
 cd kubevirt
