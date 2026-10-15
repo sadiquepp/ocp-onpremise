@@ -27,6 +27,14 @@ Starting point: steps 1-7 of [steps.md](steps.md) done.
   - [S.4 Import sno3 into hub1's ACM, with hosted-cluster discovery](#s4-import-sno3-into-hub1s-acm-with-hosted-cluster-discovery)
   - [S.5 Import the SNO into hub1's ACM](#s5-import-the-sno-into-hub1s-acm)
   - [K.1-K.9 hcp-kv3: 8.1-8.9 against sno3](#k1-k9-hcp-kv3-81-89-against-sno3)
+    - [K.1 Preflight](#k1-preflight)
+    - [K.2-K.3 OpenShift Virtualization and wildcard routes, on the SNO](#k2-k3-openshift-virtualization-and-wildcard-routes-on-the-sno)
+    - [K.4 Render, twice](#k4-render-twice)
+    - [K.5 HostedCluster, on sno3](#k5-hostedcluster-on-sno3)
+    - [K.6 NodePool, on sno3; the VM comes up on the SNO](#k6-nodepool-on-sno3-the-vm-comes-up-on-the-sno)
+    - [K.7 Import into ACM, from discovery](#k7-import-into-acm-from-discovery)
+    - [K.8 Wait, and get the kubeconfig](#k8-wait-and-get-the-kubeconfig)
+    - [K.9 Verify](#k9-verify)
 
 ```bash
 cd kubevirt
@@ -915,39 +923,246 @@ oc --kubeconfig $HUB get managedcluster sno -w                   # JOINED, AVAIL
 
 ### K.1-K.9 hcp-kv3: 8.1-8.9 against sno3
 
-The steps above, with three differences: the control-plane side runs against
-sno3, the VM side against the SNO (as for hcp-kv2), and the ACM import is
-hub1 adopting what it discovered on sno3.
+8.1-8.9 again, for hcp-kv3. Three clusters are involved, and each `oc` says
+which one with `--kubeconfig`:
+
+| Cluster | Variable | What of hcp-kv3's is there |
+|---|---|---|
+| sno3 | `$SNO3` | HostedCluster and NodePool (ns `hcp-kv3`), the control plane (ns `hcp-kv3-hcp-kv3`), the API at `.253` |
+| the SNO | `$SNO` | The worker VM, its disk, the `*.apps` passthrough Route (ns `hcp-kv3-hcp-kv3`) |
+| hub1 | `$HUB` | Only the DiscoveredCluster and the ManagedCluster `sno3-hcp-kv3` - nothing of HyperShift's |
+
+hcp-kv3 is `SingleReplica` (sno3 has one node), with one worker of 4 vCPU and
+12Gi. Once, add the playbook and hcp-kv3's kubeconfig path to the
+variables:
 
 ```bash
-. /root/kubevirt-manifests/sno3.env    # HUB, SNO3, SNO; cd kubevirt/
+cat > /root/kubevirt-manifests/hcp-kv3.env <<'EOF'
+. /root/kubevirt-manifests/sno3.env                         # HUB, SNO3, SNO, M3; cd kubevirt/
 PB="ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass -e kubevirt_mgmt=sno3 -e kubevirt_cluster=hcp-kv3"
+M=/root/kubevirt-manifests/hub1                             # the 8.2/8.3 files, reused on the SNO
+KV3=/var/lib/libvirt/images/hcp-kv3/kubeconfig              # hcp-kv3's admin kubeconfig, from K.8
+EOF
 ```
 
-| Step | For hcp-kv3 |
-|---|---|
-| K.1 (8.1) | `$PB --tags preflight` - MCE, MetalLB and `hcp-kv3-api-pool` (`.253`) on **sno3**, the SNO answering with a StorageClass |
-| K.2, K.3 (8.2, 8.3) | On the **SNO** - already done for hcp-kv2; `$PB --tags mgmt` confirms |
-| K.4 (8.4) | Two passes, as for hcp-kv2: render, `oc --kubeconfig $SNO apply -f rendered/hcp-kv3/00-infra-access.yaml`, render again |
-| K.5 (8.5) | `oc --kubeconfig $SNO3 apply -f rendered/hcp-kv3/01-hosted-cluster.yaml` - **sno3**; `oc --kubeconfig $SNO3 get pods -n hcp-kv3-hcp-kv3` (one of each: SingleReplica), `get svc kube-apiserver` (`.253`) |
-| K.6 (8.6) | `oc --kubeconfig $SNO3 apply -f rendered/hcp-kv3/03-nodepool.yaml`; watch the VM on the **SNO**: `oc --kubeconfig $SNO get dv,vm,vmi -n hcp-kv3-hcp-kv3 -w` |
-| K.7 (8.7) | **hub1 imports it from discovery** (below) - MCE on sno3 does not, it was turned off in S.2 |
-| K.8 (8.8) | `$PB --tags wait` - waits, extracts the kubeconfig from **sno3**, and does K.7 |
-| K.9 (8.9) | `$PB --tags verify`; console at `https://console-openshift-console.apps.hcp-kv3.apps.sno.mylab.com` |
+Every block below starts by loading it.
 
-**K.7 by hand.** Once hcp-kv3's API is up, sno3's hypershift-addon reports it
-to hub1 as a DiscoveredCluster named `sno3-hcp-kv3`; setting
-`importAsManagedCluster` on it imports it:
+| Step | What | Where | Tag |
+|---|---|---|---|
+| K.1 | Preflight | sno3, the SNO | `preflight` |
+| K.2, K.3 | OpenShift Virtualization, wildcard routes | the SNO | `mgmt` |
+| K.4 | Render, twice | the SNO in between | `cluster -e kubevirt_apply=false` |
+| K.5 | HostedCluster | sno3 | by hand |
+| K.6 | NodePool | sno3; the VM on the SNO | by hand |
+| K.7 | Import into ACM, from discovery | hub1 | `wait` |
+| K.8 | Wait, and get the kubeconfig | sno3 | `wait` |
+| K.9 | Verify | all three | `verify` |
+
+#### K.1 Preflight
 
 ```bash
-. /root/kubevirt-manifests/sno3.env
+. /root/kubevirt-manifests/hcp-kv3.env
+$PB --tags preflight
+```
+
+By hand. sno3 does what hub1 does in 8.1, plus the SNO is checked as the VMs'
+cluster:
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+oc --kubeconfig $SNO3 get crd hostedclusters.hypershift.openshift.io ipaddresspools.metallb.io   # both: S.2, S.3
+oc --kubeconfig $SNO3 -n hypershift get deployment operator                                     # sno3's own HyperShift operator
+oc --kubeconfig $SNO3 get ipaddresspool hcp-kv3-api-pool -n metallb-system \
+  -o jsonpath='{.spec.addresses}{"\n"}'                    # ["192.168.122.253-192.168.122.253"]
+dig +short api.hcp-kv3.hub.mylab.com @192.168.122.21       # 192.168.122.253
+oc --kubeconfig $SNO3 get sc                               # lvms-vg1 (default): hcp-kv3's etcd
+oc --kubeconfig $SNO get nodes                             # the SNO answers
+oc --kubeconfig $SNO get sc                                # lvms-vg1 (default): the worker's root disk
+cat /sys/module/kvm_intel/parameters/nested                # Y
+```
+
+#### K.2-K.3 OpenShift Virtualization and wildcard routes, on the SNO
+
+Already done if hcp-kv2 is built: hcp-kv3's VM goes on the same SNO. To
+confirm, or do it:
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+$PB --tags mgmt
+```
+
+By hand - the hub1 files of 8.2 and 8.3, applied to the SNO (write them first
+with 8.2 and 8.3 if `$M` is empty):
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+oc --kubeconfig $SNO apply -f "$M/8.2-cnv-operator.yaml"
+until oc --kubeconfig $SNO get crd hyperconvergeds.hco.kubevirt.io >/dev/null 2>&1; do sleep 10; done
+oc --kubeconfig $SNO apply -f "$M/8.2-hyperconverged.yaml"
+oc --kubeconfig $SNO -n openshift-cnv wait hyperconverged/kubevirt-hyperconverged --for=condition=Available --timeout=20m
+oc --kubeconfig $SNO -n openshift-ingress-operator patch ingresscontroller default --type=merge \
+  --patch-file "$M/8.3-ingresscontroller-wildcards.yaml"
+oc --kubeconfig $SNO -n openshift-ingress rollout status deployment/router-default --timeout=10m
+```
+
+sno3 needs neither: it runs no VMs, and its router only serves the control
+plane's own Routes (oauth, ignition-server, konnectivity).
+
+#### K.4 Render, twice
+
+As for hcp-kv2: `00-infra-access.yaml` is for the SNO, and `01` can only carry
+the infra kubeconfig Secret once `00` has issued its token.
+
+1. Render:
+
+   ```bash
+   . /root/kubevirt-manifests/hcp-kv3.env
+   $PB --tags cluster -e kubevirt_apply=false
+   ls rendered/hcp-kv3/          # 00-infra-access.yaml  01-hosted-cluster.yaml  03-nodepool.yaml
+   grep -A1 'not here yet' rendered/hcp-kv3/01-hosted-cluster.yaml   # no Secret yet
+   ```
+
+2. Apply `00` to the SNO, and check it issued the token:
+
+   ```bash
+   . /root/kubevirt-manifests/hcp-kv3.env
+   oc --kubeconfig $SNO apply -f rendered/hcp-kv3/00-infra-access.yaml
+   oc --kubeconfig $SNO -n hcp-kv3-hcp-kv3 get secret hcp-infra-token \
+     -o jsonpath='{.data.token}' | wc -c                  # > 0
+   ```
+
+   Its namespace, ServiceAccount and ClusterRole are hcp-kv3's own; hcp-kv2's
+   on the same SNO are untouched.
+
+3. Render again:
+
+   ```bash
+   . /root/kubevirt-manifests/hcp-kv3.env
+   $PB --tags cluster -e kubevirt_apply=false
+   grep -c 'name: infra-kubeconfig-hcp-kv3' rendered/hcp-kv3/01-hosted-cluster.yaml   # 2
+   ```
+
+(A full run - no `-e kubevirt_apply=false` - does all three itself, and K.5
+and K.6 with them.)
+
+#### K.5 HostedCluster, on sno3
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+grep -A4 'credentials:' rendered/hcp-kv3/01-hosted-cluster.yaml          # infra-kubeconfig-hcp-kv3, infraNamespace hcp-kv3-hcp-kv3
+grep 'baseDomain:\|AvailabilityPolicy' rendered/hcp-kv3/01-hosted-cluster.yaml   # apps.sno.mylab.com; SingleReplica x2
+
+oc --kubeconfig $SNO3 apply -f rendered/hcp-kv3/01-hosted-cluster.yaml
+oc --kubeconfig $SNO3 get hostedcluster hcp-kv3 -n hcp-kv3 -w   # PROGRESS Partial; AVAILABLE comes after the worker
+```
+
+sno3's HyperShift operator starts the control plane on sno3. In another
+terminal:
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+oc --kubeconfig $SNO3 get pods -n hcp-kv3-hcp-kv3                 # etcd-0, one kube-apiserver, ... Running
+oc --kubeconfig $SNO3 get svc kube-apiserver -n hcp-kv3-hcp-kv3   # EXTERNAL-IP 192.168.122.253, from hcp-kv3-api-pool
+oc --kubeconfig $SNO3 get route -n hcp-kv3-hcp-kv3                # oauth, konnectivity, ignition-server: *.apps.sno3.hub.mylab.com
+oc --kubeconfig $SNO3 get hostedcluster hcp-kv3 -n hcp-kv3 -o jsonpath='{range .status.conditions[?(@.type=="ValidConfiguration")]}{.status} {.message}{"\n"}{end}'
+oc --kubeconfig $SNO3 get hostedcluster hcp-kv3 -n hcp-kv3 -o jsonpath='{range .status.conditions[?(@.type=="ValidKubeVirtInfraNetworkPolicyRBAC")]}{.status} {.message}{"\n"}{end}'
+curl -k https://api.hcp-kv3.hub.mylab.com:6443/version
+```
+
+The two conditions mean what they do for hcp-kv2: `ValidConfiguration` True is
+sno3 logged in to the SNO with the Secret; False with 401/403 sends you back
+to step 2 of K.4. An `EXTERNAL-IP` stuck at `<pending>` is S.3's pool.
+`oc --kubeconfig $HUB get hostedcluster -A` does not list hcp-kv3: hub1 never
+sees it as a HostedCluster.
+
+#### K.6 NodePool, on sno3; the VM comes up on the SNO
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+oc --kubeconfig $SNO3 apply -f rendered/hcp-kv3/03-nodepool.yaml
+```
+
+Follow it:
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+oc --kubeconfig $SNO get dv -n hcp-kv3-hcp-kv3 -w       # root disk on lvms-vg1: ImportScheduled -> Succeeded
+oc --kubeconfig $SNO get vm,vmi -n hcp-kv3-hcp-kv3 -w   # 1 VM, 4 vCPU / 12Gi; VMI Scheduling -> Running
+oc --kubeconfig $SNO3 get nodepool -n hcp-kv3 -w        # CURRENT NODES 0 -> 1
+```
+
+The SNO now runs hcp-kv2's two workers and this one: a VMI stuck in
+`Scheduling` is memory (`oc --kubeconfig $SNO describe vmi ...`). To watch it
+boot:
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+virtctl --kubeconfig $SNO console -n hcp-kv3-hcp-kv3 \
+  $(oc --kubeconfig $SNO get vmi -n hcp-kv3-hcp-kv3 -o name | head -1 | cut -d/ -f2)
+```
+
+#### K.7 Import into ACM, from discovery
+
+This is where hcp-kv3 differs most from hcp-kv1. MCE on sno3 does not import
+it (S.2 turned that off), and hub1 has no HostedCluster to import from. Once
+hcp-kv3's API is up, sno3's hypershift-addon reports it to hub1 as a
+DiscoveredCluster named `sno3-hcp-kv3`, and setting `importAsManagedCluster`
+on it imports it. `$PB --tags wait` does this as part of K.8. By hand:
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+oc --kubeconfig $SNO3 get managedcluster                 # local-cluster only: sno3's MCE did not import it
 oc --kubeconfig $HUB get discoveredcluster -n sno3 \
   -o custom-columns=NAME:.metadata.name,DISPLAY:.spec.displayName,TYPE:.spec.type,STATUS:.spec.status
+                                                         # DISPLAY sno3-hcp-kv3, TYPE MultiClusterEngineHCP
 DC=$(oc --kubeconfig $HUB get discoveredcluster -n sno3 \
   -o jsonpath='{.items[?(@.spec.displayName=="sno3-hcp-kv3")].metadata.name}')
 oc --kubeconfig $HUB -n sno3 patch discoveredcluster $DC --type=merge \
   -p '{"spec":{"importAsManagedCluster":true}}'
-oc --kubeconfig $HUB get managedcluster sno3-hcp-kv3 -w          # JOINED, AVAILABLE True
+oc --kubeconfig $HUB get managedcluster sno3-hcp-kv3 -w  # JOINED, AVAILABLE True
+```
+
+No DiscoveredCluster after a few minutes: check S.4's hypershift-addon
+(`oc --kubeconfig $HUB get managedclusteraddon hypershift-addon -n sno3`).
+As in 8.7, JOINED/AVAILABLE need only hcp-kv3's API, not the worker.
+
+#### K.8 Wait, and get the kubeconfig
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+$PB --tags wait
+```
+
+By hand - as 8.8, against sno3:
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+oc --kubeconfig $SNO3 wait hostedcluster/hcp-kv3 -n hcp-kv3 --for=condition=Available --timeout=60m
+
+mkdir -p $(dirname $KV3)
+oc --kubeconfig $SNO3 extract -n hcp-kv3 \
+  secret/$(oc --kubeconfig $SNO3 get hostedcluster hcp-kv3 -n hcp-kv3 -o jsonpath='{.status.kubeconfig.name}') \
+  --keys=kubeconfig --to=$(dirname $KV3) --confirm
+
+oc --kubeconfig $KV3 get nodes -w                        # 1 Ready
+```
+
+#### K.9 Verify
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+$PB --tags verify
+```
+
+By hand - [steps.md, step 9](steps.md#9-verify) with `$KV3`, and the
+`*.apps` path through the SNO's router:
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+oc --kubeconfig $KV3 get clusterversion,co               # Available, none Degraded
+oc --kubeconfig $SNO get route -n hcp-kv3-hcp-kv3        # the *.apps passthrough, on the SNO
+curl -kI https://console-openshift-console.apps.hcp-kv3.apps.sno.mylab.com
+oc --kubeconfig $HUB get managedcluster sno3-hcp-kv3     # in ACM, on hub1
 ```
 
 Remove it with `$PB --tags destroy`: that deletes `sno3-hcp-kv3` from hub1
