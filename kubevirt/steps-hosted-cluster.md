@@ -459,19 +459,57 @@ applied - so render, apply `00`, render again:
 
 (A full run - no `-e kubevirt_apply=false` - does all three itself.)
 
-**8.5** is then the same `oc apply -f rendered/hcp-kv2/01-hosted-cluster.yaml`
-on hub1. Its `spec.platform.kubevirt.credentials` names that Secret and the
-SNO namespace, and `dns.baseDomain` is the SNO's `apps.sno.mylab.com`.
-
-**8.6: watch the VMs on the SNO.** The NodePool is applied on hub1; what it
-creates is on the SNO:
+**8.5 HostedCluster, on hub1.** Check what `01` points at, then apply it:
 
 ```bash
-oc --kubeconfig $SNO get dv,vm,vmi -n hcp-kv2-hcp-kv2 -w
-oc get nodepool -n hcp-kv2 -w                                     # on hub1
+grep -A4 'credentials:' rendered/hcp-kv2/01-hosted-cluster.yaml   # infraKubeConfigSecret infra-kubeconfig-hcp-kv2, infraNamespace hcp-kv2-hcp-kv2
+grep 'baseDomain:' rendered/hcp-kv2/01-hosted-cluster.yaml        # apps.sno.mylab.com: *.apps goes through the SNO's router
+
+oc apply -f rendered/hcp-kv2/01-hosted-cluster.yaml
+oc get hostedcluster hcp-kv2 -n hcp-kv2 -w     # PROGRESS Partial; AVAILABLE comes after the workers
+```
+
+The control plane runs on hub1, as for hcp-kv1. In another terminal:
+
+```bash
+oc get pods -n hcp-kv2-hcp-kv2                 # etcd-0/1/2, kube-apiserver, ... Running, on hub1
+oc get svc kube-apiserver -n hcp-kv2-hcp-kv2   # EXTERNAL-IP 192.168.122.252, from hcp-kv2-api-pool
+oc get hostedcluster hcp-kv2 -n hcp-kv2 -o jsonpath='{range .status.conditions[?(@.type=="ValidConfiguration")]}{.status} {.message}{"\n"}{end}'
+oc get hostedcluster hcp-kv2 -n hcp-kv2 -o jsonpath='{range .status.conditions[?(@.type=="ValidKubeVirtInfraNetworkPolicyRBAC")]}{.status} {.message}{"\n"}{end}'
+curl -k https://api.hcp-kv2.hub.mylab.com:6443/version
+```
+
+`ValidConfiguration` True means HyperShift logged in to the SNO with that
+Secret and found OpenShift Virtualization there. False with 401/403 in the
+message means `00` or the token is wrong: go back to step 2 of 8.4.
+`ValidKubeVirtInfraNetworkPolicyRBAC` False means `00`'s ClusterRole for the
+SNO's network config is missing. The namespace `hcp-kv2-hcp-kv2` exists on
+both clusters: the control plane on hub1, the VMs on the SNO.
+
+**8.6 NodePool, on hub1; the VMs come up on the SNO.**
+
+```bash
+oc apply -f rendered/hcp-kv2/03-nodepool.yaml
+```
+
+Follow them on the SNO:
+
+```bash
+oc --kubeconfig $SNO get dv -n hcp-kv2-hcp-kv2 -w       # root disks on lvms-vg1: ImportScheduled -> Succeeded
+oc --kubeconfig $SNO get vm,vmi -n hcp-kv2-hcp-kv2 -w   # 2 VMs, 4 vCPU / 12Gi; VMIs Scheduling -> Running
+oc get nodepool -n hcp-kv2 -w                           # on hub1: CURRENT NODES 0 -> 2
+```
+
+Nothing of the NodePool's appears in `oc get vm -n hcp-kv2-hcp-kv2` on hub1.
+A VMI stuck in `Scheduling` on the SNO is usually memory: `oc --kubeconfig
+$SNO describe vmi ...` says so. To watch one boot:
+
+```bash
 virtctl --kubeconfig $SNO console -n hcp-kv2-hcp-kv2 \
   $(oc --kubeconfig $SNO get vmi -n hcp-kv2-hcp-kv2 -o name | head -1 | cut -d/ -f2)
 ```
+
+**8.7 and 8.8** are as for hcp-kv1, on hub1, with `hcp-kv2` for `hcp-kv1`.
 
 **8.9** probes `console-openshift-console.apps.hcp-kv2.apps.sno.mylab.com`,
 through the SNO's router:
