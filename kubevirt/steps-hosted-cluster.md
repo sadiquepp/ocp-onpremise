@@ -1183,6 +1183,18 @@ oc --kubeconfig $SNO3 extract -n hcp-kv3 \
 oc --kubeconfig $KV3 get nodes -w                        # 2 Ready
 ```
 
+The console's kubeadmin password is on sno3 too. hub1's console shows no
+credentials for hcp-kv3: it imported the cluster from discovery and never
+holds its Secrets, unlike hcp-kv1's and hcp-kv2's, whose HostedClusters are on
+hub1. sno3's console shows them, or:
+
+```bash
+. /root/kubevirt-manifests/hcp-kv3.env
+oc --kubeconfig $SNO3 extract -n hcp-kv3 --keys=password --to=- \
+  secret/$(oc --kubeconfig $SNO3 get hostedcluster hcp-kv3 -n hcp-kv3 -o jsonpath='{.status.kubeadminPassword.name}')
+# user kubeadmin, at https://console-openshift-console.apps.hcp-kv3.apps.sno.mylab.com
+```
+
 #### K.9 Verify
 
 ```bash
