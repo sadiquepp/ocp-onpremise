@@ -20,6 +20,20 @@
     cmd: oc get crd klusterletconfigs.config.open-cluster-management.io addondeploymentconfigs.addon.open-cluster-management.io
   changed_when: false
 
+# The add-on agents' namespace on the MCE cluster (AddOnDeploymentConfig
+# agentInstallNamespace). Nothing creates it: the add-on manifests hub1 sends
+# go into it and fail with 'namespaces ... not found', so the hypershift-addon
+# never deploys and no hosted cluster is ever discovered. Created here, on the
+# MCE cluster, before hub1 starts sending them.
+- name: Create the add-on agents' namespace on {{ kubevirt_mce_name }}
+  ansible.builtin.shell:
+    cmd: >-
+      oc --kubeconfig {{ kubevirt_mce.kubeconfig }} create namespace {{ kubevirt_mce_addon_namespace }}
+      --dry-run=client -o yaml
+      | oc --kubeconfig {{ kubevirt_mce.kubeconfig }} apply -f -
+  register: kubevirt_mce_addon_ns
+  changed_when: "' unchanged' not in kubevirt_mce_addon_ns.stdout"
+
 - name: Apply it to hub1
   ansible.builtin.command:
     cmd: oc apply -f {{ kubevirt_render_dir }}/{{ kubevirt_mce_name }}/hub-import.yaml

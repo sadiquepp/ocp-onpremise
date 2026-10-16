@@ -773,7 +773,19 @@ add-ons, so ACM's go beside them: a `noOperator` KlusterletConfig, and the
 add-ons' agents in their own namespace. The hypershift-addon reports sno3's
 hosted clusters to hub1 and leaves sno3's HyperShift operator to sno3's MCE.
 Red Hat's procedure sets these hub-wide; hub1 hosts its own hosted clusters,
-so they are attached to sno3's add-ons only (`spec.configs`):
+so they are attached to sno3's add-ons only (`spec.configs`).
+
+First the add-ons' namespace, on sno3. Nothing else creates it: without it,
+every add-on manifest hub1 sends fails with `namespaces
+"open-cluster-management-agent-addon-discovery" not found`, and the
+hypershift-addon - the one that reports hcp-kv3 - never runs:
+
+```bash
+. /root/kubevirt-manifests/sno3.env
+oc --kubeconfig $SNO3 create namespace open-cluster-management-agent-addon-discovery
+```
+
+Then the import, on hub1:
 
 ```bash
 . /root/kubevirt-manifests/sno3.env
