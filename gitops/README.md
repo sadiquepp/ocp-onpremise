@@ -97,6 +97,11 @@ oc apply -f gitops/apps/online-boutique.yaml
 oc get application online-boutique -n openshift-gitops      # SYNC STATUS OutOfSync, HEALTH Missing
 ```
 
+`oc apply` warns `metadata.finalizers: "resources-finalizer.argocd.argoproj.io":
+prefer a domain-qualified finalizer name including a path (/)`. That is the
+Kubernetes API's generic advice for finalizer names without a `/`, and is
+harmless. The name is Argo CD's documented one, and Argo CD honours it.
+
 *OutOfSync / Missing* is the honest starting point: git describes 11
 Deployments, Services and a Route, and the cluster has none of them. In the
 Argo CD UI, open **online-boutique**: the tree shows every resource from git,
