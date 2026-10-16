@@ -126,17 +126,37 @@ example, Deployments with their replicas available. It is separate from
 
 Each exercise teaches one GitOps behaviour. Watch them in the UI.
 
-**1. Drift: a change made by hand.**
+**1. Drift: a change made by hand, and what Argo CD actually compares.**
+
+First, scale a Deployment:
 
 ```bash
 oc scale deployment/frontend -n online-boutique --replicas=3
+oc get application online-boutique -n openshift-gitops      # still Synced
 ```
 
-The Application turns *OutOfSync*. **App Diff** shows `replicas: 1` in git
-against `3` on the cluster. Nothing reverts it yet, because sync is manual.
-Press **Sync**: it goes back to 1. Git wins.
+Nothing is reported, and that is the first lesson. **Argo CD only compares
+the fields git declares.** Online Boutique's Deployments leave `replicas` out
+of their manifests, so git has no opinion on it: 1, 3 or 10 all match. Teams
+use exactly that to leave replicas to a HorizontalPodAutoscaler.
 
-**2. A change through the desired state.**
+Now change a field git does declare: the image. `v0.10.5` is an older,
+working release of the same frontend.
+
+```bash
+oc set image deployment/frontend -n online-boutique \
+  server=us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/frontend:v0.10.5
+oc get application online-boutique -n openshift-gitops      # OutOfSync, still Healthy
+```
+
+In the UI, **App Diff** on `frontend` shows the image: `v0.10.6` in git,
+`v0.10.5` on the cluster. That is drift, a "hotfix" made behind git's back.
+It is *OutOfSync* but still *Healthy*: sync status compares the cluster with
+git, while health is about whether the resources work. Nothing reverts it yet,
+because sync is manual. Press **Sync**, and the image goes back to `v0.10.6`.
+Git wins. The 3 replicas stay, since git still does not declare them.
+
+**2. A change through the desired state: let git own the replicas.**
 Edit `gitops/apps/online-boutique.yaml` to run two frontends. Add under
 `spec.source.kustomize`:
 
@@ -146,10 +166,13 @@ Edit `gitops/apps/online-boutique.yaml` to run two frontends. Add under
           count: 2
 ```
 
-Then `oc apply -f gitops/apps/online-boutique.yaml`, and Sync. This changes
-the Application itself. In full GitOps the Application also lives in git, so
-the change would be a commit that Argo CD picks up by itself. That is the next
-lesson (app of apps).
+Then `oc apply -f gitops/apps/online-boutique.yaml`. The Application turns
+*OutOfSync*: git now declares `replicas: 2`, and the cluster has 3. Sync, and
+it is 2. From now on, scaling `frontend` by hand is drift.
+
+This edits the Application itself. In full GitOps the Application lives in git
+too, so the change would be a commit that Argo CD picks up by itself. That is
+the next lesson (app of apps).
 
 **3. Self-heal: let Argo CD undo drift by itself.**
 Add to the Application's `syncPolicy`, and apply:
@@ -161,7 +184,7 @@ Add to the Application's `syncPolicy`, and apply:
 
 ```bash
 oc scale deployment/frontend -n online-boutique --replicas=5
-oc get deployment frontend -n online-boutique -w     # back to the git value within seconds
+oc get deployment frontend -n online-boutique -w     # back to 2, git's value, within seconds
 oc delete deployment/checkoutservice -n online-boutique
 oc get deployment checkoutservice -n online-boutique -w   # recreated
 ```
