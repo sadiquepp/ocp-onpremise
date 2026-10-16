@@ -243,13 +243,14 @@ hosted_clusters:
   ## like hcp-kv2's; hub1's ACM discovers it on sno3 and imports it. Its only
   ## API address is keyed 'sno3', so hub runs leave it alone - build it with
   ## kubevirt/setup_hosted_cluster_kubevirt.yaml -e kubevirt_mgmt=sno3.
-  ## SingleReplica: sno3 has one node. One worker, so it fits on the SNO
-  ## beside hcp-kv2's two.
+  ## SingleReplica: sno3 has one node - that is its control plane. Two
+  ## workers, on the SNO beside hcp-kv2's two: four 12 GiB VMs, which is why
+  ## the KubeVirt docs build the SNO at 96 GiB.
   - name: hcp-kv3
     platform: kubevirt
     infra: sno
     availability_policy: SingleReplica
-    nodepool_replicas: 1
+    nodepool_replicas: 2
     memory: 12Gi
 hosted_clusters_disconnected:
   - hcp-cluster1-d
@@ -794,9 +795,10 @@ sno_install_folder: "{{ download_dir }}/sno_install"
 ## pressure, and the first symptom is operators flapping, which reads as a
 ## broken install rather than a small one.
 ##
-## hcp-kv2 (kubevirt/, 'infra: sno') runs its worker VMs here, which this size
-## has no room for: build the SNO at 65536 / 16 for its two 12 GiB workers
-## (kubevirt/steps.md, "hcp-kv2"), or 49152 with nodepool_replicas: 1.
+## hcp-kv2 and hcp-kv3 (kubevirt/, 'infra: sno') run their worker VMs here,
+## two 12 GiB each, which this size has no room for: the KubeVirt docs build
+## the SNO with -e sno_memory=98304 -e sno_vcpus=16 (96 GiB; kubevirt/steps.md,
+## "hcp-kv2"). This default stays small for the other labs that use the SNO.
 sno_memory: 32768
 sno_vcpus: 12
 sno_disk_gb: 200

@@ -29,6 +29,7 @@ Virtualization itself.
 - [What it builds](#what-it-builds)
 - [Ingress: the hub's router, or MetalLB](#ingress-the-hubs-router-or-metallb)
 - [Workers on another cluster: hcp-kv2 on the SNO](#workers-on-another-cluster-hcp-kv2-on-the-sno)
+  - [Grow the SNO's memory](#grow-the-snos-memory)
   - [Grow the SNO's storage disk](#grow-the-snos-storage-disk)
 - [Three clusters: ACM on hub1, MCE on sno3, VMs on the SNO (hcp-kv3)](#three-clusters-acm-on-hub1-mce-on-sno3-vms-on-the-sno-hcp-kv3)
 - [Before you start](#before-you-start)
@@ -194,9 +195,12 @@ do not suit this:
   anyway.
 - **Size.** The default 12 vCPU / 32 GiB is mostly taken by OpenShift and
   OpenShift Virtualization themselves; a 12 GiB worker does not fit beside
-  them. Build it at 64 GiB / 16 vCPU for hcp-kv2's two 4 vCPU / 12 GiB
-  workers if the host has room (`free -g`), or at 48 GiB with one worker
-  (`nodepool_replicas: 1` on hcp-kv2's entry).
+  them. Build it at **96 GiB / 16 vCPU** (`-e sno_memory=98304 -e
+  sno_vcpus=16`): it runs four 4 vCPU / 12 GiB workers, hcp-kv2's two and
+  hcp-kv3's two. They request about 70 GB of it, leaving room for one more
+  worker or a restart. Check the host has it (`free -g`, "available"). With
+  hcp-kv2 alone, 64 GiB (`65536`) is enough; with less, set
+  `nodepool_replicas` lower on the clusters' entries in `vars.yaml`.
 
 - **Disk.** The worker VMs' root disks (32Gi each) come out of LVMS's thin
   pool, which is 90% of the SNO's second disk. `sno_storage_disk_gb` is 512,
@@ -206,6 +210,26 @@ do not suit this:
   They filled a 100 GB pool and paused hcp-kv2's workers.
 
 [steps.md](steps.md#hcp-kv2-workers-on-the-sno-optional) has the commands.
+
+### Grow the SNO's memory
+
+`-e sno_memory=...` sizes a new SNO. To grow a running one to 96 GiB, restart
+it with more. The worker VMs on it stop until it is back, then start again
+by themselves, and their nodes rejoin:
+
+```bash
+virsh shutdown sno
+until virsh domstate sno | grep -q 'shut off'; do sleep 5; done
+virsh setmaxmem sno 96G --config
+virsh setmem    sno 96G --config
+virsh start sno
+SNO=/var/lib/libvirt/images/sno_install/auth/kubeconfig
+oc --kubeconfig $SNO get nodes -w                                          # sno Ready
+oc --kubeconfig $SNO get node sno -o jsonpath='{.status.capacity.memory}{"\n"}'   # ~100663296Ki
+```
+
+Then scale a NodePool up to what `vars.yaml` now says, for hcp-kv3 on sno3:
+`oc --kubeconfig <sno3> scale nodepool nodepool-hcp-kv3-1 -n hcp-kv3 --replicas=2`.
 
 ### Grow the SNO's storage disk
 
@@ -256,7 +280,7 @@ planes and the cluster that runs VMs are three different ones:
 |---|---|---|
 | hub1 | ACM: manages sno3, the SNO and every hosted cluster | `../setup_hub_cluster.yaml`, unchanged |
 | sno3 (`192.168.122.63`, `sno3.hub.mylab.com`) | MCE only: hcp-kv3's control plane, MetalLB for its API (`.253`) | `setup_sno3_mce.yaml` |
-| sno | OpenShift Virtualization: hcp-kv3's worker VM | `../setup_sno.yaml`, as for hcp-kv2 |
+| sno | OpenShift Virtualization: hcp-kv3's two worker VMs | `../setup_sno.yaml`, as for hcp-kv2 |
 
 ```
 hub1 (ACM) ── imports ──> sno3 (MCE)   hypershift-addon on sno3 reports its hosted
@@ -293,8 +317,8 @@ leave hcp-kv3 out, and runs against sno3 leave hcp-kv1/kv2 out, each saying so.
 
 **What ACM manages.** The hosted cluster (`sno3-hcp-kv3`) fully - policies,
 apps, search, console. Its lifecycle is the HostedCluster and NodePool on sno3.
-Its worker VM shows up under the SNO in ACM's VM views; change it through the
-NodePool, not there, since the NodePool owns it.
+Its worker VMs show up under the SNO in ACM's VM views; change them through
+the NodePool, not there, since the NodePool owns them.
 
 **Not tested on a real lab.** The import and discovery follow Red Hat's
 documented procedure as implemented in Red Hat's own test suite (ocs-ci); the
@@ -503,7 +527,7 @@ Virtualization and wildcard-route policy stay.
 | Nodes `Ready,SchedulingDisabled`; routers and console Pending | Auto-repair is replacing the workers (NotReady past `kubevirt_mhc_timeout`) and the drain hangs | `oc -n hcp-kv1-hcp-kv1 get machines.cluster.x-k8s.io` shows `Deleting`; raise the NodePool's `hypershift.openshift.io/machine-health-check-timeout`, then `oc annotate machines.cluster.x-k8s.io -n hcp-kv1-hcp-kv1 --all machine.cluster.x-k8s.io/exclude-node-draining=""` |
 | hcp-kv2: "Leaving out hcp-kv2" | The SNO isn't built (`/var/lib/libvirt/images/sno_install/auth/kubeconfig` is missing) | Build it - [steps.md, hcp-kv2](steps.md#hcp-kv2-workers-on-the-sno-optional) |
 | Worker VMs `Running` but paused (`PausedIOError`, event "not enough space on volume: rhcos"); nodes join, then `NodeStatusUnknown` | The LVMS thin pool is full - on the SNO, usually OpenShift Virtualization's built-in OS images | `oc --kubeconfig <sno> debug node/sno -- chroot /host lvs` (`thin-pool-1` at 100%); `oc --kubeconfig <sno> get pvc -n openshift-virtualization-os-images`. Turn the OS images off (the playbook does): `oc patch hyperconverged kubevirt-hyperconverged -n openshift-cnv --type=merge -p '{"spec":{"workloadSources":{"enableCommonBootImageImport":false}}}'` - with `v1` (4.22); `"unknown field"` means the wrong path. Once `oc get dataimportcron -n openshift-virtualization-os-images` is empty, delete those PVCs, then `virtctl unpause vmi <vm> -n hcp-kv2-hcp-kv2` |
-| hcp-kv2: VMs `Pending` on the SNO | Not enough memory beside OpenShift Virtualization, or no StorageClass | `oc --kubeconfig <sno> describe vmi -n hcp-kv2-hcp-kv2`; `oc --kubeconfig <sno> get sc`; a bigger SNO or `nodepool_replicas: 1` |
+| hcp-kv2: VMs `Pending` on the SNO | Not enough memory beside OpenShift Virtualization, or no StorageClass | `oc --kubeconfig <sno> describe vmi -n hcp-kv2-hcp-kv2`; `oc --kubeconfig <sno> get sc`; an SNO at 96 GiB ([Grow the SNO's memory](#grow-the-snos-memory)) or lower `nodepool_replicas` |
 | hcp-kv2: HostedCluster or NodePool errors naming the infra kubeconfig, no VMs on the SNO | The hub's pods can't reach `api.sno.mylab.com:6443`, or the token is wrong | `oc debug node/worker1.hub.mylab.com -- chroot /host curl -k https://api.sno.mylab.com:6443/version`; `oc get secret infra-kubeconfig-hcp-kv2 -n hcp-kv2`; `oc --kubeconfig <sno> get sa,secret -n hcp-kv2-hcp-kv2` |
 | hcp-kv2: `ValidKubeVirtInfraNetworkPolicyRBAC=False` | The SNO-side ClusterRole to read its network config is missing | `oc --kubeconfig <sno> apply -f rendered/hcp-kv2/00-infra-access.yaml` |
 | hcp-kv2: console unreachable | The SNO's router doesn't admit the wildcard Route | `oc --kubeconfig <sno> -n hcp-kv2-hcp-kv2 get route`; `oc --kubeconfig <sno> -n openshift-ingress-operator get ingresscontroller default -o jsonpath='{.spec.routeAdmission}'` |

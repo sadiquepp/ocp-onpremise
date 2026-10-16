@@ -116,14 +116,14 @@ control planes without it. The cost is hub1's disks if the host crashes:
 > ```bash
 > # the SNO - hcp-kv2's and hcp-kv3's worker VMs (hcp-kv2 section below)
 > ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass \
->   -e sno_lvm_storage=true -e sno_memory=65536 -e sno_vcpus=16
+>   -e sno_lvm_storage=true -e sno_memory=98304 -e sno_vcpus=16
 >
 > # sno3 - hcp-kv3's control plane: build, MCE and MetalLB, all without hub1
 > cd kubevirt
 > ansible-playbook -i ../inventory/hosts setup_sno3_mce.yaml --ask-vault-pass --tags sno,mce,metallb
 > ```
 >
-> Check the host has the memory first (`free -g`): 64 GiB for the SNO and
+> Check the host has the memory first (`free -g`): 96 GiB for the SNO and
 > 40 GiB for sno3, on top of hub1 and Ceph. Three installs at once also share
 > the host's disks, so each runs a little slower than on its own.
 >
@@ -250,15 +250,15 @@ worker VMs on the single-node cluster. Explanation:
 [README.md](README.md#workers-on-another-cluster-hcp-kv2-on-the-sno).
 
 From the repository root. The SNO needs LVM Storage (the Ceph flow turns it
-off) and room for hcp-kv2's workers beside OpenShift and OpenShift
-Virtualization: 64 GiB for two 12 GiB workers. Check the host has it
-(`free -g`); with less, build it at 48 GiB (`-e sno_memory=49152`) and set
-`nodepool_replicas: 1` on hcp-kv2's entry in `vars.yaml`. Started in
+off) and room for the workers beside OpenShift and OpenShift Virtualization:
+96 GiB for four 12 GiB workers, hcp-kv2's two and hcp-kv3's two. Check the
+host has it (`free -g`, "available"). For hcp-kv2 alone, 64 GiB
+(`-e sno_memory=65536`) is enough. Started in
 [step 5](#5-hub1)? Then only the checks below are left:
 
 ```bash
 ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass \
-  -e sno_lvm_storage=true -e sno_memory=65536 -e sno_vcpus=16
+  -e sno_lvm_storage=true -e sno_memory=98304 -e sno_vcpus=16
 
 export KUBECONFIG=/var/lib/libvirt/images/sno_install/auth/kubeconfig
 oc get nodes                                  # sno Ready
@@ -356,7 +356,7 @@ Verify, on each of the three:
 oc --kubeconfig /var/lib/libvirt/images/sno3_install/auth/kubeconfig \
   get hostedcluster,nodepool -n hcp-kv3                   # control plane: sno3
 oc --kubeconfig /var/lib/libvirt/images/sno_install/auth/kubeconfig \
-  get vm,vmi -n hcp-kv3-hcp-kv3                           # worker VM: the SNO
+  get vm,vmi -n hcp-kv3-hcp-kv3                           # 2 worker VMs: the SNO
 oc --kubeconfig /var/lib/libvirt/images/hub_install/auth/kubeconfig \
   get discoveredcluster -n sno3                           # hub1 found it ...
 oc --kubeconfig /var/lib/libvirt/images/hub_install/auth/kubeconfig \

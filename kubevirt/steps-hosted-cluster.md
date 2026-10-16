@@ -556,7 +556,7 @@ curl -kI https://console-openshift-console.apps.hcp-kv2.apps.sno.mylab.com
 
 The three-cluster layout ([steps.md, hcp-kv3](steps.md#hcp-kv3-control-plane-on-sno3-vms-on-the-sno-managed-from-hub1-optional)):
 hub1's ACM manages, sno3 runs MCE alone and hosts hcp-kv3's control plane, and
-the SNO runs its worker VM. First sno3 itself - `setup_sno3_mce.yaml`, one tag
+the SNO runs its two worker VMs. First sno3 itself - `setup_sno3_mce.yaml`, one tag
 per step - then hcp-kv3, which is 8.1-8.9 against sno3.
 
 Before S.1: the SNO built (the hcp-kv2 section of [steps.md](steps.md#hcp-kv2-workers-on-the-sno-optional)),
@@ -902,7 +902,7 @@ $SNO3PB --tags import-infra
 Optional: hcp-kv3 does not need it. HyperShift reaches the SNO through the
 infra kubeconfig Secret, not through ACM, and K.7's import of hcp-kv3 rests on
 S.4 alone. What this adds is visibility: an ordinary import, so ACM's search
-and virtualization views show the VMs the SNO runs, hcp-kv3's worker among
+and virtualization views show the VMs the SNO runs, hcp-kv3's workers among
 them. Skip it and come back any time. By hand:
 
 ```bash
@@ -958,11 +958,12 @@ which one with `--kubeconfig`:
 | Cluster | Variable | What of hcp-kv3's is there |
 |---|---|---|
 | sno3 | `$SNO3` | HostedCluster and NodePool (ns `hcp-kv3`), the control plane (ns `hcp-kv3-hcp-kv3`), the API at `.253` |
-| the SNO | `$SNO` | The worker VM, its disk, the `*.apps` passthrough Route (ns `hcp-kv3-hcp-kv3`) |
+| the SNO | `$SNO` | The two worker VMs, their disks, the `*.apps` passthrough Route (ns `hcp-kv3-hcp-kv3`) |
 | hub1 | `$HUB` | Only the DiscoveredCluster and the ManagedCluster `sno3-hcp-kv3` - nothing of HyperShift's |
 
-hcp-kv3 is `SingleReplica` (sno3 has one node), with one worker of 4 vCPU and
-12Gi. Once, add the playbook and hcp-kv3's kubeconfig path to the
+hcp-kv3's control plane is `SingleReplica` (sno3 has one node); it has two
+workers of 4 vCPU and 12Gi, on the SNO beside hcp-kv2's two - which is why
+the SNO is built at 96 GiB. Once, add the playbook and hcp-kv3's kubeconfig path to the
 variables:
 
 ```bash
@@ -1082,7 +1083,7 @@ grep -A4 'credentials:' rendered/hcp-kv3/01-hosted-cluster.yaml          # infra
 grep 'baseDomain:\|AvailabilityPolicy' rendered/hcp-kv3/01-hosted-cluster.yaml   # apps.sno.mylab.com; SingleReplica x2
 
 oc --kubeconfig $SNO3 apply -f rendered/hcp-kv3/01-hosted-cluster.yaml
-oc --kubeconfig $SNO3 get hostedcluster hcp-kv3 -n hcp-kv3 -w   # PROGRESS Partial; AVAILABLE comes after the worker
+oc --kubeconfig $SNO3 get hostedcluster hcp-kv3 -n hcp-kv3 -w   # PROGRESS Partial; AVAILABLE comes after the workers
 ```
 
 sno3's HyperShift operator starts the control plane on sno3. In another
@@ -1115,14 +1116,14 @@ Follow it:
 
 ```bash
 . /root/kubevirt-manifests/hcp-kv3.env
-oc --kubeconfig $SNO get dv -n hcp-kv3-hcp-kv3 -w       # root disk on lvms-vg1: ImportScheduled -> Succeeded
-oc --kubeconfig $SNO get vm,vmi -n hcp-kv3-hcp-kv3 -w   # 1 VM, 4 vCPU / 12Gi; VMI Scheduling -> Running
-oc --kubeconfig $SNO3 get nodepool -n hcp-kv3 -w        # CURRENT NODES 0 -> 1
+oc --kubeconfig $SNO get dv -n hcp-kv3-hcp-kv3 -w       # root disks on lvms-vg1: ImportScheduled -> Succeeded
+oc --kubeconfig $SNO get vm,vmi -n hcp-kv3-hcp-kv3 -w   # 2 VMs, 4 vCPU / 12Gi each; VMIs Scheduling -> Running
+oc --kubeconfig $SNO3 get nodepool -n hcp-kv3 -w        # CURRENT NODES 0 -> 2
 ```
 
-The SNO now runs hcp-kv2's two workers and this one: a VMI stuck in
-`Scheduling` is memory (`oc --kubeconfig $SNO describe vmi ...`). To watch it
-boot:
+The SNO now runs four workers, hcp-kv2's two and these two: a VMI stuck in
+`Scheduling` is memory - an SNO built smaller than 96 GiB
+(`oc --kubeconfig $SNO describe vmi ...`). To watch one boot:
 
 ```bash
 . /root/kubevirt-manifests/hcp-kv3.env
@@ -1159,7 +1160,7 @@ klusterlet competing with hub1's.
 
 No DiscoveredCluster after a few minutes: check S.4's hypershift-addon
 (`oc --kubeconfig $HUB get managedclusteraddon hypershift-addon -n sno3`).
-As in 8.7, JOINED/AVAILABLE need only hcp-kv3's API, not the worker.
+As in 8.7, JOINED/AVAILABLE need only hcp-kv3's API, not the workers.
 
 #### K.8 Wait, and get the kubeconfig
 
@@ -1179,7 +1180,7 @@ oc --kubeconfig $SNO3 extract -n hcp-kv3 \
   secret/$(oc --kubeconfig $SNO3 get hostedcluster hcp-kv3 -n hcp-kv3 -o jsonpath='{.status.kubeconfig.name}') \
   --keys=kubeconfig --to=$(dirname $KV3) --confirm
 
-oc --kubeconfig $KV3 get nodes -w                        # 1 Ready
+oc --kubeconfig $KV3 get nodes -w                        # 2 Ready
 ```
 
 #### K.9 Verify
