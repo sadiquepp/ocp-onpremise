@@ -2104,6 +2104,14 @@ directory automates only the rest. Every command, start to finish, in
 [kubevirt/steps.md](kubevirt/steps.md); explanations in
 [kubevirt/README.md](kubevirt/README.md).
 
+![Hosted control planes on KubeVirt: one infra router serves every hosted cluster's *.apps by TLS SNI passthrough, and kubevirt-csi passes storage through to the worker VMs](kubevirt/images/hcp-kubevirt-ingress-passthrough.svg)
+
+*The default layout, ingress and storage both passed through the
+infrastructure cluster: hub1 in this lab, with `*.apps.hub.mylab.com` and
+hcp-kv1 as hosted cluster A.
+[kubevirt/README.md, Ingress](kubevirt/README.md#ingress-the-hubs-router-or-metallb)
+explains it.*
+
 hcp-kv1 is an ordinary `hosted_clusters` entry with `platform: kubevirt`, so
 `setup-dns` and `setup-hub-acm` give it its API name and pool.
 `create_hosted_cluster.yaml` skips it. `hcp-kv2` is the same with

@@ -84,6 +84,15 @@ in `vars.yaml`).
 
 **`route` (default): through the hub's router.**
 
+![Ingress passthrough: one infra router serves every hosted cluster's *.apps by TLS SNI, through a wildcard passthrough Route and Service to the worker VMs; kubevirt-csi hotplugs infra PVCs into the VMs](images/hcp-kubevirt-ingress-passthrough.svg)
+
+*The infrastructure cluster is hub1 here (nested VMs in the lab, bare metal
+in production). `*.apps.infra.example.com` is `*.apps.hub.mylab.com`.
+Hosted cluster A is hcp-kv1, its namespace `hcp-kv1-hcp-kv1`. The lower half
+is the storage passthrough that
+[steps.md, step 10](steps.md#storage-passthrough-a-pvc-from-hub1s-storage)
+tests.*
+
 ```
 client → *.apps.hub.mylab.com wildcard (already in DNS) → hub router
        → SNI *.apps.hcp-kv1.apps.hub.mylab.com
