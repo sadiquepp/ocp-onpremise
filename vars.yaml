@@ -730,6 +730,18 @@ hosted_domain_disconnected: "hcp-cluster1-d.{{ base_domain }}"
 hub_vm_folder: "{{ download_dir }}/hub"
 hub_install_folder: "{{ download_dir }}/hub_install"
 hub_name: hub
+
+## Disk cache mode of hub1's VMs: off (cache=none) by default; true builds them
+## with cache=unsafe. QEMU then ignores the guests' flushes, so etcd's fsyncs
+## stop waiting for the host's disks. On this host's spinning, write-through
+## RAID that is the difference between hub1's etcd logging ~200-2500 'took too
+## long' per 10 minutes and none - which is what the KubeVirt labs need, since
+## every hosted control plane's controllers hold leases on hub1's API.
+## The cost: a host crash or power loss (not a clean shutdown) can corrupt
+## hub1's disks. A lab rebuilt from playbooks can afford that; turn it on for
+## the KubeVirt builds. Only VMs created after it is set get it - for a running
+## hub1, kubevirt/README.md, "hub1's disks: cache=unsafe".
+hub_disk_cache_unsafe: false
 hub2_name: hub2
 
 ## Variables required by Setup-Hub-Cluster2 Role (the replacement hub

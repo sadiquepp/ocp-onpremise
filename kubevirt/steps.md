@@ -94,12 +94,18 @@ ssh root@192.168.122.27 ceph -s          # HEALTH_OK, 3 mons, 9 OSDs
 ## 5. Hub1
 
 ```bash
-ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass
+ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass \
+  -e hub_disk_cache_unsafe=true
 
 export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
 oc get ipaddresspool hcp-kv1-api-pool -n metallb-system \
   -o jsonpath='{.spec.addresses}{"\n"}'  # ["192.168.122.250-192.168.122.250"]
 ```
+
+`hub_disk_cache_unsafe=true` builds hub1's disks with `cache=unsafe`. It is off
+by default; on this lab's spinning disks hub1's etcd is too slow for the hosted
+control planes without it. The cost is hub1's disks if the host crashes:
+[README, hub1's disks](README.md#hub1s-disks-cacheunsafe).
 
 > **Testing hcp-kv2 or hcp-kv3 too? Start their SNOs now, in parallel.**
 > Each install takes the better part of an hour, and none of them needs

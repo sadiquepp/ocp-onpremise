@@ -32,6 +32,7 @@ Virtualization itself.
   - [Grow the SNO's storage disk](#grow-the-snos-storage-disk)
 - [Three clusters: ACM on hub1, MCE on sno3, VMs on the SNO (hcp-kv3)](#three-clusters-acm-on-hub1-mce-on-sno3-vms-on-the-sno-hcp-kv3)
 - [Before you start](#before-you-start)
+  - [hub1's disks: cache=unsafe](#hub1s-disks-cacheunsafe)
 - [Run it](#run-it)
 - [Add a cluster](#add-a-cluster)
 - [What it changes outside this directory](#what-it-changes-outside-this-directory)
@@ -337,6 +338,53 @@ What that gives this lab, and why it matters here:
   Without it a run builds hcp-kv1 alone and says hcp-kv2 was left out.
 
 The preflight checks all of these and names the step that fixes each one.
+
+### hub1's disks: cache=unsafe
+
+hub1's VM disks use `cache=none` by default, so every etcd fsync waits for the
+host's disks. On this lab's host - a single spinning RAID volume with
+write-through caching, shared by every VM - that is too slow for the KubeVirt
+labs. hub1's etcd logged 200 to 2500 slow requests per 10 minutes. The
+hosted control planes' controllers (capi-provider and the rest) hold their
+leases on hub1's API, missed the 5-second renewal, and restarted dozens of
+times. hcp-kv2's workers took hours to go Ready.
+
+`hub_disk_cache_unsafe: true` builds hub1's VMs with `cache=unsafe`. QEMU then
+ignores the guests' flushes. Leave it off for the other labs; turn it on for
+the KubeVirt builds:
+
+```bash
+ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass -e hub_disk_cache_unsafe=true
+```
+
+The trade-off: if the host itself crashes or loses power, hub1's disks can be
+corrupted - its etcd most of all - and hub1 has to be rebuilt. A clean
+shutdown (`shutdown_hub_cluster.yaml`, or `virsh shutdown`) is safe.
+
+It applies to VMs as they are created. To switch a running hub1, restart its
+masters one at a time with the new mode - each comes back before the next goes,
+so etcd keeps quorum:
+
+```bash
+export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
+oc get nodes                                          # node names; the loop assumes master1.hub.mylab.com ...
+for m in hub_master1 hub_master2 hub_master3; do
+  virsh dumpxml $m > /root/$m.xml.bak                 # undo: virsh define /root/$m.xml.bak
+  virsh shutdown $m
+  until virsh domstate $m | grep -q 'shut off'; do sleep 5; done
+  virsh dumpxml $m | sed "s/cache='none'/cache='unsafe'/" > /root/$m.xml && virsh define /root/$m.xml
+  virsh start $m
+  until oc get node ${m#hub_}.hub.mylab.com 2>/dev/null | grep -q ' Ready'; do sleep 15; done
+  sleep 60                                            # let etcd resync before the next one
+done
+oc logs -n openshift-etcd $(oc get pods -n openshift-etcd -l app=etcd -o name | head -1) \
+  -c etcd --since=10m | grep -c 'took too long'       # near 0
+```
+
+The masters are where hub1's etcd is, and the change matters most there.
+The workers hold the hosted control planes' etcd on LVMS. Switch them the same
+way, but `oc adm drain` each one first: restarting a worker stops the VMs on
+it.
 
 ## Run it
 
