@@ -1,0 +1,19 @@
+# The namespace Online Boutique runs in - created by the platform admin, not by
+# the app's Argo CD Application.
+#
+# The label is what lets the default Argo CD instance (openshift-gitops)
+# deploy into it: the operator sees it and gives that instance's controller
+# the 'admin' role in this namespace, and only here. Without it, every sync
+# fails with "forbidden".
+#
+# In production the namespace is the platform team's to hand out - from a
+# cluster-configuration Application, an ACM Policy or a self-service request -
+# and the app team's Application only fills it.
+#
+#   oc apply -f gitops/apps/online-boutique-namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: online-boutique
+  labels:
+    argocd.argoproj.io/managed-by: openshift-gitops

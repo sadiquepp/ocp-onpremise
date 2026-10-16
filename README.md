@@ -2119,6 +2119,15 @@ cd kubevirt
 ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass
 ```
 
+## GitOps with Argo CD on hub1
+
+**Lives in [`gitops/`](gitops/).** Red Hat OpenShift GitOps on hub1, learned
+step by step: the operator, then one application (Online Boutique) deployed by
+Argo CD from git, with exercises on drift, self-heal and prune. Manifests and
+`oc` only, no playbook. Each step notes what production does differently.
+The aim is to deploy the KubeVirt hosted clusters the same way later.
+Start at [gitops/README.md](gitops/README.md).
+
 ## UDN over BGP, VRF-Lite and EVPN (containerlab fabric)
 
 **Moved to [`udn-bgp-evpn/`](udn-bgp-evpn/).** The whole lab - the two roles,
