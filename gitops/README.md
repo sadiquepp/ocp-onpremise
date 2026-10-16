@@ -140,21 +140,29 @@ the fields git declares.** Online Boutique's Deployments leave `replicas` out
 of their manifests, so git has no opinion on it: 1, 3 or 10 all match. Teams
 use exactly that to leave replicas to a HorizontalPodAutoscaler.
 
-Now change a field git does declare: the image. `v0.10.5` is an older,
-working release of the same frontend.
+Now change a field git does declare: the frontend's memory limit. Git says
+`128Mi`; raising it is harmless, and a rollout starts the frontends with the
+new value.
 
 ```bash
-oc set image deployment/frontend -n online-boutique \
-  server=us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/frontend:v0.10.5
-oc get application online-boutique -n openshift-gitops      # OutOfSync, still Healthy
+oc set resources deployment/frontend -n online-boutique --limits=memory=256Mi
+oc get application online-boutique -n openshift-gitops      # OutOfSync; Progressing during the rollout, then Healthy
 ```
 
-In the UI, **App Diff** on `frontend` shows the image: `v0.10.6` in git,
-`v0.10.5` on the cluster. That is drift, a "hotfix" made behind git's back.
-It is *OutOfSync* but still *Healthy*: sync status compares the cluster with
-git, while health is about whether the resources work. Nothing reverts it yet,
-because sync is manual. Press **Sync**, and the image goes back to `v0.10.6`.
-Git wins. The 3 replicas stay, since git still does not declare them.
+In the UI, **App Diff** on `frontend` shows the limit: `128Mi` in git, `256Mi`
+on the cluster. That is drift, a "fix" made behind git's back. It is
+*OutOfSync* but still *Healthy*: sync status compares the cluster with git,
+while health is about whether the resources work. *Progressing* during the
+rollout is health too. Nothing reverts the change yet, because sync is
+manual. Press **Sync**, and the limit goes back to `128Mi`. Git wins. The 3
+replicas stay, since git still does not declare them.
+
+Health can also go *Degraded*. Changing the image to a tag that cannot be
+pulled or does not start (`oc set image ... frontend:<bad tag>`) leaves the
+rollout stuck: one new pod never becomes ready, while the old ones keep
+serving. Kubernetes marks the rollout failed (`ProgressDeadlineExceeded`),
+and Argo CD shows *Degraded*. A Sync is also the fix there: git still has the
+image that works.
 
 **2. A change through the desired state: let git own the replicas.**
 Edit `gitops/apps/online-boutique.yaml` to run two frontends. Add under
