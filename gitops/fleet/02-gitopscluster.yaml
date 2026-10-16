@@ -1,0 +1,29 @@
+# Register the Placement's clusters in the hub's Argo CD.
+#
+# ACM's GitOpsCluster controller writes one Argo CD cluster Secret per selected
+# cluster into openshift-gitops (label argocd.argoproj.io/secret-type=cluster):
+# the cluster's API URL and a token for the application-manager add-on's
+# service account on that cluster. Argo CD then deploys there directly - the
+# "push" model. It also creates the acm-placement ConfigMap that lets an
+# ApplicationSet read the Placement's decisions.
+#
+# Lab compromise: that token is the add-on's, with wide rights on the managed
+# cluster. Production scopes it: managedServiceAccountRef here plus an ACM
+# ClusterPermission granting only what the apps need - or the "pull" model,
+# where each cluster's own Argo CD deploys and the hub only hands it the
+# Application.
+#
+#   oc apply -f gitops/fleet/02-gitopscluster.yaml
+apiVersion: apps.open-cluster-management.io/v1beta1
+kind: GitOpsCluster
+metadata:
+  name: online-boutique
+  namespace: openshift-gitops
+spec:
+  argoServer:
+    cluster: notused        # ignored by current ACM; the Argo CD is the one in argoNamespace on the hub
+    argoNamespace: openshift-gitops
+  placementRef:
+    kind: Placement
+    apiVersion: cluster.open-cluster-management.io/v1beta1
+    name: online-boutique

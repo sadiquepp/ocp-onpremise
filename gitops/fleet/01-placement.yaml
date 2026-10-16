@@ -1,0 +1,41 @@
+# Which managed clusters get Online Boutique - decided by ACM, not by Argo CD.
+#
+# A Placement in openshift-gitops selects clusters by label. Adding a cluster
+# to the app is then `oc label managedcluster <name> online-boutique=enabled`,
+# and removing it is taking the label off. Nobody edits an Argo CD object.
+#
+# The ManagedClusterSetBinding comes first: a Placement only sees clusters in
+# the cluster sets bound to its namespace. This repo's hosted clusters are in
+# 'default' (hosted_cluster_clusterset in vars.yaml).
+#
+#   oc apply -f gitops/fleet/01-placement.yaml
+apiVersion: cluster.open-cluster-management.io/v1beta2
+kind: ManagedClusterSetBinding
+metadata:
+  name: default
+  namespace: openshift-gitops
+spec:
+  clusterSet: default
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: online-boutique
+  namespace: openshift-gitops
+spec:
+  clusterSets:
+    - default
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchLabels:
+            online-boutique: enabled
+  # Keep a cluster selected while it is briefly unreachable. Without these, a
+  # cluster that drops off for a minute leaves the Placement, the
+  # ApplicationSet deletes its Application, and the finalizer tries to delete
+  # the app from it. Red Hat's GitOps examples set them for that reason.
+  tolerations:
+    - key: cluster.open-cluster-management.io/unreachable
+      operator: Exists
+    - key: cluster.open-cluster-management.io/unavailable
+      operator: Exists

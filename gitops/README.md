@@ -17,6 +17,7 @@ lab shortcuts are visible.
 - [3. The namespace, from the platform admin](#3-the-namespace-from-the-platform-admin)
 - [4. The Application, and the first sync](#4-the-application-and-the-first-sync)
 - [Exercises](#exercises)
+- [5. The same app on managed clusters: hcp-kv1, hcp-kv2](#5-the-same-app-on-managed-clusters-hcp-kv1-hcp-kv2)
 - [Clean up](#clean-up)
 - [What production does differently](#what-production-does-differently)
 
@@ -37,6 +38,9 @@ namespace) and a sync policy.
 | `bootstrap/01-openshift-gitops-operator.yaml` | you, once | The operator. It starts the default Argo CD instance in `openshift-gitops` |
 | `apps/online-boutique-namespace.yaml` | you, as platform admin | The `online-boutique` namespace, labelled so that instance may deploy into it |
 | `apps/online-boutique.yaml` | you, once | The Argo CD Application. From here on, Argo CD deploys the app |
+| `fleet/01-placement.yaml` | you, as platform admin | An ACM Placement: the managed clusters labelled `online-boutique=enabled` |
+| `fleet/02-gitopscluster.yaml` | you, as platform admin | ACM's GitOpsCluster: registers those clusters in the hub's Argo CD |
+| `fleet/03-online-boutique-appset.yaml` | you, once | An ApplicationSet: one Application per selected cluster |
 
 The app itself comes from
 [sadiquepp/openshift `test-workloads/online-boutique`](https://github.com/sadiquepp/openshift/tree/main/test-workloads/online-boutique),
@@ -205,9 +209,116 @@ leaves it running. Add `prune: true` under `automated`, and it is deleted.
 Prune is off by default because deleting things is the one mistake that is
 hard to undo.
 
+## 5. The same app on managed clusters: hcp-kv1, hcp-kv2
+
+The hub's Argo CD can deploy to any cluster ACM manages. That is the usual
+production shape: one Argo CD on the hub, and ACM deciding which clusters get
+what. Three objects, each with one job:
+
+```
+Placement (ACM)          which clusters: those labelled online-boutique=enabled
+   |
+GitOpsCluster (ACM)      registers them in Argo CD: one cluster Secret each
+   |
+ApplicationSet (Argo CD) one Application per cluster: online-boutique-<cluster>
+```
+
+The clusters must be joined to hub1. If you applied Online Boutique to them by
+hand from [kubevirt/steps.md](../kubevirt/steps.md), remove that copy first,
+so you see Argo CD build it from nothing:
+
+```bash
+export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig   # hub1
+cd /root/ocp-onpremise
+oc get managedcluster hcp-kv1 hcp-kv2               # JOINED True, AVAILABLE True
+
+KV1=/var/lib/libvirt/images/hcp-kv1/kubeconfig
+KV2=/var/lib/libvirt/images/hcp-kv2/kubeconfig
+for k in $KV1 $KV2; do
+  oc --kubeconfig $k delete -k https://github.com/sadiquepp/openshift/test-workloads/online-boutique/overlays/no-loadgenerator --ignore-not-found
+done
+```
+
+**Choose the clusters.** Start with hcp-kv1 only:
+
+```bash
+oc apply -f gitops/fleet/01-placement.yaml
+oc label managedcluster hcp-kv1 online-boutique=enabled
+oc get placementdecision -n openshift-gitops -l cluster.open-cluster-management.io/placement=online-boutique \
+  -o jsonpath='{.items[*].status.decisions[*].clusterName}{"\n"}'          # hcp-kv1
+```
+
+**Register them in Argo CD.**
+
+```bash
+oc apply -f gitops/fleet/02-gitopscluster.yaml
+oc get gitopscluster online-boutique -n openshift-gitops -o jsonpath='{.status.phase}: {.status.message}{"\n"}'   # successful
+oc get secret -n openshift-gitops -l argocd.argoproj.io/secret-type=cluster   # one for hcp-kv1
+oc get configmap acm-placement -n openshift-gitops                            # the ApplicationSet's view of Placements
+```
+
+In the Argo CD UI, **Settings > Clusters** now lists hcp-kv1 beside
+`in-cluster` (hub1).
+
+**Deploy.**
+
+```bash
+oc apply -f gitops/fleet/03-online-boutique-appset.yaml
+oc get applications -n openshift-gitops -w     # online-boutique-hcp-kv1: Synced, Progressing -> Healthy
+oc --kubeconfig $KV1 get pods -n online-boutique
+oc --kubeconfig $KV1 get route frontend -n online-boutique -o jsonpath='https://{.spec.host}{"\n"}'
+```
+
+The sync is automated, so nobody presses Sync. The hub's own
+`online-boutique` Application is untouched: a separate copy, on hub1.
+
+**Add a cluster by labelling it.** This is the step that scales to a fleet:
+
+```bash
+oc label managedcluster hcp-kv2 online-boutique=enabled
+oc get applications -n openshift-gitops -w     # online-boutique-hcp-kv2 appears, within about 3 minutes
+oc --kubeconfig $KV2 get pods -n online-boutique
+```
+
+No Argo CD object was edited. The Placement picked up kv2, GitOpsCluster added
+its Secret, and the ApplicationSet generated its Application. hcp-kv3 joins
+the same way: on hub1 it is the ManagedCluster `sno3-hcp-kv3`.
+
+**Remove one by taking the label off.**
+
+```bash
+oc label managedcluster hcp-kv2 online-boutique-
+oc get applications -n openshift-gitops        # online-boutique-hcp-kv2 gone
+oc --kubeconfig $KV2 get deploy -n online-boutique   # gone too: the finalizer; the namespace stays
+```
+
+**Self-heal on a remote cluster.** Delete something on hcp-kv1, and the hub
+puts it back:
+
+```bash
+oc --kubeconfig $KV1 delete deployment checkoutservice -n online-boutique
+oc --kubeconfig $KV1 get deployment checkoutservice -n online-boutique -w   # recreated
+```
+
+**Where it shows.** The Argo CD UI lists one Application per cluster. ACM's
+**Fleet Management > Applications** lists the ApplicationSet once, with the
+clusters it reaches, and its topology view shows the resources on each.
+
+**When something does not appear:**
+
+| Symptom | Look at |
+|---|---|
+| No PlacementDecision cluster | The label; the ManagedClusterSetBinding (the cluster must be in the `default` set: `oc get managedcluster hcp-kv1 --show-labels`) |
+| No cluster Secret | `oc get gitopscluster online-boutique -n openshift-gitops -o yaml`, its status message; the cluster's `application-manager` add-on: `oc get managedclusteraddon -n hcp-kv1` |
+| Application *Unknown*, `ComparisonError` | The hub cannot reach that cluster's API. The Application's message names the URL |
+
 ## Clean up
 
 ```bash
+oc delete applicationset online-boutique -n openshift-gitops   # deletes its Applications, and they the app on each cluster
+oc delete -f gitops/fleet/02-gitopscluster.yaml -f gitops/fleet/01-placement.yaml
+oc label managedcluster hcp-kv1 hcp-kv2 online-boutique-
+
 oc delete application online-boutique -n openshift-gitops   # the finalizer deletes everything it deployed
 oc get all -n online-boutique                                # empty
 oc delete -f gitops/apps/online-boutique-namespace.yaml
@@ -230,4 +341,7 @@ The operator stays: the next lessons use it.
 | Least privilege via the `managed-by` label | The same, or tighter custom roles (the operator's `CONTROLLER_CLUSTER_ROLE`). Not cluster-admin | This repo's older `roles/setup-gitops` grants the controller cluster-admin: quick, and exactly what production avoids |
 | `channel: latest`, automatic upgrades | A versioned channel, `installPlanApproval: Manual` | Operator upgrades are planned changes |
 | Login as kubeadmin or local admin | SSO groups (OpenShift OAuth or Dex with the corporate IdP) mapped to Argo CD roles; local admin disabled | Audit trail per person |
+| Placement by an `online-boutique=enabled` label | Placement by what a cluster *is*: `env=prod`, `region=...`, a cluster set per team or environment | A new cluster gets the right apps from its labels alone |
+| GitOpsCluster with the add-on's wide token (push) | A scoped `managedServiceAccountRef` + `ClusterPermission`, or the pull model (each cluster's own Argo CD deploys; the hub hands it the Application) | Least privilege on the clusters; pull also scales further and works when the hub cannot reach a cluster's API |
+| All clusters sync at once | ApplicationSet progressive sync, or one ApplicationSet per environment promoted by PR | A bad change reaches dev before it reaches every prod cluster |
 | Manual sync, then self-heal | Automated sync with self-heal for platform config; apps often automated in dev, gated (manual sync, sync windows, or promotion by PR) in prod | Change control without hand-applied drift |
