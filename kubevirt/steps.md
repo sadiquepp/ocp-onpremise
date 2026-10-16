@@ -27,7 +27,9 @@ run from the repository root; steps 8 onwards run from `kubevirt/`.
 - [10. Workload](#10-workload)
   - [Storage passthrough: a PVC from hub1's storage](#storage-passthrough-a-pvc-from-hub1s-storage)
 - [hcp-kv2: workers on the SNO (optional)](#hcp-kv2-workers-on-the-sno-optional)
+  - [Online Boutique on hcp-kv2](#online-boutique-on-hcp-kv2)
 - [hcp-kv3: control plane on sno3, VMs on the SNO, managed from hub1 (optional)](#hcp-kv3-control-plane-on-sno3-vms-on-the-sno-managed-from-hub1-optional)
+  - [Online Boutique on hcp-kv3](#online-boutique-on-hcp-kv3)
 - [MetalLB ingress instead (optional)](#metallb-ingress-instead-optional)
 - [Cleanup](#cleanup)
 
@@ -306,7 +308,19 @@ oc get nodes
 curl -kI https://console-openshift-console.apps.hcp-kv2.apps.sno.mylab.com
 ```
 
-Remove it with `--tags destroy -e kubevirt_cluster=hcp-kv2`; that also clears
+### Online Boutique on hcp-kv2
+
+The same workload as [step 10](#10-workload), on hcp-kv2's workers on the SNO:
+
+```bash
+export KUBECONFIG=/var/lib/libvirt/images/hcp-kv2/kubeconfig
+oc apply -k https://github.com/sadiquepp/openshift/test-workloads/online-boutique/overlays/no-loadgenerator
+oc get pods -n online-boutique -o wide                       # spread over the two workers
+oc get route frontend -n online-boutique -o jsonpath='{.spec.host}{"\n"}'
+# frontend-online-boutique.apps.hcp-kv2.apps.sno.mylab.com - through the SNO's router
+```
+
+Remove hcp-kv2 with `--tags destroy -e kubevirt_cluster=hcp-kv2`; that also clears
 its namespace and ServiceAccount off the SNO.
 
 ## hcp-kv3: control plane on sno3, VMs on the SNO, managed from hub1 (optional)
@@ -364,7 +378,19 @@ oc --kubeconfig /var/lib/libvirt/images/hub_install/auth/kubeconfig \
 curl -kI https://console-openshift-console.apps.hcp-kv3.apps.sno.mylab.com
 ```
 
-Remove it with `--tags destroy -e kubevirt_mgmt=sno3`. sno3 goes with
+### Online Boutique on hcp-kv3
+
+The same workload as [step 10](#10-workload), on hcp-kv3's workers on the SNO:
+
+```bash
+export KUBECONFIG=/var/lib/libvirt/images/hcp-kv3/kubeconfig
+oc apply -k https://github.com/sadiquepp/openshift/test-workloads/online-boutique/overlays/no-loadgenerator
+oc get pods -n online-boutique -o wide                       # spread over the two workers
+oc get route frontend -n online-boutique -o jsonpath='{.spec.host}{"\n"}'
+# frontend-online-boutique.apps.hcp-kv3.apps.sno.mylab.com - through the SNO's router
+```
+
+Remove hcp-kv3 with `--tags destroy -e kubevirt_mgmt=sno3`. sno3 goes with
 `cleanup.yaml --tags sno3`, from the repository root (see Cleanup).
 That also takes anything hcp-kv3 left behind: its ManagedClusters on hub1,
 its VM namespace on the SNO.
