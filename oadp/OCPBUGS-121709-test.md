@@ -168,27 +168,65 @@ You can also download the backup tarball and look for
 
 ## 3. Restore on hub2 with the patched plugin
 
-Run steps 14–19 as usual, then step 20 (OADP on hub2). Hub2 must be on
-OADP 1.6.
+Run steps 14–19 as usual. Hub2 must be on OADP 1.6.
 
-### 3.1 Override the plugin image on hub2
+### 3.1 Step 20 with the patched plugin image
 
-Do this **after** step 20. `setup_oadp.yaml` renders the DPA from
-`roles/setup-oadp/templates/dpa.yaml.j2`, so re-running it overwrites the
-override.
+**This is the step that makes hub2 use the new image.** Run step 20
+(`setup_oadp.yaml`) with `-e oadp_hypershift_plugin_image`:
 
 ```bash
 export KUBECONFIG=/var/lib/libvirt/images/hub2_install/auth/kubeconfig
 
-oc patch dpa dpa-instance -n openshift-adp --type merge \
-  -p '{"spec":{"unsupportedOverrides":{"hypershiftPluginImageFqin":"'"$IMG"'"}}}'
-
-oc rollout status deploy/velero -n openshift-adp
-oc get deploy velero -n openshift-adp \
-  -o jsonpath='{range .spec.template.spec.initContainers[*]}{.image}{"\n"}{end}'
+ansible-playbook -i inventory/hosts setup_oadp.yaml --ask-vault-pass \
+  -e target_hub=hub2 -e oadp_backup_method=csi \
+  -e oadp_hypershift_plugin_image=$IMG
 ```
 
-`unsupportedOverrides` is for testing only.
+How the image gets from that variable into Velero:
+
+1. `roles/setup-oadp/templates/dpa.yaml.j2` adds this to the DPA when the
+   variable is set:
+   ```yaml
+   spec:
+     unsupportedOverrides:
+       hypershiftPluginImageFqin: <IMG>
+   ```
+2. The OADP operator reads that key when it builds the `velero`
+   Deployment. In the `oadp-1.6` operator source,
+   `getHypershiftPluginImage()` in `pkg/credentials/credentials.go` uses
+   it instead of `RELATED_IMAGE_HYPERSHIFT_VELERO_PLUGIN`.
+3. The operator sets that image on the `hypershift-oadp-plugin` init
+   container of `deploy/velero`, and the Deployment rolls out. The init
+   container copies the plugin binary into the Velero pod.
+   A tag (not a digest) gets `imagePullPolicy: Always`, so re-pushing the
+   same tag is pulled again on the next rollout.
+
+The playbook prints the image it ended up with ("hypershift plugin
+image: ..."). To check by hand:
+
+```bash
+oc get dpa dpa-instance -n openshift-adp -o jsonpath='{.spec.unsupportedOverrides}{"\n"}'
+oc rollout status deploy/velero -n openshift-adp
+oc get deploy velero -n openshift-adp \
+  -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="hypershift-oadp-plugin")].image}{"\n"}'
+oc get pod -n openshift-adp -l component=velero \
+  -o jsonpath='{.items[0].status.initContainerStatuses[?(@.name=="hypershift-oadp-plugin")].imageID}{"\n"}'
+```
+
+The last command shows the digest the pod actually pulled. Record it in
+the results table.
+
+If you'd rather not re-run the playbook, this patch does the same thing:
+
+```bash
+oc patch dpa dpa-instance -n openshift-adp --type merge \
+  -p '{"spec":{"unsupportedOverrides":{"hypershiftPluginImageFqin":"'"$IMG"'"}}}'
+```
+
+`unsupportedOverrides` is for testing only. Running step 20 again
+without the variable removes the override and goes back to the
+operator's image.
 
 ### 3.2 Step 21: restore
 
@@ -224,8 +262,9 @@ oc get managedcluster hcp-cluster1
 
 ### Negative control (optional)
 
-Repeat section 3 **without** the image override in 3.1, using the same
-backup. The stock plugin restores `hcp-cluster1-import`: it carries
+Repeat section 3 with the same backup, but run step 20 **without**
+`-e oadp_hypershift_plugin_image`. That puts the operator's stock plugin
+image back. The stock plugin restores `hcp-cluster1-import`: it carries
 `velero.io/restore-name`, and the `ManagedCluster` stays in `Importing`.
 This shows the backup really contained the stale secret and the fix is
 what changed the outcome.
@@ -238,7 +277,7 @@ what changed the outcome.
 | OCP version (hub1 / hub2) | |
 | ACM / MCE version | |
 | OADP version | 1.6.x |
-| Plugin image | |
+| Plugin image (tag and pulled digest) | |
 | `oadp-1.6` base commit | |
 | Backup method | csi |
 | Unit tests | |

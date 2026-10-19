@@ -38,3 +38,7 @@ spec:
         - csi
         - hypershift
       resourceTimeout: 2h
+{% if oadp_hypershift_plugin_image | default('') | length > 0 %}
+  unsupportedOverrides:
+    hypershiftPluginImageFqin: "{{ oadp_hypershift_plugin_image }}"
+{% endif %}

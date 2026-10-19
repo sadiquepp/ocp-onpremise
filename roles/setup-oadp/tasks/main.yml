@@ -60,6 +60,20 @@
   debug:
     msg: "BackupStorageLocation phase: {{ bsl_phase.stdout | default('unknown') }} (re-run this role if it is not 'Available')"
 
+- name: Read the hypershift plugin image Velero runs
+  shell: |
+    oc get deploy velero -n openshift-adp \
+      -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="hypershift-oadp-plugin")].image}'
+  register: hcp_plugin_image
+  changed_when: false
+  failed_when: false
+
+- name: Report the hypershift plugin image
+  debug:
+    msg: >-
+      hypershift plugin image: {{ hcp_plugin_image.stdout | default('unknown', true) }}
+      {{ '(override from oadp_hypershift_plugin_image)' if oadp_hypershift_plugin_image | default('') | length > 0 else '(operator default)' }}
+
 - name: Prepare the CSI VolumeSnapshotClass for Velero
   ansible.builtin.include_tasks: csi-snapshot-class.yml
   when: oadp_backup_method | default('fs') == 'csi'
