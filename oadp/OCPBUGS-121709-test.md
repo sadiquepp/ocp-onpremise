@@ -52,9 +52,50 @@ Consequences:
 
 Status: merged to upstream `main` on 2026-09-28 (`213d7da`, merge
 `7aa4288`). It was not on the `oadp-1.6` branch when this test was
-written, so the image below is a cherry-pick.
+written, so there is no OADP release image with the fix yet.
 
-## 1. Build the plugin image for OADP 1.6
+## 1. Get a plugin image with the fix
+
+There are two ways to get the image:
+
+- **You already have an image**, e.g. one the developer built: follow
+  1.0, then 1.4, and skip the build steps.
+- **You build it yourself** from `oadp-1.6` plus the cherry-pick: follow
+  1.1–1.4.
+
+Either way, the result is an image reference in `$IMG`. Section 3.1
+passes it to the DPA override.
+
+### 1.0 If you already have an image: just use it
+
+Set `IMG` to the image you were given and skip to 1.4. For example, the
+developer's build of upstream `main`:
+
+```bash
+IMG=quay.io/jparrill/hypershift-oadp-plugin:main-check-skip-import
+```
+
+Pin it by digest so the results name exactly what was tested. Someone can
+push a new image to a tag, but a digest never changes:
+
+```bash
+skopeo inspect --override-arch amd64 docker://$IMG | jq '{Digest, Architecture, Created}'
+skopeo inspect --override-arch amd64 --config docker://$IMG | jq '.config.Entrypoint'
+# Architecture must be "amd64"; Entrypoint must copy /plugins/* to /target
+
+IMG=quay.io/jparrill/hypershift-oadp-plugin@sha256:<Digest from above>
+```
+
+Ask whoever built the image which commit it came from, and record it in
+the results table. An image built from upstream `main` is fine under
+OADP 1.6. Compared with `oadp-1.6`, `main`'s plugin code adds only:
+
+- this fix;
+- a one-line `HCPEtcdBackup` status change, which the `csi` backup
+  method does not use.
+
+Its Velero dependency is the same 1.18.x line. If hub2 is disconnected,
+mirror the image into the mirror registry and use that address in `IMG`.
 
 ### 1.1 Cherry-pick onto `oadp-1.6`
 
@@ -129,7 +170,11 @@ and needs Red Hat's internal brew registry.)
 
 ### 1.4 Check that the image contains the fix
 
+Run this for either kind of image, the one you were given or the one you
+built:
+
 ```bash
+podman pull --platform linux/amd64 $IMG
 cid=$(podman create $IMG); podman cp $cid:/plugins/hypershift-oadp-plugin /tmp/plugin; podman rm $cid
 grep -ac "Skipping restore of ACM/MCE import secret" /tmp/plugin   # 1 or more
 ```
@@ -172,7 +217,8 @@ Run steps 14–19 as usual. Hub2 must be on OADP 1.6.
 
 ### 3.1 Step 20 with the patched plugin image
 
-**This is the step that makes hub2 use the new image.** Run step 20
+**This is the step that makes hub2 use the new image.** It works the same
+whether you were given `$IMG` (1.0) or built it (1.1–1.3). Run step 20
 (`setup_oadp.yaml`) with `-e oadp_hypershift_plugin_image`:
 
 ```bash
@@ -278,7 +324,7 @@ what changed the outcome.
 | ACM / MCE version | |
 | OADP version | 1.6.x |
 | Plugin image (tag and pulled digest) | |
-| `oadp-1.6` base commit | |
+| Image source (given / self-built) and source commit | |
 | Backup method | csi |
 | Unit tests | |
 | Velero log shows skip | |
