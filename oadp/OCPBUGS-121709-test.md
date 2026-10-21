@@ -319,9 +319,15 @@ what changed the outcome.
 
 ## 5. Results
 
+**Outcome: PASS.** Hub2 restored the hosted cluster from a backup that
+contained the stale `hcp-cluster1-import` secret. The patched plugin
+skipped that secret, MCE on hub2 generated a new one, and the cluster
+imported (`JOINED=True`, `AVAILABLE=True`) without the step 12
+workaround.
+
 | Item | Value |
 |---|---|
-| Date | 2026-10-21 (in progress) |
+| Date | 2026-10-21 |
 | OCP version (hub1 / hub2) | |
 | ACM / MCE version | |
 | OADP version | 1.6.x |
@@ -332,10 +338,12 @@ what changed the outcome.
 | Backup method | csi |
 | Import secret in the backup (2.2) | Yes: `velero backup describe hcp-cluster1-backup-csi --details` lists `hcp-cluster1/hcp-cluster1-import` (step 12 exclude label removed) |
 | Unit tests | PASS: `go test ./pkg/...` and `TestRestoreExecuteImportSecretExclusion` (3/3) on `oadp-1.6` @ `62cec95f` + cherry-pick of `213d7da` |
-| Velero log shows skip | |
-| Import secret regenerated on hub2 | |
-| ManagedCluster state | |
-| Negative control | |
+| Velero log shows skip | PASS: `07:03:30Z level=info msg="Skipping restore of ACM/MCE import secret hcp-cluster1/hcp-cluster1-import (contains stale bootstrap token)" ... logSource=".../pkg/core/restore.go:226" pluginName=hypershift-oadp-plugin restore=openshift-adp/hcp-cluster1-restore-csi` |
+| Import secret regenerated on hub2 | PASS: restore started `2026-10-21T07:03:17Z`; `hcp-cluster1-import` created `2026-10-21T07:17:51Z`; its only label is `managedcluster-import-controller.open-cluster-management.io/import-secret`, with no `velero.io/restore-name` / `velero.io/backup-name`, so MCE created it and Velero did not |
+| ManagedCluster state | PASS: `hcp-cluster1` `HUB ACCEPTED=true`, `JOINED=True`, `AVAILABLE=True`, URL `https://api.hcp-cluster1.mylab.com:6443` |
+| Hosted cluster after restore | Nodes `c1worker1`, `c1worker2` `Ready` (v1.35.6); `online-boutique` 11/11 pods `Running` |
+| Backup visible on hub2 | `hcp-cluster1-backup-csi` synced from S3 |
+| Negative control | Not run |
 
 Notes:
 
