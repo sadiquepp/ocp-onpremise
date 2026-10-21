@@ -155,8 +155,26 @@ you want.
 
 ## 10. Workload
 
+Extract the hosted cluster's kubeconfig from hub1. HyperShift keeps it in
+the secret that the HostedCluster's `.status.kubeconfig` names:
+
 ```bash
-export KUBECONFIG=<hosted cluster kubeconfig>
+export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
+oc get hostedcluster hcp-cluster1 -n hcp-cluster1 \
+  -o jsonpath='{.status.kubeconfig.name}{"\n"}'   # hcp-cluster1-admin-kubeconfig
+
+oc extract secret/hcp-cluster1-admin-kubeconfig -n hcp-cluster1 \
+  --keys=kubeconfig --to=- > ~/hcp-cluster1.kubeconfig
+
+export KUBECONFIG=~/hcp-cluster1.kubeconfig
+oc get nodes                              # the NodePool's workers, Ready
+```
+
+If `.status.kubeconfig` is empty, the control plane is not up yet - wait
+and retry. The kubeconfig talks to `api.hcp-cluster1.mylab.com:6443`, so
+that name must resolve from where you run `oc`.
+
+```bash
 oc apply -f hello-openshift.yaml
 ```
 
@@ -302,7 +320,7 @@ Make it permanent: `target_hub: hub2` in `vars.yaml`.
 oc get managedcluster                                   # hub2
 oc get hostedcluster,nodepool -n hcp-cluster1
 
-export KUBECONFIG=<hosted cluster kubeconfig>
+export KUBECONFIG=~/hcp-cluster1.kubeconfig              # from step 10
 oc get nodes                                            # Ready
 oc get co | grep -v 'True.*False.*False'
 oc get pods -A | grep -vE 'Running|Completed'
@@ -310,6 +328,11 @@ oc get pods -A | grep -vE 'Running|Completed'
 oc get route -n hello-openshift
 oc get pods,route -n online-boutique
 ```
+
+The kubeconfig from step 10 should keep working: the hosted cluster's
+certificates come back with the restore, and step 22 points
+`api.hcp-cluster1.mylab.com` at hub2. If it is rejected, extract it again
+on hub2 with the step 10 commands, using hub2's kubeconfig.
 
 ## Cleanup
 
