@@ -321,17 +321,25 @@ what changed the outcome.
 
 | Item | Value |
 |---|---|
-| Date | |
+| Date | 2026-10-21 (in progress) |
 | OCP version (hub1 / hub2) | |
 | ACM / MCE version | |
 | OADP version | 1.6.x |
-| Plugin image (tag and pulled digest) | |
-| Image source (given / self-built) and source commit | |
+| Plugin image (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:main-check-skip-import`, pinned as `@sha256:9ecba766f3be1bfe5f631ac016bba160f6528c3493c233abf1b890b2de4a0237` |
+| Image source (given / self-built) and source commit | Given: developer's build of upstream `main`, created 2026-10-19. Source commit: (pending from developer) |
+| Image checks (1.4) | `amd64`; entrypoint `cp /plugins/* /target/.`; binary contains "Skipping restore of ACM/MCE import secret" (1 match) |
+| Plugin image on hub2 (3.1) | DPA `unsupportedOverrides.hypershiftPluginImageFqin` set to the digest; `deploy/velero` rolled out; init container `hypershift-oadp-plugin` image and pod `velero-56d49c4857-m6nld` pulled `imageID` both equal the digest |
 | Backup method | csi |
-| Unit tests | |
+| Unit tests | PASS: `go test ./pkg/...` and `TestRestoreExecuteImportSecretExclusion` (3/3) on `oadp-1.6` @ `62cec95f` + cherry-pick of `213d7da` |
 | Velero log shows skip | |
 | Import secret regenerated on hub2 | |
 | ManagedCluster state | |
 | Negative control | |
 
 Notes:
+
+- Hub1 ran the stock OADP plugin image for the backup. The fix runs at
+  restore time, so only hub2 needs the patched image.
+- The unit tests ran on a self-built `oadp-1.6` cherry-pick. The image
+  under test is the developer's `main` build. Both contain the same
+  `restore.go` change.
