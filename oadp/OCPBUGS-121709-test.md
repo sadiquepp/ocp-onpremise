@@ -341,6 +341,8 @@ workaround.
 | Velero log shows skip | PASS: `07:03:30Z level=info msg="Skipping restore of ACM/MCE import secret hcp-cluster1/hcp-cluster1-import (contains stale bootstrap token)" ... logSource=".../pkg/core/restore.go:226" pluginName=hypershift-oadp-plugin restore=openshift-adp/hcp-cluster1-restore-csi` |
 | Import secret regenerated on hub2 | PASS: restore started `2026-10-21T07:03:17Z`; `hcp-cluster1-import` created `2026-10-21T07:17:51Z`; its only label is `managedcluster-import-controller.open-cluster-management.io/import-secret`, with no `velero.io/restore-name` / `velero.io/backup-name`, so MCE created it and Velero did not |
 | ManagedCluster state | PASS: `hcp-cluster1` `HUB ACCEPTED=true`, `JOINED=True`, `AVAILABLE=True`, URL `https://api.hcp-cluster1.mylab.com:6443` |
+| HostedCluster recovery | `HostedClusterRestoredFromBackup=True`, reason `RecoveryFinished`, "Hosted cluster recovery finished", at `2026-10-21T07:11:27Z`. All other HostedCluster conditions healthy (`Available=True`, `Degraded=False`, `Progressing=False`; `EtcdBackupSucceeded=Unknown` is expected with the `csi` method). The `hypershift.openshift.io/restored-from-backup` annotation the plugin sets is gone, as expected: the HyperShift operator deletes it once the condition is `True` |
+| Timeline (UTC) | 07:03:17 restore started; 07:03:30 plugin skipped the import secret; 07:11:27 HostedCluster recovery finished; 07:17:51 MCE created the new import secret |
 | Hosted cluster after restore | Nodes `c1worker1`, `c1worker2` `Ready` (v1.35.6); `online-boutique` 11/11 pods `Running` |
 | Restore outcome | `hcp-cluster1-restore-csi` `Completed`, 0 errors. CSI data movement for `data-etcd-0/1/2`: 3 of 3 completed |
 | Restore warning (1) | `hcp-cluster1-hcp-cluster1: secrets "token-nodepool-hcp-cluster1-1-6e74db43" not found`. Unrelated to the import secret: it is a NodePool token secret in the control-plane namespace, which HyperShift's NodePool controller creates and rotates itself, so it was most likely replaced while Velero was processing it (Existing Resource Policy: `update`). The nodes rejoined `Ready` |
@@ -460,6 +462,63 @@ $ oc get secret hcp-cluster1-import -n hcp-cluster1 \
     -o jsonpath='{.metadata.creationTimestamp}{"\n"}{.metadata.labels}{"\n"}'
 2026-10-21T07:17:51Z
 {"managedcluster-import-controller.open-cluster-management.io/import-secret":""}
+```
+
+**HostedCluster recovery finished** (hub2). The plugin's
+`restored-from-backup` annotation is no longer present; HyperShift removes
+it once this condition is `True`.
+
+```console
+$ oc get hostedcluster hcp-cluster1 -n hcp-cluster1 \
+    -o jsonpath='{.status.conditions[?(@.type=="HostedClusterRestoredFromBackup")]}{"\n"}' | jq
+{
+  "lastTransitionTime": "2026-10-21T07:11:27Z",
+  "message": "Hosted cluster recovery finished",
+  "observedGeneration": 1,
+  "reason": "RecoveryFinished",
+  "status": "True",
+  "type": "HostedClusterRestoredFromBackup"
+}
+
+$ oc get hostedcluster hcp-cluster1 -n hcp-cluster1 -o json | jq '.metadata.annotations | keys'
+[
+  "create-external-hub-kubeconfig",
+  "hypershift.openshift.io/HasBeenAvailable",
+  "kubectl.kubernetes.io/last-applied-configuration",
+  "metallb.io/address-pool"
+]
+
+$ oc get hostedcluster hcp-cluster1 -n hcp-cluster1 \
+    -o jsonpath='{range .status.conditions[*]}{.type}{"="}{.status}{"\n"}{end}'
+ClusterVersionUpgradeable=True
+ClusterVersionAvailable=True
+ClusterVersionSucceeding=True
+ClusterVersionProgressing=False
+ClusterVersionReleaseAccepted=True
+Degraded=False
+EtcdAvailable=True
+KubeAPIServerAvailable=True
+InfrastructureReady=True
+ExternalDNSReachable=True
+ValidHostedControlPlaneConfiguration=True
+ValidReleaseInfo=True
+ValidIDPConfiguration=True
+HostedClusterRestoredFromBackup=True
+DataPlaneConnectionAvailable=True
+ControlPlaneConnectionAvailable=True
+EtcdBackupSucceeded=Unknown
+AutoNodeEnabled=False
+Available=True
+ValidConfiguration=True
+SupportedHostedCluster=True
+ValidProxyConfiguration=True
+IgnitionEndpointAvailable=True
+ReconciliationActive=True
+ValidReleaseImage=True
+Progressing=False
+PlatformCredentialsFound=True
+ReconciliationSucceeded=True
+ClusterVersionRetrievedUpdates=True
 ```
 
 **The cluster imported** (hub2)
