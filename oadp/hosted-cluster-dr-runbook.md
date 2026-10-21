@@ -84,6 +84,35 @@ the primary site: a cloud region, or an S3-compatible store at the DR
 site or a third site. Do **not** put it on storage that the primary hub
 itself provides.
 
+> **On-premise S3.** The commands in this section use AWS S3. With an
+> on-premise S3-compatible store (ODF Multicloud Object Gateway, Ceph
+> RGW, MinIO, or a storage appliance's S3 service), do the equivalent
+> with that store's own tooling:
+>
+> | Step | AWS (as shown) | On-premise equivalent |
+> |---|---|---|
+> | Create the bucket | `aws s3api create-bucket` | The store's console, CLI or API. On ODF, an ObjectBucketClaim, created on storage that isn't on the primary hub |
+> | Encryption at rest | `put-bucket-encryption` | The store's server-side or volume-level encryption |
+> | Block public access | `put-public-access-block` | Bucket policy or ACLs that grant access to the Velero user only |
+> | Velero identity and policy | IAM user plus `put-user-policy` | A store user or access key with a bucket policy allowing the same S3 actions as [1.2](#12-access-policy) |
+> | Object lock, replication | S3 Object Lock, replication rules | The store's own features, where it has them |
+> | Testing access ([1.4](#14-verify-access-from-both-sites)) | `aws s3 ...` | The same commands with `--endpoint-url https://<s3-endpoint>`, plus `--ca-bundle <ca.pem>` for a private CA |
+>
+> In the DPA ([2.4](#24-dataprotectionapplication)), keep `provider: aws`
+> and add the S3-compatible settings shown there as comments:
+> - `s3Url`: the store's endpoint.
+> - `s3ForcePathStyle: "true"`: most on-premise stores don't support
+>   virtual-hosted bucket names.
+> - `region`: whatever value the store accepts (often any string, such
+>   as `us-east-1`, or the store's own region name).
+> - `objectStorage.caCert`: the endpoint's CA, base64-encoded, if it uses
+>   a private CA.
+> - `checksumAlgorithm: ""`: needed if the store rejects the checksums
+>   newer AWS SDKs send by default.
+>
+> The endpoint must be reachable, with valid TLS, from **both** hubs'
+> network segments.
+
 ### 1.1 Bucket
 
 - **One bucket and prefix per hub pair.** Both hubs' DPAs use the same
