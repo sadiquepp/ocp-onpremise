@@ -354,3 +354,191 @@ Notes:
 - The unit tests ran on a self-built `oadp-1.6` cherry-pick. The image
   under test is the developer's `main` build. Both contain the same
   `restore.go` change.
+
+### 5.1 Evidence
+
+Commands as run and their output, verbatim, in the order of the test.
+Each block says which cluster it ran against.
+
+**Unit tests** (self-built `oadp-1.6` + cherry-pick of `213d7da`, section 1.2)
+
+```console
+$ GOFLAGS=-mod=vendor go test ./pkg/...
+ok  	github.com/openshift/hypershift-oadp-plugin/pkg/azblobsas	0.092s
+ok  	github.com/openshift/hypershift-oadp-plugin/pkg/common	0.163s
+ok  	github.com/openshift/hypershift-oadp-plugin/pkg/core	0.244s
+?   	github.com/openshift/hypershift-oadp-plugin/pkg/core/types	[no test files]
+ok  	github.com/openshift/hypershift-oadp-plugin/pkg/core/validation	0.022s
+ok  	github.com/openshift/hypershift-oadp-plugin/pkg/etcdbackup	0.220s
+?   	github.com/openshift/hypershift-oadp-plugin/pkg/platform/agent	[no test files]
+?   	github.com/openshift/hypershift-oadp-plugin/pkg/platform/aws	[no test files]
+ok  	github.com/openshift/hypershift-oadp-plugin/pkg/s3presign	0.024s
+ok  	github.com/openshift/hypershift-oadp-plugin/pkg/version	0.018s
+
+$ GOFLAGS=-mod=vendor go test ./pkg/core/ -run TestRestoreExecuteImportSecretExclusion -v
+=== RUN   TestRestoreExecuteImportSecretExclusion
+=== RUN   TestRestoreExecuteImportSecretExclusion/When_restoring_an_ACM/MCE_import_secret,_it_should_skip_restore_to_avoid_stale_bootstrap_token
+time="2026-10-19T02:20:53-04:00" level=info msg="Skipping restore of ACM/MCE import secret clusters/my-hosted-cluster-import (contains stale bootstrap token)"
+=== RUN   TestRestoreExecuteImportSecretExclusion/When_restoring_a_regular_secret,_it_should_restore_normally
+=== RUN   TestRestoreExecuteImportSecretExclusion/When_restoring_a_secret_with_import_in_the_middle_of_the_name,_it_should_restore_normally
+--- PASS: TestRestoreExecuteImportSecretExclusion (0.11s)
+    --- PASS: TestRestoreExecuteImportSecretExclusion/When_restoring_an_ACM/MCE_import_secret,_it_should_skip_restore_to_avoid_stale_bootstrap_token (0.11s)
+    --- PASS: TestRestoreExecuteImportSecretExclusion/When_restoring_a_regular_secret,_it_should_restore_normally (0.00s)
+    --- PASS: TestRestoreExecuteImportSecretExclusion/When_restoring_a_secret_with_import_in_the_middle_of_the_name,_it_should_restore_normally (0.00s)
+PASS
+ok  	github.com/openshift/hypershift-oadp-plugin/pkg/core	0.134s
+```
+
+**Plugin image checks** (workstation, section 1.4)
+
+```console
+$ IMG=quay.io/jparrill/hypershift-oadp-plugin:main-check-skip-import
+$ skopeo inspect --override-arch amd64 docker://$IMG | jq '{Digest, Architecture, Created}'
+{
+  "Digest": "sha256:9ecba766f3be1bfe5f631ac016bba160f6528c3493c233abf1b890b2de4a0237",
+  "Architecture": "amd64",
+  "Created": "2026-10-19T10:09:05.717076323+02:00"
+}
+$ skopeo inspect --override-arch amd64 --config docker://$IMG | jq '.config.Entrypoint'
+[
+  "/bin/bash",
+  "-c",
+  "cp /plugins/* /target/."
+]
+$ podman pull --platform linux/amd64 $IMG
+$ cid=$(podman create $IMG); podman cp $cid:/plugins/hypershift-oadp-plugin /tmp/plugin; podman rm $cid
+$ grep -ac "Skipping restore of ACM/MCE import secret" /tmp/plugin
+1
+```
+
+**The import secret is in the backup** (hub1, after step 13)
+
+```console
+$ oc exec deploy/velero -c velero -n openshift-adp -- \
+    ./velero backup describe hcp-cluster1-backup-csi --details | grep hcp-cluster1-import
+    - hcp-cluster1/hcp-cluster1-import
+```
+
+**Hub2 runs the patched plugin** (hub2, after step 20)
+
+```console
+$ oc get dpa dpa-instance -n openshift-adp -o jsonpath='{.spec.unsupportedOverrides}{"\n"}'
+{"hypershiftPluginImageFqin":"quay.io/jparrill/hypershift-oadp-plugin@sha256:9ecba766f3be1bfe5f631ac016bba160f6528c3493c233abf1b890b2de4a0237"}
+
+$ oc rollout status deploy/velero -n openshift-adp
+deployment "velero" successfully rolled out
+
+$ oc get deploy velero -n openshift-adp \
+    -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="hypershift-oadp-plugin")].image}{"\n"}'
+quay.io/jparrill/hypershift-oadp-plugin@sha256:9ecba766f3be1bfe5f631ac016bba160f6528c3493c233abf1b890b2de4a0237
+
+$ oc get pod -n openshift-adp -l deploy=velero \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"  "}{.status.initContainerStatuses[?(@.name=="hypershift-oadp-plugin")].imageID}{"\n"}{end}'
+velero-56d49c4857-m6nld  quay.io/jparrill/hypershift-oadp-plugin@sha256:9ecba766f3be1bfe5f631ac016bba160f6528c3493c233abf1b890b2de4a0237
+
+$ oc get backup.velero.io hcp-cluster1-backup-csi -n openshift-adp
+NAME                      AGE
+hcp-cluster1-backup-csi   3m55s
+```
+
+**The plugin skipped the secret** (hub2, after step 21)
+
+```console
+$ oc logs deploy/velero -n openshift-adp | grep "Skipping restore of ACM/MCE import secret"
+Defaulted container "velero" out of: velero, openshift-velero-plugin (init), velero-plugin-for-aws (init), hypershift-oadp-plugin (init)
+time="2026-10-21T07:03:30Z" level=info msg="Skipping restore of ACM/MCE import secret hcp-cluster1/hcp-cluster1-import (contains stale bootstrap token)" cmd=/plugins/hypershift-oadp-plugin logSource="/go/src/github.com/openshift/hypershift-oadp-plugin/pkg/core/restore.go:226" pluginName=hypershift-oadp-plugin process=restore restore=openshift-adp/hcp-cluster1-restore-csi type=hcp-restore
+```
+
+**MCE generated a new import secret** (hub2). It was created after the
+restore started and carries no `velero.io/*` labels.
+
+```console
+$ oc get restore.velero.io hcp-cluster1-restore-csi -n openshift-adp -o jsonpath='{.status.startTimestamp}{"\n"}'
+2026-10-21T07:03:17Z
+
+$ oc get secret hcp-cluster1-import -n hcp-cluster1 \
+    -o jsonpath='{.metadata.creationTimestamp}{"\n"}{.metadata.labels}{"\n"}'
+2026-10-21T07:17:51Z
+{"managedcluster-import-controller.open-cluster-management.io/import-secret":""}
+```
+
+**The cluster imported** (hub2)
+
+```console
+$ oc get managedcluster hcp-cluster1
+NAME           HUB ACCEPTED   MANAGED CLUSTER URLS                      JOINED   AVAILABLE   AGE
+hcp-cluster1   true           https://api.hcp-cluster1.mylab.com:6443   True     True        5m6s
+```
+
+**Restore outcome and its one warning** (hub2)
+
+```console
+$ oc get restore.velero.io hcp-cluster1-restore-csi -n openshift-adp \
+    -o jsonpath='{.status.phase}  warnings={.status.warnings}  errors={.status.errors}{"\n"}'
+Completed  warnings=1  errors=
+
+$ oc exec deploy/velero -c velero -n openshift-adp -- \
+    ./velero restore describe hcp-cluster1-restore-csi | sed -n '/Warnings:/,/Errors:/p'
+Warnings:
+  Velero:     <none>
+  Cluster:    <none>
+  Namespaces:
+    hcp-cluster1-hcp-cluster1:  secrets "token-nodepool-hcp-cluster1-1-6e74db43" not found
+
+Backup:  hcp-cluster1-backup-csi
+...
+CSI Snapshot Restores:
+  hcp-cluster1-hcp-cluster1/data-etcd-2:
+    Data Movement: specify --details for more information
+  hcp-cluster1-hcp-cluster1/data-etcd-1:
+    Data Movement: specify --details for more information
+  hcp-cluster1-hcp-cluster1/data-etcd-0:
+    Data Movement: specify --details for more information
+
+Existing Resource Policy:   update
+ItemOperationTimeout:       4h0m0s
+...
+Restore Item Operations:  3 of 3 completed successfully, 0 failed (specify --details for more information)
+```
+
+**The hosted cluster after the restore** (hosted cluster kubeconfig)
+
+```console
+$ oc get nodes
+NAME        STATUS   ROLES    AGE   VERSION
+c1worker1   Ready    worker   16h   v1.35.6
+c1worker2   Ready    worker   16h   v1.35.6
+
+$ oc get po -n online-boutique
+NAME                                     READY   STATUS    RESTARTS        AGE
+adservice-6d857b79-j86b2                 1/1     Running   0               5h56m
+cartservice-59c9b67cfb-dn7rn             1/1     Running   0               5h56m
+checkoutservice-cb96487df-qw5rx          1/1     Running   0               5h56m
+currencyservice-686d78b4bc-n2klz         1/1     Running   0               5h56m
+emailservice-688545b8df-nm6sn            1/1     Running   2 (5h55m ago)   5h56m
+frontend-b7c754496-82zzx                 1/1     Running   0               5h56m
+paymentservice-869d5b5cb9-thjfm          1/1     Running   0               5h56m
+productcatalogservice-859bfdcc-6567f     1/1     Running   0               5h56m
+recommendationservice-86ddcd7749-j7mp4   1/1     Running   2 (5h55m ago)   5h56m
+redis-cart-79d76df4b-phz9x               1/1     Running   0               5h56m
+shippingservice-88557f497-778tq          1/1     Running   0               5h56m
+```
+
+**Versions** (hub2)
+
+```console
+$ oc get clusterversion -o jsonpath='{.items[0].status.desired.version}{"\n"}'
+4.22.10
+$ oc get csv -n openshift-adp -o custom-columns=NAME:.metadata.name,VERSION:.spec.version
+NAME                                    VERSION
+metallb-operator.v4.22.0-202610140833   4.22.0-202610140833
+oadp-operator.v1.6.1                    1.6.1
+$ oc get csv -n open-cluster-management -o custom-columns=NAME:.metadata.name,VERSION:.spec.version
+NAME                                    VERSION
+advanced-cluster-management.v2.17.3     2.17.3
+metallb-operator.v4.22.0-202610140833   4.22.0-202610140833
+$ oc get csv -n multicluster-engine -o custom-columns=NAME:.metadata.name,VERSION:.spec.version
+NAME                                    VERSION
+metallb-operator.v4.22.0-202610140833   4.22.0-202610140833
+multicluster-engine.v2.17.3             2.17.3
+```
