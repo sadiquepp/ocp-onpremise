@@ -342,7 +342,8 @@ workaround.
 | Import secret regenerated on hub2 | PASS: restore started `2026-10-21T07:03:17Z`; `hcp-cluster1-import` created `2026-10-21T07:17:51Z`; its only label is `managedcluster-import-controller.open-cluster-management.io/import-secret`, with no `velero.io/restore-name` / `velero.io/backup-name`, so MCE created it and Velero did not |
 | ManagedCluster state | PASS: `hcp-cluster1` `HUB ACCEPTED=true`, `JOINED=True`, `AVAILABLE=True`, URL `https://api.hcp-cluster1.mylab.com:6443` |
 | Hosted cluster after restore | Nodes `c1worker1`, `c1worker2` `Ready` (v1.35.6); `online-boutique` 11/11 pods `Running` |
-| Restore outcome | `hcp-cluster1-restore-csi` `Completed`, 1 warning, 0 errors |
+| Restore outcome | `hcp-cluster1-restore-csi` `Completed`, 0 errors. CSI data movement for `data-etcd-0/1/2`: 3 of 3 completed |
+| Restore warning (1) | `hcp-cluster1-hcp-cluster1: secrets "token-nodepool-hcp-cluster1-1-6e74db43" not found`. Unrelated to the import secret: it is a NodePool token secret in the control-plane namespace, which HyperShift's NodePool controller creates and rotates itself, so it was most likely replaced while Velero was processing it (Existing Resource Policy: `update`). The nodes rejoined `Ready` |
 | Backup visible on hub2 | `hcp-cluster1-backup-csi` synced from S3 |
 | Negative control | Not run |
 
