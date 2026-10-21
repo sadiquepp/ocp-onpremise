@@ -328,9 +328,9 @@ workaround.
 | Item | Value |
 |---|---|
 | Date | 2026-10-21 |
-| OCP version (hub1 / hub2) | hub1: (not captured) / hub2: 4.22.10 |
-| ACM / MCE version | hub2: ACM 2.17.3 / MCE 2.17.3 |
-| OADP version | hub2: `oadp-operator.v1.6.1` |
+| OCP version (hub1 / hub2) | 4.22.10 / 4.22.10. Hub1 was shut down before this was captured; it was built from the same `vars.yaml`, which pins the release (`ocp_major_version: "4.22"`, `ocp_minor_version: 10`) |
+| ACM / MCE version | hub2: ACM 2.17.3 / MCE 2.17.3. Hub1: same subscription (`release-2.17`, automatic approval); exact z-stream not captured |
+| OADP version | hub2: `oadp-operator.v1.6.1`. Hub1: same subscription (`stable`, automatic approval); exact z-stream not captured |
 | Plugin image (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:main-check-skip-import`, pinned as `@sha256:9ecba766f3be1bfe5f631ac016bba160f6528c3493c233abf1b890b2de4a0237` |
 | Image source (given / self-built) and source commit | Given: developer's build of upstream `main`, created 2026-10-19. Source commit: (pending from developer) |
 | Image checks (1.4) | `amd64`; entrypoint `cp /plugins/* /target/.`; binary contains "Skipping restore of ACM/MCE import secret" (1 match) |
