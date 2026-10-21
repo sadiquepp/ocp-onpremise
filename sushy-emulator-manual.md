@@ -31,8 +31,20 @@ WORKERS="c1_worker1 c1_worker2 c1_worker3"
 sushy only exposes VMs that are defined in libvirt. For BareMetalHosts they
 should be **defined but powered off**, with an **empty CD-ROM**: the hub
 powers them on and inserts the discovery ISO itself.
-`setup_hosted_cluster_vm.yaml -e hosted_cluster_worker_provisioning=bmh`
-creates them that way. To check:
+
+To create just the VMs that way, without sushy or the BareMetalHosts:
+
+```bash
+ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml \
+  -e hosted_cluster_worker_provisioning=bmh --tags bmh-vms
+```
+
+It creates each disk only if it's missing, so re-running it can't wipe a
+worker. It defines a VM only if it isn't defined yet. It needs neither the
+vault nor a hub. (Without `--tags`, the same command goes on to set up
+sushy and the BareMetalHosts, which is the automated path.)
+
+To check:
 
 ```bash
 for vm in $WORKERS; do virsh domstate $vm; done        # shut off

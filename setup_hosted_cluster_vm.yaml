@@ -36,6 +36,11 @@
 ## media, and approves the Agents itself. Needs sushy_emulator_password in
 ## vault.yaml. See hosted_cluster_worker_provisioning in vars.yaml.
 ##
+## Only the powered-off VMs, for setting sushy-emulator up by hand
+## (sushy-emulator-manual.md):
+##   ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml \
+##     -e hosted_cluster_worker_provisioning=bmh --tags bmh-vms
+##
 ## Both paths run the same tasks - only the worker set, the VM folder and the
 ## sizing differ (see the "Select the worker set" task below and the
 ## disconnected block in vars.yaml) - plus one step the disconnected path needs
@@ -112,6 +117,15 @@
         fail_msg: >-
           hosted_cluster_worker_provisioning must be 'agent' or 'bmh', not
           '{{ hosted_cluster_worker_provisioning }}'.
+
+    - name: Fail fast if --tags bmh-vms is used without bmh mode
+      tags: [always]
+      ansible.builtin.assert:
+        that:
+          - "'bmh-vms' not in ansible_run_tags or (hcp_worker_bmh | bool)"
+        fail_msg: >-
+          --tags bmh-vms defines the worker VMs for BareMetalHosts (powered
+          off, empty CD-ROM). Add -e hosted_cluster_worker_provisioning=bmh.
 
     - name: Fail fast if bmh is asked for workers it does not cover
       tags: [always]
@@ -237,17 +251,23 @@
       changed_when: true
 
     - name: Create Directory for Hosted Cluster VMs
+      tags: [bmh-vms]
       file:
         path: "{{ hcp_vm_folder }}"
         state: directory
 
+    # bmh mode leaves an existing disk alone, so re-running --tags bmh-vms
+    # cannot wipe a worker. agent mode recreates it as it always has.
     - name: Define Disks for Hosted Cluster
+      tags: [bmh-vms]
       shell: |
         qemu-img create \
         -f qcow2 \
         -o preallocation=metadata \
         {{ hcp_vm_folder }}/{{ item.name }}.qcow2 \
         120G
+      args:
+        creates: "{{ (hcp_vm_folder ~ '/' ~ item.name ~ '.qcow2') if (hcp_worker_bmh | bool) else omit }}"
       loop: "{{ hcp_workers }}"
       loop_control:
         label: "{{ item.name }}"
@@ -299,6 +319,7 @@
     # started, because powering it on is the hub's job (the BareMetalHost is
     # online: true). --print-xml plus virsh define is what keeps it off.
     - name: Check which worker VMs are already defined (bmh)
+      tags: [bmh-vms]
       ansible.builtin.command: virsh dominfo {{ item.name }}
       loop: "{{ hcp_workers }}"
       loop_control:
@@ -309,6 +330,7 @@
       when: hcp_worker_bmh | bool
 
     - name: Define the worker VMs powered off, with an empty CD-ROM (bmh)
+      tags: [bmh-vms]
       ansible.builtin.shell: |
         set -e
         virt-install \
@@ -332,6 +354,14 @@
       when:
         - hcp_worker_bmh | bool
         - item.rc != 0
+
+    - name: Report the VMs-only run (--tags bmh-vms)
+      tags: [bmh-vms]
+      ansible.builtin.debug:
+        msg:
+          - "Defined, powered off, empty CD-ROM: {{ hcp_workers | map(attribute='name') | join(', ') }}"
+          - "Next: sushy-emulator-manual.md from step 2, or re-run without --tags for sushy and the BareMetalHosts."
+      when: "'bmh-vms' in ansible_run_tags"
 
     # Gives each VM its Redfish BMC, restricted to exactly these VMs, and sets
     # sushy_emulator_systems (name, uuid, BMC address) for the BareMetalHosts.
