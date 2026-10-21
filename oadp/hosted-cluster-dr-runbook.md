@@ -21,8 +21,8 @@ reconnect to the restored control plane once DNS points at it.
 ## Contents
 
 - [Before you start: what gets backed up](#before-you-start-what-gets-backed-up)
-- [1. OADP on both hubs](#1-oadp-on-both-hubs)
-- [2. S3 object storage](#2-s3-object-storage)
+- [1. S3 object storage](#1-s3-object-storage)
+- [2. OADP on both hubs](#2-oadp-on-both-hubs)
 - [3. DR hub readiness](#3-dr-hub-readiness)
 - [4. Backup](#4-backup)
 - [5. Restore on the DR hub](#5-restore-on-the-dr-hub)
@@ -77,12 +77,114 @@ name. A DR restore then only needs a DNS change. If the API is published
 by IP instead, the address change after a restore breaks the certificate
 and every client.
 
-## 1. OADP on both hubs
+## 1. S3 object storage
+
+One bucket serves both hubs. Put it somewhere that survives the loss of
+the primary site: a cloud region, or an S3-compatible store at the DR
+site or a third site. Do **not** put it on storage that the primary hub
+itself provides.
+
+### 1.1 Bucket
+
+- **One bucket and prefix per hub pair.** Both hubs' DPAs use the same
+  values.
+- **Encrypt at rest** (SSE-S3, SSE-KMS or the appliance's equivalent).
+  Backups contain the hosted cluster's secrets and CA keys.
+- **No lifecycle expiration rule on the Velero prefix.** Velero expires
+  backups itself, through each backup's `ttl`. A lifecycle rule deletes
+  objects out from under it and leaves broken backups behind.
+- **Optional: object lock or a replicated copy** as protection against
+  deletion or ransomware. Set this up with the storage team, and test a
+  restore with it in place.
+
+AWS example:
+
+```bash
+BUCKET=<bucket>; REGION=<region>
+aws s3api create-bucket --bucket $BUCKET --region $REGION \
+  --create-bucket-configuration LocationConstraint=$REGION
+aws s3api put-bucket-encryption --bucket $BUCKET \
+  --server-side-encryption-configuration \
+  '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+aws s3api put-public-access-block --bucket $BUCKET --public-access-block-configuration \
+  BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+```
+
+### 1.2 Access policy
+
+Give Velero a dedicated identity with access to this bucket only. With
+CSI snapshots plus the data mover, Velero needs only S3 permissions, not
+EC2 or snapshot permissions:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject",
+                 "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
+      "Resource": ["arn:aws:s3:::<bucket>/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:ListBucketMultipartUploads"],
+      "Resource": ["arn:aws:s3:::<bucket>"]
+    }
+  ]
+}
+```
+
+```bash
+aws iam create-user --user-name oadp-hcp
+aws iam put-user-policy --user-name oadp-hcp --policy-name oadp-hcp-bucket \
+  --policy-document file://oadp-hcp-policy.json
+aws iam create-access-key --user-name oadp-hcp
+```
+
+On an S3-compatible store, create the equivalent user and a bucket
+policy with the same actions. Rotate the key on your normal schedule:
+update the secret on both hubs, then check that the backup location goes
+back to `Available`.
+
+### 1.3 Credentials for Velero
+
+Velero reads the access key from a credentials file in AWS format. Save
+it as `credentials-velero`. [1.4](#14-verify-access-from-both-sites)
+tests it, and [2.3](#23-credentials-secret) puts it into a secret on each
+hub. Delete the file once both hubs have the secret:
+
+```ini
+[default]
+aws_access_key_id=<access-key-id>
+aws_secret_access_key=<secret-access-key>
+```
+
+### 1.4 Verify access from both sites
+
+Before configuring OADP, check that the key works and that the endpoint
+is reachable from **each hub's network**, the DR segment included. Run
+this from a host in each segment:
+
+```bash
+export AWS_SHARED_CREDENTIALS_FILE=./credentials-velero
+aws s3 ls s3://<bucket>/ --region <region>
+#   S3-compatible store: add --endpoint-url https://<s3-endpoint>
+#   (and --ca-bundle <ca.pem> for a private CA)
+echo test | aws s3 cp - s3://<bucket>/<prefix>/access-check --region <region>
+aws s3 rm s3://<bucket>/<prefix>/access-check --region <region>
+```
+
+An `InvalidAccessKeyId` or `SignatureDoesNotMatch` error means the key is
+wrong; `NoSuchBucket`, `AccessDenied` or a region error point at the
+bucket, region or policy; a TLS error means the CA is missing.
+
+## 2. OADP on both hubs
 
 Do this on **both** hubs. The DR hub must be ready to restore before you
 need it.
 
-### 1.1 Operator
+### 2.1 Operator
 
 Install the OADP operator into `openshift-adp`, from the channel that
 supports your OpenShift version. Use the same OADP version on both hubs.
@@ -91,7 +193,7 @@ supports your OpenShift version. Use the same OADP version on both hubs.
 oc get csv -n openshift-adp -o custom-columns=NAME:.metadata.name,VERSION:.spec.version,PHASE:.status.phase
 ```
 
-### 1.2 Requirements for hosted clusters
+### 2.2 Requirements for hosted clusters
 
 The DataProtectionApplication (DPA) must have:
 
@@ -109,12 +211,21 @@ point-in-time image. A CSI snapshot is.
 
 **The hub's etcd PVCs must come from a CSI driver with snapshot
 support**, with a VolumeSnapshotClass for that driver labelled for Velero
-(see [1.4](#14-volumesnapshotclass)).
+(see [2.6](#26-volumesnapshotclass)).
 
-### 1.3 DataProtectionApplication
+### 2.3 Credentials secret
 
-Create the S3 credentials secret first ([2.3](#23-credentials-secret)),
-then the DPA:
+On both hubs, from the credentials file in [1.3](#13-credentials-for-velero):
+
+```bash
+oc create secret generic cloud-credentials -n openshift-adp \
+  --from-file cloud=credentials-velero --dry-run=client -o yaml | oc apply -f -
+rm -f credentials-velero
+```
+
+### 2.4 DataProtectionApplication
+
+With the credentials secret in place, create the DPA:
 
 ```yaml
 apiVersion: oadp.openshift.io/v1alpha1
@@ -128,7 +239,7 @@ spec:
       velero:
         provider: aws
         default: true
-        accessMode: ReadWrite          # DR hub: ReadOnly until failover, see 1.5
+        accessMode: ReadWrite          # DR hub: ReadOnly until failover, see 2.7
         objectStorage:
           bucket: <bucket>
           prefix: <prefix>             # identical on both hubs
@@ -160,7 +271,20 @@ There is no `snapshotLocations`. On bare metal the etcd volumes go
 through CSI snapshots and the data mover, which don't use a cloud
 snapshot location.
 
-### 1.4 VolumeSnapshotClass
+### 2.5 Verify the backup location
+
+```bash
+oc get backupstoragelocations.velero.io -n openshift-adp   # PHASE Available
+velero backup-location get
+```
+
+Velero checks the location about once a minute, so give it a minute
+after a change. If it stays `Unavailable`, read `.status.message` on the
+BackupStorageLocation. It reports the same errors as the access check in
+[1.4](#14-verify-access-from-both-sites): a wrong key, a bucket, region or
+policy problem, or a missing `caCert` for a private CA.
+
+### 2.6 VolumeSnapshotClass
 
 Velero has no field naming a VolumeSnapshotClass. It looks one up by
 label, per CSI driver. If no class for the etcd PVCs' driver carries the
@@ -179,7 +303,7 @@ oc label volumesnapshotclass <class> velero.io/csi-volumesnapshot-class=true --o
 
 Do the same on the DR hub, for its own CSI driver.
 
-### 1.5 Backup location on the DR hub: read-only until failover
+### 2.7 Backup location on the DR hub: read-only until failover
 
 Both hubs point at the same bucket and prefix. That is what lets the DR
 hub see the primary's backups. But a second hub with write access also
@@ -187,7 +311,7 @@ runs Velero's garbage collection and can delete backups. Configure the DR
 hub's location with `accessMode: ReadOnly`, and switch it to `ReadWrite`
 as part of failover ([6.2](#62-take-over-backups-on-the-dr-hub)).
 
-### 1.6 If OADP is already configured: checks
+### 2.8 If OADP is already configured: checks
 
 Run on each hub:
 
@@ -231,106 +355,6 @@ For convenience:
 alias velero='oc -n openshift-adp exec deploy/velero -c velero -it -- ./velero'
 ```
 
-## 2. S3 object storage
-
-One bucket serves both hubs. Put it somewhere that survives the loss of
-the primary site: a cloud region, or an S3-compatible store at the DR
-site or a third site. Do **not** put it on storage that the primary hub
-itself provides.
-
-### 2.1 Bucket
-
-- **One bucket and prefix per hub pair.** Both hubs' DPAs use the same
-  values.
-- **Encrypt at rest** (SSE-S3, SSE-KMS or the appliance's equivalent).
-  Backups contain the hosted cluster's secrets and CA keys.
-- **No lifecycle expiration rule on the Velero prefix.** Velero expires
-  backups itself, through each backup's `ttl`. A lifecycle rule deletes
-  objects out from under it and leaves broken backups behind.
-- **Optional: object lock or a replicated copy** as protection against
-  deletion or ransomware. Set this up with the storage team, and test a
-  restore with it in place.
-
-AWS example:
-
-```bash
-BUCKET=<bucket>; REGION=<region>
-aws s3api create-bucket --bucket $BUCKET --region $REGION \
-  --create-bucket-configuration LocationConstraint=$REGION
-aws s3api put-bucket-encryption --bucket $BUCKET \
-  --server-side-encryption-configuration \
-  '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
-aws s3api put-public-access-block --bucket $BUCKET --public-access-block-configuration \
-  BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-```
-
-### 2.2 Access policy
-
-Give Velero a dedicated identity with access to this bucket only. With
-CSI snapshots plus the data mover, Velero needs only S3 permissions, not
-EC2 or snapshot permissions:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject",
-                 "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
-      "Resource": ["arn:aws:s3:::<bucket>/*"]
-    },
-    {
-      "Effect": "Allow",
-      "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:ListBucketMultipartUploads"],
-      "Resource": ["arn:aws:s3:::<bucket>"]
-    }
-  ]
-}
-```
-
-```bash
-aws iam create-user --user-name oadp-hcp
-aws iam put-user-policy --user-name oadp-hcp --policy-name oadp-hcp-bucket \
-  --policy-document file://oadp-hcp-policy.json
-aws iam create-access-key --user-name oadp-hcp
-```
-
-On an S3-compatible store, create the equivalent user and a bucket
-policy with the same actions. Rotate the key on your normal schedule:
-update the secret on both hubs, then check that the backup location goes
-back to `Available`.
-
-### 2.3 Credentials secret
-
-On both hubs:
-
-```bash
-cat > credentials-velero <<'EOF'
-[default]
-aws_access_key_id=<access-key-id>
-aws_secret_access_key=<secret-access-key>
-EOF
-
-oc create secret generic cloud-credentials -n openshift-adp \
-  --from-file cloud=credentials-velero --dry-run=client -o yaml | oc apply -f -
-rm -f credentials-velero
-```
-
-### 2.4 Verify from both hubs
-
-```bash
-oc get backupstoragelocations.velero.io -n openshift-adp   # PHASE Available
-velero backup-location get
-```
-
-Velero checks the location about once a minute, so give it a minute
-after a change. If it stays `Unavailable`, read `.status.message` on the
-BackupStorageLocation: `InvalidAccessKeyId` or `SignatureDoesNotMatch`
-mean the credentials are wrong; `NoSuchBucket`, `AccessDenied` or a
-region error point at the bucket, region or policy; a TLS error means
-`caCert` is missing.
-
 ## 3. DR hub readiness
 
 Check this when the DR hub is built, and again in every DR drill. Most
@@ -342,7 +366,7 @@ failed restores come from something on this list.
 | 2 | HyperShift available through MCE (the `hypershift` component and `local-cluster` hosting) | `oc get deploy operator -n hypershift` |
 | 3 | An **AgentServiceConfig** exists and assisted-service is running. OADP does **not** restore it | `oc get agentserviceconfig agent`, `oc get pvc -n multicluster-engine` (all `Bound`) |
 | 4 | A StorageClass with the **same name** the etcd PVCs use on the primary, or a Velero storage-class mapping (Appendix A) | `oc get sc` |
-| 5 | A VolumeSnapshotClass for that driver, labelled for Velero | [1.4](#14-volumesnapshotclass) |
+| 5 | A VolumeSnapshotClass for that driver, labelled for Velero | [2.6](#26-volumesnapshotclass) |
 | 6 | OADP configured, location `Available`, the primary's backups visible | `oc get backup.velero.io -n openshift-adp` |
 | 7 | A load-balancer address in the DR segment for the hosted cluster's API (see below) | `oc get ipaddresspool -n metallb-system` |
 | 8 | The release image and its payload are pullable from the DR hub, from the registry or the mirror the primary uses | `oc adm release info <release-image>` from the DR hub |
@@ -861,10 +885,10 @@ found in a real run.
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| Backup `Completed` but no `DataUpload`s | No VolumeSnapshotClass labelled for the etcd PVCs' driver | [1.4](#14-volumesnapshotclass); take the backup again |
+| Backup `Completed` but no `DataUpload`s | No VolumeSnapshotClass labelled for the etcd PVCs' driver | [2.6](#26-volumesnapshotclass); take the backup again |
 | Backup fails with `backup already exists in object storage` | A Backup object was deleted with `oc delete`, which leaves its data in S3 | Wait for it to resync, then `velero backup delete <name> --confirm`; never reuse a backup name |
-| Backup location `Unavailable` | Credentials, endpoint, CA or bucket | `.status.message` on the BackupStorageLocation ([2.4](#24-verify-from-both-hubs)) |
-| DR hub doesn't list the primary's backups | Different bucket or prefix, or the location is `Unavailable` | [1.6](#16-if-oadp-is-already-configured-checks) |
+| Backup location `Unavailable` | Credentials, endpoint, CA or bucket | `.status.message` on the BackupStorageLocation ([2.5](#25-verify-the-backup-location)) |
+| DR hub doesn't list the primary's backups | Different bucket or prefix, or the location is `Unavailable` | [2.8](#28-if-oadp-is-already-configured-checks) |
 | Restored PVCs stay `Pending` | No StorageClass with the source's name on the DR hub | Create one, or map storage classes with a ConfigMap in `openshift-adp` labelled `velero.io/change-storage-class: RestoreItemAction` and `velero.io/plugin-config: ""`, with data `<old-class>: <new-class>` |
 | assisted-service not running on the DR hub | No AgentServiceConfig (OADP doesn't restore it), or its PVCs have no default StorageClass | Create the AgentServiceConfig; check `oc get pvc -n multicluster-engine` |
 | `kube-apiserver` Service has no external IP | No load-balancer pool in the DR segment that may serve `$HCP_NS` | [Section 3](#api-address-in-the-dr-segment) |
