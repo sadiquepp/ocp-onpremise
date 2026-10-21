@@ -330,6 +330,7 @@ what changed the outcome.
 | Image checks (1.4) | `amd64`; entrypoint `cp /plugins/* /target/.`; binary contains "Skipping restore of ACM/MCE import secret" (1 match) |
 | Plugin image on hub2 (3.1) | DPA `unsupportedOverrides.hypershiftPluginImageFqin` set to the digest; `deploy/velero` rolled out; init container `hypershift-oadp-plugin` image and pod `velero-56d49c4857-m6nld` pulled `imageID` both equal the digest |
 | Backup method | csi |
+| Import secret in the backup (2.2) | Yes: `velero backup describe hcp-cluster1-backup-csi --details` lists `hcp-cluster1/hcp-cluster1-import` (step 12 exclude label removed) |
 | Unit tests | PASS: `go test ./pkg/...` and `TestRestoreExecuteImportSecretExclusion` (3/3) on `oadp-1.6` @ `62cec95f` + cherry-pick of `213d7da` |
 | Velero log shows skip | |
 | Import secret regenerated on hub2 | |
