@@ -610,3 +610,50 @@ NAME                                    VERSION
 metallb-operator.v4.22.0-202610140833   4.22.0-202610140833
 multicluster-engine.v2.17.3             2.17.3
 ```
+
+## 6. Run 2: `oadp-1.6` image
+
+The fix was backported to the plugin's `oadp-1.6` branch in
+[openshift/hypershift-oadp-plugin#320](https://github.com/openshift/hypershift-oadp-plugin/pull/320)
+(merged `f573a597`, 2026-10-21). The backported plugin code (`pkg/`) is
+identical to the self-built `oadp-1.6` cherry-pick from section 1.1, and its
+`restore.go` change is byte-identical to the `main` commit that Run 1's image
+was built from. What differs from Run 1 is the build line: OADP 1.6
+dependencies (Velero 1.18.4 fork, client-go 0.35) instead of `main`'s. That
+makes this the image closest to what an OADP 1.6.z release ships.
+
+**Method.** Restore the **same backup** as Run 1 (`hcp-cluster1-backup-csi`,
+which contains `hcp-cluster1/hcp-cluster1-import`) onto a freshly rebuilt
+hub2. No new backup is needed, and hub1 stays shut down. The fix only acts at
+restore time, and Run 1's hub2 already holds MCE's regenerated import secret,
+so it can't be reused.
+
+1. Remove Run 1's hub2: `ansible-playbook -i inventory/hosts cleanup-hub2.yaml`,
+   then `virsh list --all | grep hub2` (no rows).
+2. [steps.md](../steps.md) steps 15-19, as in Run 1.
+3. Check and pin the image (section 1.0), then step 20 with
+   `-e oadp_hypershift_plugin_image=quay.io/jparrill/hypershift-oadp-plugin@sha256:<digest>`,
+   and confirm the pulled `imageID` (section 3.1).
+4. Step 21 (restore), then step 22 (DNS: the restored kube-apiserver gets the
+   same hub2 address as in Run 1, so this should already be correct) and the
+   checks in section 4.
+
+| Item | Value |
+|---|---|
+| Date | |
+| Plugin image (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.6-check-skip-import` |
+| Image source commit | (expected `f573a597` or later on `oadp-1.6`) |
+| Image checks (1.4) | |
+| Plugin image on hub2 (3.1) | |
+| Backup restored | `hcp-cluster1-backup-csi` (same as Run 1) |
+| Velero log shows skip | |
+| Import secret regenerated on hub2 | |
+| HostedCluster recovery | |
+| ManagedCluster state | |
+| NodePool / nodes / workload | |
+| Restore outcome and warnings | |
+| Versions (hub2) | |
+| **Outcome** | |
+
+### 6.1 Evidence
+
