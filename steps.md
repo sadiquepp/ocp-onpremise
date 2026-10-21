@@ -153,6 +153,13 @@ oc get hostedcluster,nodepool -n hcp-cluster1
 `.rendered-<cluster>.yaml` per entry in `hosted_clusters`. Apply each one
 you want.
 
+To have the hub manage the workers as BareMetalHosts (Redfish BMCs from
+sushy-emulator on this host) instead, add
+`-e hosted_cluster_worker_provisioning=bmh` to the first command, with
+`sushy_emulator_password` in `vault.yaml`. The hub then boots and approves
+them itself, so there is nothing to approve in the UI. See
+[oadp/BMH-DR-test.md](oadp/BMH-DR-test.md).
+
 ## 10. Workload
 
 Extract the hosted cluster's kubeconfig from hub1. HyperShift keeps it in

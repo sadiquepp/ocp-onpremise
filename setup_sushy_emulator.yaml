@@ -1,0 +1,24 @@
+## Runs sushy-emulator on this bare-metal host: a Redfish BMC, with virtual
+## media, for each of the hosted cluster's worker VMs. That is what lets a hub
+## manage the workers as BareMetalHosts - see hosted_cluster_worker_provisioning
+## in vars.yaml.
+##
+## Normally there is no need to run this on its own:
+##   ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass \
+##     -e hosted_cluster_worker_provisioning=bmh
+## creates the VMs and then runs the same role. Run this one to re-apply the
+## emulator by itself (after rebuilding a worker VM, changing the password, or
+## a host reboot that left it stopped):
+##   ansible-playbook -i inventory/hosts setup_sushy_emulator.yaml --ask-vault-pass
+##
+## Needs sushy_emulator_password in vault.yaml. Removed by
+## cleanup-sushy-emulator.yaml.
+
+- name: Run sushy-emulator for the hosted cluster worker VMs
+  hosts: localhost
+  become: true
+  vars_files:
+    - vars.yaml
+    - vault.yaml
+  roles:
+    - setup-sushy-emulator

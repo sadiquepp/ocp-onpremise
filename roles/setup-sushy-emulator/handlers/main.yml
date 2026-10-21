@@ -1,0 +1,7 @@
+---
+# handlers file for setup-sushy-emulator
+- name: Restart sushy-emulator
+  ansible.builtin.systemd:
+    name: sushy-emulator
+    state: restarted
+    daemon_reload: true

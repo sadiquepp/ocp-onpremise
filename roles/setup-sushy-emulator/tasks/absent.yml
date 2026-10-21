@@ -1,0 +1,48 @@
+---
+# Removes sushy-emulator: the service, its unit, config and firewall rule.
+# The image stays in podman's store. BareMetalHosts still pointing at it go
+# to an error state on the hub - delete them (or the hosted cluster) first.
+
+- name: Stop and disable sushy-emulator
+  ansible.builtin.systemd:
+    name: sushy-emulator
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove the container if it is still there
+  ansible.builtin.command: podman rm -f {{ sushy_emulator_container_name }}
+  register: sushy_rm
+  changed_when: sushy_rm.rc == 0 and (sushy_rm.stdout | trim | length) > 0
+  failed_when: false
+
+- name: Remove the unit and config
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/sushy-emulator.service
+    - "{{ sushy_emulator_config_dir }}"
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Check whether firewalld is running
+  ansible.builtin.command: systemctl is-active firewalld
+  register: sushy_firewalld
+  changed_when: false
+  failed_when: false
+
+- name: Close the Redfish port
+  ansible.builtin.shell:
+    cmd: |
+      zone=$(firewall-cmd --get-zone-of-interface=virbr0 2>/dev/null || echo libvirt)
+      port={{ sushy_emulator_port }}/tcp
+      changed=0
+      firewall-cmd --zone=$zone --query-port=$port >/dev/null && { firewall-cmd --zone=$zone --remove-port=$port; changed=1; }
+      firewall-cmd --permanent --zone=$zone --query-port=$port >/dev/null && { firewall-cmd --permanent --zone=$zone --remove-port=$port; changed=1; }
+      echo "zone=$zone changed=$changed"
+  register: sushy_fw_close
+  changed_when: "'changed=1' in sushy_fw_close.stdout"
+  when: sushy_firewalld.stdout == 'active'

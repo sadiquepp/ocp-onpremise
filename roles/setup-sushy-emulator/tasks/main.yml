@@ -1,0 +1,23 @@
+---
+# Tasks file for setup-sushy-emulator
+#
+# Runs sushy-emulator in a podman container under systemd on the bare-metal
+# host, restricted to the hosted cluster's worker VMs. Each of those VMs then
+# has a Redfish BMC at
+#   redfish-virtualmedia+http://<listen_ip>:<port>/redfish/v1/Systems/<uuid>
+# which is the bmc.address of its BareMetalHost.
+#
+# Safe to re-run: it re-reads the domains' UUIDs, so a worker VM that was
+# rebuilt (new UUID) is picked up, and restarts the container only when its
+# config or unit changed.
+#
+# Sets sushy_emulator_systems (name, uuid, address) for the caller -
+# setup_hosted_cluster_vm.yaml renders the BareMetalHosts from it.
+
+- name: Bring sushy-emulator up
+  ansible.builtin.include_tasks: present.yml
+  when: sushy_emulator_state == 'present'
+
+- name: Remove sushy-emulator
+  ansible.builtin.include_tasks: absent.yml
+  when: sushy_emulator_state == 'absent'

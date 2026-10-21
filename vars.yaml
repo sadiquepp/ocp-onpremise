@@ -1024,6 +1024,27 @@ hosted_cluster_workers:
   - name: c1_worker3
     ip_key: c1worker3
 
+## How those workers join the hub's InfraEnv. Same VMs, same names, MACs and
+## addresses either way:
+##
+##   agent - setup_hosted_cluster_vm.yaml boots them straight off the discovery
+##           ISO; they register as Agents, which you approve. The hub has no
+##           way to power or reboot them. Default, and how this lab has always
+##           worked.
+##   bmh   - each VM gets a Redfish BMC from sushy-emulator on this host
+##           (roles/setup-sushy-emulator), and a BareMetalHost plus BMC secret
+##           in the agent namespace. The hub's Bare Metal Operator powers the
+##           VMs on and boots them from virtual media; the BareMetalAgent
+##           controller approves the resulting Agents. This is how bare-metal
+##           workers with real BMCs are managed, and what
+##           oadp/BMH-DR-test.md tests across a DR restore.
+##
+## Override per run: -e hosted_cluster_worker_provisioning=bmh. bmh applies to
+## the hub's connected hosted cluster workers only (hosted_cluster_workers);
+## the disconnected and compact-cluster workers stay agent. bmh also needs
+## sushy_emulator_password in vault.yaml.
+hosted_cluster_worker_provisioning: agent
+
 
 ## Variables for Hosted Cluster1
 hosted_cluster2_cpu: 4
@@ -1095,6 +1116,15 @@ oadp_backup_prefix: hcp-backup
 oadp_backup_ttl: 999h0m0s
 oadp_bminfra_namespace: bminfra
 oadp_storage_location: default
+
+## Restore every BareMetalHost detached (baremetalhost.metal3.io/detached), so
+## the restoring hub's Bare Metal Operator does not act on the hosts until you
+## remove the annotation. Only matters for workers built with
+## hosted_cluster_worker_provisioning=bmh. Override per run:
+##   -e oadp_restore_detach_bmh=true
+## See oadp/BMH-DR-test.md.
+oadp_restore_detach_bmh: false
+oadp_restore_bmh_modifier_name: hcp-restore-bmh-detached
 
 ## How the control-plane PVs (the hosted cluster's etcd volumes) are
 ## backed up. Both methods use the same S3 bucket and the same

@@ -689,7 +689,8 @@ the leftover namespaces.
 ### 5.3 BareMetalHosts: decide before restoring
 
 *This is not validated in the drill behind this runbook, whose workers
-had no BareMetalHost objects.*
+had no BareMetalHost objects. The procedure to validate it is
+[BMH-DR-test.md](BMH-DR-test.md).*
 
 If `$AGENT_NS` holds BareMetalHosts, the DR hub's Bare Metal Operator
 takes them over as soon as they're restored. A host it doesn't recognize

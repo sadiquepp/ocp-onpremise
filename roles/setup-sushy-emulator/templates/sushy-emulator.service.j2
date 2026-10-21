@@ -1,0 +1,24 @@
+# Rendered by roles/setup-sushy-emulator - edits are overwritten.
+[Unit]
+Description=sushy-emulator: Redfish BMCs for the hosted cluster worker VMs
+Wants=network-online.target
+After=network-online.target libvirtd.service
+
+[Service]
+Restart=on-failure
+RestartSec=10
+ExecStartPre=-/usr/bin/podman rm -f {{ sushy_emulator_container_name }}
+# label=disable: the container talks to libvirt through its socket under
+# /var/run/libvirt, which SELinux would otherwise deny.
+ExecStart=/usr/bin/podman run --rm --name {{ sushy_emulator_container_name }} \
+  --security-opt label=disable \
+  --publish {{ sushy_emulator_listen_ip }}:{{ sushy_emulator_port }}:8000 \
+  --dns {{ sushy_emulator_dns }} \
+  --volume {{ sushy_emulator_config_dir }}:{{ sushy_emulator_config_dir }}:ro \
+  --volume /var/run/libvirt:/var/run/libvirt \
+  {{ sushy_emulator_image }} \
+  sushy-emulator --config {{ sushy_emulator_config_dir }}/sushy-emulator.conf
+ExecStop=/usr/bin/podman stop -t 10 {{ sushy_emulator_container_name }}
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+galaxy_info:
+  author: sadiquepp
+  description: Runs sushy-emulator on the bare-metal host so the hosted cluster's worker VMs have a Redfish BMC with virtual media
+  license: MIT
+  min_ansible_version: "2.9"
+
+dependencies: []

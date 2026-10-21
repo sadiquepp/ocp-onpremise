@@ -26,6 +26,16 @@
 ## libvirt network first - redefining the network would cut the compact
 ## cluster off it.
 ##
+## BareMetalHosts instead of plain Agents (the hub's connected workers only):
+##   ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass \
+##     -e hosted_cluster_worker_provisioning=bmh
+## defines the same VMs powered off with an empty CD-ROM, gives each a Redfish
+## BMC through sushy-emulator on this host (roles/setup-sushy-emulator), and
+## creates a BareMetalHost and BMC secret per VM in the agent namespace. The
+## hub then powers them on and boots them from the discovery ISO as virtual
+## media, and approves the Agents itself. Needs sushy_emulator_password in
+## vault.yaml. See hosted_cluster_worker_provisioning in vars.yaml.
+##
 ## Both paths run the same tasks - only the worker set, the VM folder and the
 ## sizing differ (see the "Select the worker set" task below and the
 ## disconnected block in vars.yaml) - plus one step the disconnected path needs
@@ -86,12 +96,74 @@
              else (compact_hosted_cluster_cpu if hcp_on_compact | bool
                    else hosted_cluster_cpu) }}
 
+    # agent (default): boot the VMs off the discovery ISO, as always.
+    # bmh: same VMs, but each gets a Redfish BMC and a BareMetalHost, and the
+    # hub boots them. See hosted_cluster_worker_provisioning in vars.yaml.
+    - name: Select how the workers join the InfraEnv
+      tags: [always]
+      ansible.builtin.set_fact:
+        hcp_worker_bmh: "{{ (hosted_cluster_worker_provisioning | default('agent')) == 'bmh' }}"
+
+    - name: Fail fast on an unknown provisioning mode
+      tags: [always]
+      ansible.builtin.assert:
+        that:
+          - (hosted_cluster_worker_provisioning | default('agent')) in ['agent', 'bmh']
+        fail_msg: >-
+          hosted_cluster_worker_provisioning must be 'agent' or 'bmh', not
+          '{{ hosted_cluster_worker_provisioning }}'.
+
+    - name: Fail fast if bmh is asked for workers it does not cover
+      tags: [always]
+      ansible.builtin.assert:
+        that:
+          - not (hcp_worker_bmh | bool) or not (hcp_disconnected | bool)
+          - not (hcp_worker_bmh | bool) or not (hcp_on_compact | bool)
+        fail_msg: >-
+          hosted_cluster_worker_provisioning=bmh covers the hub's connected
+          hosted cluster workers (hosted_cluster_workers) only. Build the
+          disconnected and compact-cluster workers with agent.
+
     - name: Report which hosted cluster's VMs are being built
       ansible.builtin.debug:
         msg: >-
           {{ hcp_disconnected | ternary('Disconnected', 'Connected') }} hosted
           cluster VMs: {{ hcp_workers | map(attribute='name') | join(', ') }}
-          in {{ hcp_vm_folder }}, discovery ISO from {{ hub_kubeconfig }}
+          in {{ hcp_vm_folder }},
+          {{ 'as BareMetalHosts with Redfish BMCs, booted by the hub at ' ~ hub_kubeconfig
+             if hcp_worker_bmh | bool
+             else 'discovery ISO from ' ~ hub_kubeconfig }}
+
+    # The hub's Bare Metal Operator is what acts on a BareMetalHost. It runs
+    # once a Provisioning CR exists - roles/setup-hub-acm applies one, watching
+    # all namespaces so the agent namespace is included.
+    - name: Check the hub's Bare Metal Operator watches all namespaces (bmh)
+      ansible.builtin.command: >-
+        oc get provisioning provisioning-configuration
+        -o jsonpath='{.spec.watchAllNamespaces}'
+      register: hcp_provisioning
+      changed_when: false
+      failed_when: false
+      when: hcp_worker_bmh | bool
+
+    - name: Fail with a clear message if it does not
+      ansible.builtin.fail:
+        msg: >-
+          The hub at {{ hub_kubeconfig }} has no Provisioning CR with
+          watchAllNamespaces: true, so nothing would act on the
+          BareMetalHosts in {{ oadp_bminfra_namespace }}. Apply
+          roles/setup-hub-acm/files/acm/04b-provisioning.yaml and wait for
+          the metal3 pod in openshift-machine-api.
+      when:
+        - hcp_worker_bmh | bool
+        - hcp_provisioning.stdout | default('') | trim != 'true'
+
+    # The BMC password, for the emulator and the BareMetalHosts' secrets. Only
+    # loaded in bmh mode, so an agent run needs nothing new from the vault.
+    - name: Load the BMC password from vault.yaml (bmh)
+      ansible.builtin.include_vars:
+        file: vault.yaml
+      when: hcp_worker_bmh | bool
 
     # Only the disconnected workers get their egress cut - the connected
     # hosted clusters, the mirror registry, MinIO, the helper and the load
@@ -122,8 +194,10 @@
       when: hcp_disconnected
       tags: [discovery-ignition]
 
+    # bmh mode never touches the ISO here: the hub hands its URL to the BMC.
     - name: Download discovery ISO from hub InfraEnv
       ansible.builtin.include_tasks: roles/setup-bminfra/tasks/download-discovery-iso.yml
+      when: not (hcp_worker_bmh | bool)
 
     # The hub's hosted cluster workers get their DHCP reservations from the
     # libvirt network definition setup_bm_host.yaml renders, which it applies
@@ -216,3 +290,89 @@
       loop: "{{ hcp_workers }}"
       loop_control:
         label: "{{ item.name }} ({{ lab_network_prefix }}.{{ ip_list[item.ip_key] }})"
+      when: not (hcp_worker_bmh | bool)
+
+    # ---- bmh mode -----------------------------------------------------------
+    # The same VM as above - CPU, memory, disk, MAC, BIOS firmware, hd,cdrom
+    # boot order - with two differences: the CD-ROM is empty, because the hub
+    # inserts the discovery ISO as virtual media, and the VM is defined but not
+    # started, because powering it on is the hub's job (the BareMetalHost is
+    # online: true). --print-xml plus virsh define is what keeps it off.
+    - name: Check which worker VMs are already defined (bmh)
+      ansible.builtin.command: virsh dominfo {{ item.name }}
+      loop: "{{ hcp_workers }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: hcp_bmh_dominfo
+      changed_when: false
+      failed_when: false
+      when: hcp_worker_bmh | bool
+
+    - name: Define the worker VMs powered off, with an empty CD-ROM (bmh)
+      ansible.builtin.shell: |
+        set -e
+        virt-install \
+        --import \
+        --ram {{ hcp_vm_memory }} \
+        --vcpus {{ hcp_vm_cpu }} \
+        --os-variant rhel9.5 \
+        --disk path={{ hcp_vm_folder }}/{{ item.item.name }}.qcow2,device=disk,bus=virtio,format=qcow2,cache=none \
+        --disk device=cdrom,bus=sata,readonly=on \
+        --boot hd,cdrom \
+        --memballoon model=virtio,freePageReporting=on \
+        --vnc \
+        --network network:default,mac=52:54:00:e2:54:{{ '%02d' | format(ip_list[item.item.ip_key] | int) }} \
+        --name {{ item.item.name }} \
+        --cpu host-passthrough \
+        --print-xml > {{ hcp_vm_folder }}/{{ item.item.name }}.xml
+        virsh define {{ hcp_vm_folder }}/{{ item.item.name }}.xml
+      loop: "{{ hcp_bmh_dominfo.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name }} ({{ lab_network_prefix }}.{{ ip_list[item.item.ip_key] }})"
+      when:
+        - hcp_worker_bmh | bool
+        - item.rc != 0
+
+    # Gives each VM its Redfish BMC, restricted to exactly these VMs, and sets
+    # sushy_emulator_systems (name, uuid, BMC address) for the BareMetalHosts.
+    - name: Give each worker VM a Redfish BMC (bmh)
+      ansible.builtin.include_role:
+        name: setup-sushy-emulator
+        # Its defaults (sushy_emulator_username and the rest) are needed by
+        # the BareMetalHosts template below, outside the role.
+        public: true
+      vars:
+        sushy_emulator_domains: "{{ hcp_workers | map(attribute='name') | list }}"
+      when: hcp_worker_bmh | bool
+
+    - name: Render the BMC secrets and BareMetalHosts (bmh)
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/roles/setup-bminfra/templates/05-baremetalhosts.yaml.j2"
+        dest: "{{ playbook_dir }}/roles/setup-bminfra/templates/.rendered-05-baremetalhosts.yaml"
+        mode: '0600'
+      when: hcp_worker_bmh | bool
+
+    - name: Apply the BMC secrets and BareMetalHosts (bmh)
+      ansible.builtin.command: >-
+        oc apply -f {{ playbook_dir }}/roles/setup-bminfra/templates/.rendered-05-baremetalhosts.yaml
+      register: hcp_bmh_apply
+      changed_when: "'created' in hcp_bmh_apply.stdout or 'configured' in hcp_bmh_apply.stdout"
+      when: hcp_worker_bmh | bool
+
+    # Unlike the other rendered bminfra files, this one holds the BMC
+    # password - do not leave it lying around.
+    - name: Remove the rendered BareMetalHosts file (bmh)
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/roles/setup-bminfra/templates/.rendered-05-baremetalhosts.yaml"
+        state: absent
+      when: hcp_worker_bmh | bool
+
+    - name: Report what happens next (bmh)
+      ansible.builtin.debug:
+        msg:
+          - "BareMetalHosts created in {{ oadp_bminfra_namespace }}: {{ hcp_workers | map(attribute='ip_key') | join(', ') }}"
+          - "The hub now powers each VM on and boots it from the discovery ISO as virtual media."
+          - "Watch: oc get bmh,agents -n {{ oadp_bminfra_namespace }}"
+          - "The Agents are approved automatically - no approval in the UI."
+          - "BMCs: {{ sushy_emulator_systems | map(attribute='address') | join(', ') }}"
+      when: hcp_worker_bmh | bool

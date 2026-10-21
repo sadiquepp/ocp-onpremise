@@ -1,0 +1,50 @@
+{# One BMC secret and one BareMetalHost per hosted cluster worker VM, for
+   hosted_cluster_worker_provisioning=bmh. Rendered and applied by
+   setup_hosted_cluster_vm.yaml after roles/setup-sushy-emulator has given
+   each VM a Redfish BMC (sushy_emulator_systems: name, uuid, address).
+
+   What the hub does with them:
+   - the infraenvs.agent-install.openshift.io label hands each host to the
+     BareMetalAgent controller (BMAC), which points the host at this
+     InfraEnv's discovery ISO;
+   - the Bare Metal Operator (Ironic) then powers the VM on through Redfish
+     and boots it from that ISO as virtual media;
+   - the host registers as an Agent, which BMAC approves and names after the
+     hostname annotation.
+
+   Inspection and cleaning are off: the assisted agent does its own
+   inventory, and cleaning would wipe disks for nothing. bootMode legacy
+   matches the VMs, which boot with BIOS firmware, as in agent mode. #}
+{% for w in hcp_workers %}
+{% set sys = sushy_emulator_systems | selectattr('name', 'equalto', w.name) | first %}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ w.ip_key }}-bmc
+  namespace: {{ oadp_bminfra_namespace }}
+type: Opaque
+data:
+  username: {{ sushy_emulator_username | b64encode }}
+  password: {{ sushy_emulator_password | string | b64encode }}
+---
+apiVersion: metal3.io/v1alpha1
+kind: BareMetalHost
+metadata:
+  name: {{ w.ip_key }}
+  namespace: {{ oadp_bminfra_namespace }}
+  labels:
+    infraenvs.agent-install.openshift.io: "{{ oadp_bminfra_namespace }}"
+  annotations:
+    inspect.metal3.io: disabled
+    bmac.agent-install.openshift.io/hostname: {{ w.ip_key }}
+spec:
+  online: true
+  bootMACAddress: "52:54:00:e2:54:{{ '%02d' | format(ip_list[w.ip_key] | int) }}"
+  bootMode: legacy
+  automatedCleaningMode: disabled
+  bmc:
+    address: {{ sys.address }}
+    credentialsName: {{ w.ip_key }}-bmc
+    disableCertificateVerification: true
+{% endfor %}
