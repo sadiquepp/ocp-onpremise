@@ -343,6 +343,7 @@ workaround.
 | ManagedCluster state | PASS: `hcp-cluster1` `HUB ACCEPTED=true`, `JOINED=True`, `AVAILABLE=True`, URL `https://api.hcp-cluster1.mylab.com:6443` |
 | HostedCluster recovery | `HostedClusterRestoredFromBackup=True`, reason `RecoveryFinished`, "Hosted cluster recovery finished", at `2026-10-21T07:11:27Z`. All other HostedCluster conditions healthy (`Available=True`, `Degraded=False`, `Progressing=False`; `EtcdBackupSucceeded=Unknown` is expected with the `csi` method). The `hypershift.openshift.io/restored-from-backup` annotation the plugin sets is gone, as expected: the HyperShift operator deletes it once the condition is `True` |
 | Timeline (UTC) | 07:03:17 restore started; 07:03:30 plugin skipped the import secret; 07:11:27 HostedCluster recovery finished; 07:17:51 MCE created the new import secret |
+| NodePool after restore | `nodepool-hcp-cluster1-1`: desired 2, current 2, version 4.22.10, `UPDATINGVERSION=False`, `UPDATINGCONFIG=False`, no message. The restore warning about its token secret had no effect |
 | Hosted cluster after restore | Nodes `c1worker1`, `c1worker2` `Ready` (v1.35.6); `online-boutique` 11/11 pods `Running` |
 | Restore outcome | `hcp-cluster1-restore-csi` `Completed`, 0 errors. CSI data movement for `data-etcd-0/1/2`: 3 of 3 completed |
 | Restore warning (1) | `hcp-cluster1-hcp-cluster1: secrets "token-nodepool-hcp-cluster1-1-6e74db43" not found`. Unrelated to the import secret: it is a NodePool token secret in the control-plane namespace, which HyperShift's NodePool controller creates and rotates itself, so it was most likely replaced while Velero was processing it (Existing Resource Policy: `update`). The nodes rejoined `Ready` |
@@ -519,6 +520,14 @@ Progressing=False
 PlatformCredentialsFound=True
 ReconciliationSucceeded=True
 ClusterVersionRetrievedUpdates=True
+```
+
+**NodePool after the restore** (hub2)
+
+```console
+$ oc get NodePool -n hcp-cluster1
+NAME                      CLUSTER        DESIRED NODES   CURRENT NODES   AUTOSCALING   AUTOREPAIR   VERSION   UPDATINGVERSION   UPDATINGCONFIG   MESSAGE
+nodepool-hcp-cluster1-1   hcp-cluster1   2               2               False         False        4.22.10   False             False
 ```
 
 **The cluster imported** (hub2)
