@@ -13,6 +13,8 @@
 ##
 ## Needs sushy_emulator_password in vault.yaml. Removed by
 ## cleanup-sushy-emulator.yaml.
+##
+## The same steps as commands to run by hand: sushy-emulator-manual.md.
 
 - name: Run sushy-emulator for the hosted cluster worker VMs
   hosts: localhost

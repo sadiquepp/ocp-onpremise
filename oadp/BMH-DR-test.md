@@ -55,6 +55,9 @@ This:
   `redfish-virtualmedia+http://192.168.122.1:8000/redfish/v1/Systems/<uuid>`;
 - creates a BMC secret and a BareMetalHost per VM in `bminfra`.
 
+To set up sushy-emulator by hand instead, see
+[sushy-emulator-manual.md](../sushy-emulator-manual.md).
+
 The hub then powers the VMs on and boots them from the discovery ISO as
 virtual media. **There is no Agent approval in the UI**: the BareMetalAgent
 controller approves them.
