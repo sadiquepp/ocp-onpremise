@@ -49,6 +49,29 @@
         method the backup was taken with), not
         '{{ oadp_backup_method }}'. See vars.yaml.
 
+  ## A Backup or Restore against an Unavailable location fails only
+  ## after Velero tries the bucket; say why up front instead.
+  ## setup_oadp.yaml is what makes it Available.
+  - name: Check the BackupStorageLocation is Available
+    shell: >
+      oc get backupstoragelocation.velero.io "{{ oadp_storage_location }}" -n openshift-adp
+      -o jsonpath='{.status.phase}{"|"}{.status.message}'
+    register: bsl_status
+    changed_when: false
+    failed_when: false
+    environment:
+      KUBECONFIG: "{{ hub_kubeconfig }}"
+
+  - name: Fail with a clear message if it is not
+    ansible.builtin.fail:
+      msg: >-
+        BackupStorageLocation '{{ oadp_storage_location }}' on this hub is
+        '{{ bsl_status.stdout.split('|', 1)[0] or 'missing' }}', not 'Available'.
+        {{ bsl_status.stdout.split('|', 1)[1] | default('') }}
+        Run setup_oadp.yaml against this hub (-e target_hub={{ target_hub }})
+        and fix what it reports - usually the AWS key in vault.yaml.
+    when: bsl_status.stdout.split('|', 1)[0] != 'Available'
+
   ## A Restore naming a Backup this hub cannot see fails with a terse
   ## "backup not found"; checking first says which name was expected.
   ##

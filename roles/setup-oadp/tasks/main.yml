@@ -45,20 +45,34 @@
   shell: |
     oc apply -f "{{ role_path }}/templates/.rendered-dpa.yaml"
 
-- name: Wait for the DPA to reconcile and the BackupStorageLocation to become Available
-  ansible.builtin.wait_for:
-    timeout: 120
-
-- name: Confirm BackupStorageLocation is Available
+## Velero validates the location about once a minute, so a phase left
+## over from an earlier run (e.g. Unavailable from a bad key) can linger
+## after the secret is fixed - keep polling rather than fail on the
+## first Unavailable. Whether it got there is enforced at the end of the
+## role, after the rendered credentials file has been removed.
+- name: Wait for the BackupStorageLocation to become Available (checked every 10s, up to 3 min)
   shell: |
-    oc get backupstoragelocation -n openshift-adp -o jsonpath='{.items[0].status.phase}'
+    oc get backupstoragelocation.velero.io "{{ oadp_storage_location }}" -n openshift-adp \
+      -o jsonpath='{.status.phase}'
   register: bsl_phase
+  until: bsl_phase.stdout == 'Available'
+  retries: 18
+  delay: 10
   changed_when: false
   failed_when: false
 
+- name: Read why the BackupStorageLocation is not Available
+  shell: |
+    oc get backupstoragelocation.velero.io "{{ oadp_storage_location }}" -n openshift-adp \
+      -o jsonpath='{.status.message}'
+  register: bsl_message
+  changed_when: false
+  failed_when: false
+  when: bsl_phase.stdout != 'Available'
+
 - name: Report BackupStorageLocation status
   debug:
-    msg: "BackupStorageLocation phase: {{ bsl_phase.stdout | default('unknown') }} (re-run this role if it is not 'Available')"
+    msg: "BackupStorageLocation {{ oadp_storage_location }} phase: {{ bsl_phase.stdout | default('', true) | trim or 'unknown' }}"
 
 - name: Read the hypershift plugin image Velero runs
   shell: |
@@ -87,3 +101,20 @@
   loop:
     - "{{ role_path }}/templates/.rendered-credentials-adp"
     - "{{ role_path }}/templates/.rendered-dpa.yaml"
+
+## Last, so a bad key still leaves no rendered credentials file behind.
+## Without this the play used to finish green with Velero unable to
+## reach the bucket, and the first sign was a failed backup.
+- name: Fail if the BackupStorageLocation is not Available
+  ansible.builtin.fail:
+    msg: >-
+      BackupStorageLocation '{{ oadp_storage_location }}' is
+      '{{ bsl_phase.stdout | default('', true) | trim or 'not reporting a phase' }}',
+      not 'Available', so Velero cannot reach s3://{{ oadp_bucket_name }}/{{ oadp_backup_prefix }}.
+      Velero says: {{ bsl_message.stdout | default('', true) | trim or '(no message)' }}.
+      InvalidAccessKeyId / SignatureDoesNotMatch: fix oadp_aws_access_key_id /
+      oadp_aws_secret_access_key (ansible-vault edit vault.yaml).
+      NoSuchBucket / AccessDenied / a region error: check oadp_bucket_name,
+      oadp_aws_region and the IAM user's policy (oadp/README.md).
+      Then re-run setup_oadp.yaml against this hub.
+  when: bsl_phase.stdout != 'Available'
