@@ -256,12 +256,14 @@ oc get dpa dpa-instance -n openshift-adp -o jsonpath='{.spec.unsupportedOverride
 oc rollout status deploy/velero -n openshift-adp
 oc get deploy velero -n openshift-adp \
   -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="hypershift-oadp-plugin")].image}{"\n"}'
-oc get pod -n openshift-adp -l component=velero \
-  -o jsonpath='{.items[0].status.initContainerStatuses[?(@.name=="hypershift-oadp-plugin")].imageID}{"\n"}'
+oc get pod -n openshift-adp -l deploy=velero \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"  "}{.status.initContainerStatuses[?(@.name=="hypershift-oadp-plugin")].imageID}{"\n"}{end}'
 ```
 
 The last command shows the digest the pod actually pulled. Record it in
-the results table.
+the results table. Select the pod with `deploy=velero`, not
+`component=velero`: the node-agent pods carry `component=velero` too, and
+they have no plugin init container.
 
 If you'd rather not re-run the playbook, this patch does the same thing:
 
