@@ -328,9 +328,9 @@ workaround.
 | Item | Value |
 |---|---|
 | Date | 2026-10-21 |
-| OCP version (hub1 / hub2) | |
-| ACM / MCE version | |
-| OADP version | 1.6.x |
+| OCP version (hub1 / hub2) | hub1: (not captured) / hub2: 4.22.10 |
+| ACM / MCE version | hub2: ACM 2.17.3 / MCE 2.17.3 |
+| OADP version | hub2: `oadp-operator.v1.6.1` |
 | Plugin image (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:main-check-skip-import`, pinned as `@sha256:9ecba766f3be1bfe5f631ac016bba160f6528c3493c233abf1b890b2de4a0237` |
 | Image source (given / self-built) and source commit | Given: developer's build of upstream `main`, created 2026-10-19. Source commit: (pending from developer) |
 | Image checks (1.4) | `amd64`; entrypoint `cp /plugins/* /target/.`; binary contains "Skipping restore of ACM/MCE import secret" (1 match) |
@@ -342,6 +342,7 @@ workaround.
 | Import secret regenerated on hub2 | PASS: restore started `2026-10-21T07:03:17Z`; `hcp-cluster1-import` created `2026-10-21T07:17:51Z`; its only label is `managedcluster-import-controller.open-cluster-management.io/import-secret`, with no `velero.io/restore-name` / `velero.io/backup-name`, so MCE created it and Velero did not |
 | ManagedCluster state | PASS: `hcp-cluster1` `HUB ACCEPTED=true`, `JOINED=True`, `AVAILABLE=True`, URL `https://api.hcp-cluster1.mylab.com:6443` |
 | Hosted cluster after restore | Nodes `c1worker1`, `c1worker2` `Ready` (v1.35.6); `online-boutique` 11/11 pods `Running` |
+| Restore outcome | `hcp-cluster1-restore-csi` `Completed`, 1 warning, 0 errors |
 | Backup visible on hub2 | `hcp-cluster1-backup-csi` synced from S3 |
 | Negative control | Not run |
 
