@@ -70,13 +70,20 @@ the VM as its CD-ROM. Without the pool, every insert fails with a 500, the
 log shows `Storage pool not found: no storage pool with matching name
 'default'`, and the BareMetalHosts sit in `provisioning`.
 
+Give it a directory of its own. libvirt allows one pool per directory, and
+`/var/lib/libvirt/images` itself usually already belongs to a pool (here,
+`images`): defining `default` there fails with `Storage source conflict with
+pool: 'images'`. A subdirectory is fine, and keeps the SELinux label QEMU
+needs to read the ISO:
+
 ```bash
 virsh pool-info default 2>/dev/null || {
-  virsh pool-define-as default dir --target /var/lib/libvirt/images
+  mkdir -p /var/lib/libvirt/images/sushy-vmedia
+  virsh pool-define-as default dir --target /var/lib/libvirt/images/sushy-vmedia
   virsh pool-build default
 }
 virsh pool-start default 2>/dev/null; virsh pool-autostart default
-virsh pool-list --all                 # default  active  yes
+virsh pool-list --all | grep -w default     # default  active  yes
 ```
 
 An existing `default` pool is fine as it is.
