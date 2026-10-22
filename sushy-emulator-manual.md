@@ -48,8 +48,29 @@ To check:
 
 ```bash
 for vm in $WORKERS; do virsh domstate $vm; done        # shut off
-virsh domblklist c1_worker1 --details | grep cdrom     # cdrom with no source (-)
+for vm in $WORKERS; do virsh domblklist $vm --details | grep cdrom; done   # cdrom with no source (-)
 ```
+
+**The CD-ROM drive must exist.** sushy inserts the ISO into the domain's
+existing CD-ROM device. With no drive, every `InsertMedia` from the hub
+fails with a 500 and the BareMetalHosts sit in `provisioning`. If the
+`grep cdrom` above prints nothing for a VM, attach an empty drive. `--config`
+writes it into the persistent definition, with the VM on or off:
+
+```bash
+cat > /tmp/empty-cdrom.xml <<'EOF'
+<disk type='file' device='cdrom'>
+  <driver name='qemu' type='raw'/>
+  <target dev='sda' bus='sata'/>
+  <readonly/>
+</disk>
+EOF
+for vm in $WORKERS; do
+  virsh domblklist $vm --details | grep -q cdrom || virsh attach-device $vm /tmp/empty-cdrom.xml --config
+done
+```
+
+`--tags bmh-vms` (above) does this for you.
 
 ## 2. Install podman and htpasswd
 

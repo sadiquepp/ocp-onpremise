@@ -317,7 +317,8 @@
     # boot order - with two differences: the CD-ROM is empty, because the hub
     # inserts the discovery ISO as virtual media, and the VM is defined but not
     # started, because powering it on is the hub's job (the BareMetalHost is
-    # online: true). --print-xml plus virsh define is what keeps it off.
+    # online: true). --print-xml plus virsh define is what keeps it off. The
+    # empty CD-ROM is attached by the task after, not by virt-install.
     - name: Check which worker VMs are already defined (bmh)
       tags: [bmh-vms]
       ansible.builtin.command: virsh dominfo {{ item.name }}
@@ -329,7 +330,7 @@
       failed_when: false
       when: hcp_worker_bmh | bool
 
-    - name: Define the worker VMs powered off, with an empty CD-ROM (bmh)
+    - name: Define the worker VMs powered off (bmh)
       tags: [bmh-vms]
       ansible.builtin.shell: |
         set -e
@@ -339,7 +340,6 @@
         --vcpus {{ hcp_vm_cpu }} \
         --os-variant rhel9.5 \
         --disk path={{ hcp_vm_folder }}/{{ item.item.name }}.qcow2,device=disk,bus=virtio,format=qcow2,cache=none \
-        --disk device=cdrom,bus=sata,readonly=on \
         --boot hd,cdrom \
         --memballoon model=virtio,freePageReporting=on \
         --vnc \
@@ -354,6 +354,37 @@
       when:
         - hcp_worker_bmh | bool
         - item.rc != 0
+
+    # Virtual media needs a CD-ROM drive to put the ISO in: sushy inserts the
+    # image into the domain's existing cdrom device, and InsertMedia fails
+    # with a 500 when there is none. virt-install drops a --disk device=cdrom
+    # that has no path, so the drive is attached explicitly - and checked on
+    # every run, which also repairs VMs defined before this task existed.
+    # --config: the change goes into the persistent definition, VM on or off.
+    - name: Make sure each worker VM has an empty CD-ROM drive (bmh)
+      tags: [bmh-vms]
+      ansible.builtin.shell: |
+        set -e
+        if virsh domblklist {{ item.name }} --details | awk '$2 == "cdrom"' | grep -q .; then
+          echo present
+        else
+          xml=$(mktemp)
+          printf '%s\n' \
+            "<disk type='file' device='cdrom'>" \
+            "  <driver name='qemu' type='raw'/>" \
+            "  <target dev='sda' bus='sata'/>" \
+            "  <readonly/>" \
+            "</disk>" > "$xml"
+          virsh attach-device {{ item.name }} "$xml" --config
+          rm -f "$xml"
+          echo added
+        fi
+      loop: "{{ hcp_workers }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: hcp_bmh_cdrom
+      changed_when: "'added' in hcp_bmh_cdrom.stdout"
+      when: hcp_worker_bmh | bool
 
     - name: Report the VMs-only run (--tags bmh-vms)
       tags: [bmh-vms]
