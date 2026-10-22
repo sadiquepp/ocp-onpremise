@@ -166,15 +166,20 @@
   delay: 5
   no_log: true
 
+# Each member is {"@odata.id": "/redfish/v1/Systems/<uuid>"}. The key is read
+# through dict2items because map(attribute='@odata.id') takes the dot as a
+# path and looks up ['@odata']['id'], which is undefined.
+- name: Collect the System ids the emulator lists
+  ansible.builtin.set_fact:
+    sushy_listed_uuids: "{{ sushy_systems.json.Members | default([]) | map('dict2items') | flatten | selectattr('key', 'equalto', '@odata.id') | map(attribute='value') | map('basename') | list }}"
+
 - name: Fail if the emulator does not expose exactly the worker VMs
   ansible.builtin.assert:
     that:
-      - (sushy_systems.json.Members | map(attribute='@odata.id') | map('basename') | sort)
-        == (sushy_emulator_systems | map(attribute='uuid') | sort)
+      - (sushy_listed_uuids | sort) == (sushy_emulator_systems | map(attribute='uuid') | sort)
     fail_msg: >-
-      The emulator lists
-      {{ sushy_systems.json.Members | map(attribute='@odata.id') | map('basename') | list }},
-      expected {{ sushy_emulator_systems | map(attribute='uuid') | list }}.
+      The emulator lists {{ sushy_listed_uuids }}, expected
+      {{ sushy_emulator_systems | map(attribute='uuid') | list }}.
       Check {{ sushy_emulator_config_dir }}/sushy-emulator.conf and
       journalctl -u sushy-emulator.
 
