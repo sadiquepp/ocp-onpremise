@@ -29,8 +29,8 @@ WORKERS="c1_worker1 c1_worker2 c1_worker3"
 ## 1. Prerequisite: the worker VMs exist
 
 sushy only exposes VMs that are defined in libvirt. For BareMetalHosts they
-should be **defined but powered off**, with an **empty CD-ROM**: the hub
-powers them on and inserts the discovery ISO itself.
+should be **defined but powered off**: the hub powers them on and inserts
+the discovery ISO itself.
 
 To create just the VMs that way, without sushy or the BareMetalHosts:
 
@@ -48,29 +48,12 @@ To check:
 
 ```bash
 for vm in $WORKERS; do virsh domstate $vm; done        # shut off
-for vm in $WORKERS; do virsh domblklist $vm --details | grep cdrom; done   # cdrom with no source (-)
 ```
 
-**The CD-ROM drive must exist.** sushy inserts the ISO into the domain's
-existing CD-ROM device. With no drive, every `InsertMedia` from the hub
-fails with a 500 and the BareMetalHosts sit in `provisioning`. If the
-`grep cdrom` above prints nothing for a VM, attach an empty drive. `--config`
-writes it into the persistent definition, with the VM on or off:
+No CD-ROM drive is needed: sushy adds one, holding the ISO, when the hub
+inserts virtual media.
 
-```bash
-cat > /tmp/empty-cdrom.xml <<'EOF'
-<disk type='file' device='cdrom'>
-  <driver name='qemu' type='raw'/>
-  <target dev='sda' bus='sata'/>
-  <readonly/>
-</disk>
-EOF
-for vm in $WORKERS; do
-  virsh domblklist $vm --details | grep -q cdrom || virsh attach-device $vm /tmp/empty-cdrom.xml --config
-done
-```
 
-`--tags bmh-vms` (above) does this for you.
 
 ## 2. Install podman and htpasswd
 
@@ -79,7 +62,26 @@ dnf install -y podman httpd-tools
 podman pull $IMAGE
 ```
 
-## 3. Collect the VMs' UUIDs
+## 3. Storage pool for virtual media
+
+On `InsertMedia`, sushy downloads the ISO and uploads it as a volume into
+the libvirt storage pool named **`default`**, then attaches that volume to
+the VM as its CD-ROM. Without the pool, every insert fails with a 500, the
+log shows `Storage pool not found: no storage pool with matching name
+'default'`, and the BareMetalHosts sit in `provisioning`.
+
+```bash
+virsh pool-info default 2>/dev/null || {
+  virsh pool-define-as default dir --target /var/lib/libvirt/images
+  virsh pool-build default
+}
+virsh pool-start default 2>/dev/null; virsh pool-autostart default
+virsh pool-list --all                 # default  active  yes
+```
+
+An existing `default` pool is fine as it is.
+
+## 3a. Collect the VMs' UUIDs
 
 A Redfish System id is the libvirt domain UUID. The allow-list in step 5
 uses them, and so do the BareMetalHosts.
@@ -201,7 +203,7 @@ the allow-list together:
 
 ```bash
 curl -s -u "$BMC_USER:$BMC_PASS" http://$LISTEN_IP:$PORT/redfish/v1/Systems | python3 -m json.tool
-#   Members: exactly the three worker UUIDs from step 3, nothing else
+#   Members: exactly the three worker UUIDs from step 3a, nothing else
 
 curl -s -o /dev/null -w '%{http_code}\n' http://$LISTEN_IP:$PORT/redfish/v1/Systems
 #   401 without credentials
@@ -246,7 +248,7 @@ That template is also the reference if you create them by hand: label
 
 | Task | Command |
 |---|---|
-| A worker VM was rebuilt (new UUID) | Redo steps 3 and 5, then `systemctl restart sushy-emulator`, and update that BareMetalHost's `bmc.address` |
+| A worker VM was rebuilt (new UUID) | Redo steps 3a and 5, then `systemctl restart sushy-emulator`, and update that BareMetalHost's `bmc.address` |
 | Change the password | Step 4 with the new value, `systemctl restart sushy-emulator`, and update the BMC secrets on the hub |
 | Watch what the hubs do | `journalctl -u sushy-emulator -f \| grep -E '"(POST\|PATCH\|DELETE) '` (power actions and virtual media) |
 | Remove it | `systemctl disable --now sushy-emulator; rm -rf /etc/systemd/system/sushy-emulator.service /etc/sushy; systemctl daemon-reload`, then close the firewall port. Or `ansible-playbook -i inventory/hosts cleanup-sushy-emulator.yaml` |

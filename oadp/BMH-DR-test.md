@@ -49,7 +49,9 @@ ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pas
 ```
 
 This:
-- defines the three VMs **powered off**, with an empty CD-ROM;
+- defines the three VMs **powered off**;
+- makes sure the libvirt storage pool `default` exists (sushy uploads the
+  virtual media ISO into it);
 - runs sushy-emulator (podman, under systemd) on the bare-metal host, exposing
   only those three VMs, at
   `redfish-virtualmedia+http://192.168.122.1:8000/redfish/v1/Systems/<uuid>`;

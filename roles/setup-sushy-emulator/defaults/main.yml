@@ -33,6 +33,12 @@ sushy_emulator_dns: "{{ lab_network_prefix }}.{{ ip_list.helper_server }}"
 sushy_emulator_username: admin
 
 sushy_emulator_config_dir: /etc/sushy
+
+# The libvirt storage pool sushy uploads virtual media ISOs into. sushy looks
+# it up by this name ('default' in sushy-tools); the role creates it as a
+# directory pool on sushy_emulator_storage_pool_dir when it is missing.
+sushy_emulator_storage_pool: default
+sushy_emulator_storage_pool_dir: "{{ download_dir }}"
 sushy_emulator_container_name: sushy-emulator
 
 # The libvirt domains exposed through Redfish, by name. Only these: the

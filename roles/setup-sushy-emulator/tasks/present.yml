@@ -18,6 +18,34 @@
       - httpd-tools
     state: present
 
+# Virtual media lands in a libvirt storage pool: on InsertMedia, sushy
+# downloads the ISO and uploads it as a volume into the pool named
+# sushy_emulator_storage_pool, then attaches that volume to the domain as its
+# CD-ROM. Without the pool every InsertMedia fails with a 500
+# ("Storage pool not found"). An existing pool of that name is used as it is.
+- name: Check for the storage pool virtual media is uploaded into
+  ansible.builtin.command: virsh pool-info {{ sushy_emulator_storage_pool }}
+  register: sushy_pool_info
+  changed_when: false
+  failed_when: false
+
+- name: Create it as a directory pool
+  ansible.builtin.shell: |
+    set -e
+    virsh pool-define-as {{ sushy_emulator_storage_pool }} dir --target {{ sushy_emulator_storage_pool_dir }}
+    virsh pool-build {{ sushy_emulator_storage_pool }}
+  when: sushy_pool_info.rc != 0
+
+- name: Make sure it is active and starts with libvirt
+  ansible.builtin.shell: |
+    set -e
+    changed=0
+    virsh pool-info {{ sushy_emulator_storage_pool }} | grep -Eq '^State:\s+running' || { virsh pool-start {{ sushy_emulator_storage_pool }}; changed=1; }
+    virsh pool-info {{ sushy_emulator_storage_pool }} | grep -Eq '^Autostart:\s+yes' || { virsh pool-autostart {{ sushy_emulator_storage_pool }}; changed=1; }
+    echo "changed=$changed"
+  register: sushy_pool_state
+  changed_when: "'changed=1' in sushy_pool_state.stdout"
+
 # By name in vars.yaml, by UUID in the emulator: a Redfish System id is the
 # domain UUID, and the allow-list takes UUIDs.
 - name: Start from an empty list of exposed systems

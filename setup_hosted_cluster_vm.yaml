@@ -29,7 +29,7 @@
 ## BareMetalHosts instead of plain Agents (the hub's connected workers only):
 ##   ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass \
 ##     -e hosted_cluster_worker_provisioning=bmh
-## defines the same VMs powered off with an empty CD-ROM, gives each a Redfish
+## defines the same VMs powered off, gives each a Redfish
 ## BMC through sushy-emulator on this host (roles/setup-sushy-emulator), and
 ## creates a BareMetalHost and BMC secret per VM in the agent namespace. The
 ## hub then powers them on and boots them from the discovery ISO as virtual
@@ -125,7 +125,7 @@
           - "'bmh-vms' not in ansible_run_tags or (hcp_worker_bmh | bool)"
         fail_msg: >-
           --tags bmh-vms defines the worker VMs for BareMetalHosts (powered
-          off, empty CD-ROM). Add -e hosted_cluster_worker_provisioning=bmh.
+          off). Add -e hosted_cluster_worker_provisioning=bmh.
 
     - name: Fail fast if bmh is asked for workers it does not cover
       tags: [always]
@@ -314,11 +314,11 @@
 
     # ---- bmh mode -----------------------------------------------------------
     # The same VM as above - CPU, memory, disk, MAC, BIOS firmware, hd,cdrom
-    # boot order - with two differences: the CD-ROM is empty, because the hub
-    # inserts the discovery ISO as virtual media, and the VM is defined but not
-    # started, because powering it on is the hub's job (the BareMetalHost is
-    # online: true). --print-xml plus virsh define is what keeps it off. The
-    # empty CD-ROM is attached by the task after, not by virt-install.
+    # boot order - with two differences: no discovery ISO is attached, because
+    # the hub inserts it as virtual media (sushy then adds the CD-ROM holding
+    # it, from its storage pool), and the VM is defined but not started,
+    # because powering it on is the hub's job (the BareMetalHost is
+    # online: true). --print-xml plus virsh define is what keeps it off.
     - name: Check which worker VMs are already defined (bmh)
       tags: [bmh-vms]
       ansible.builtin.command: virsh dominfo {{ item.name }}
@@ -355,42 +355,11 @@
         - hcp_worker_bmh | bool
         - item.rc != 0
 
-    # Virtual media needs a CD-ROM drive to put the ISO in: sushy inserts the
-    # image into the domain's existing cdrom device, and InsertMedia fails
-    # with a 500 when there is none. virt-install drops a --disk device=cdrom
-    # that has no path, so the drive is attached explicitly - and checked on
-    # every run, which also repairs VMs defined before this task existed.
-    # --config: the change goes into the persistent definition, VM on or off.
-    - name: Make sure each worker VM has an empty CD-ROM drive (bmh)
-      tags: [bmh-vms]
-      ansible.builtin.shell: |
-        set -e
-        if virsh domblklist {{ item.name }} --details | awk '$2 == "cdrom"' | grep -q .; then
-          echo present
-        else
-          xml=$(mktemp)
-          printf '%s\n' \
-            "<disk type='file' device='cdrom'>" \
-            "  <driver name='qemu' type='raw'/>" \
-            "  <target dev='sda' bus='sata'/>" \
-            "  <readonly/>" \
-            "</disk>" > "$xml"
-          virsh attach-device {{ item.name }} "$xml" --config
-          rm -f "$xml"
-          echo added
-        fi
-      loop: "{{ hcp_workers }}"
-      loop_control:
-        label: "{{ item.name }}"
-      register: hcp_bmh_cdrom
-      changed_when: "'added' in hcp_bmh_cdrom.stdout"
-      when: hcp_worker_bmh | bool
-
     - name: Report the VMs-only run (--tags bmh-vms)
       tags: [bmh-vms]
       ansible.builtin.debug:
         msg:
-          - "Defined, powered off, empty CD-ROM: {{ hcp_workers | map(attribute='name') | join(', ') }}"
+          - "Defined, powered off: {{ hcp_workers | map(attribute='name') | join(', ') }}"
           - "Next: sushy-emulator-manual.md from step 2, or re-run without --tags for sushy and the BareMetalHosts."
       when: "'bmh-vms' in ansible_run_tags"
 
