@@ -14,9 +14,17 @@
 
    Inspection and cleaning are off: the assisted agent does its own
    inventory, and cleaning would wipe disks for nothing. bootMode legacy
-   matches the VMs, which boot with BIOS firmware, as in agent mode. #}
+   matches the VMs, which boot with BIOS firmware, as in agent mode.
+
+   bmh_render_part picks what to render: 'secrets' (the BMC secrets only),
+   'hosts' (the BareMetalHosts only) or 'all' (both, the default).
+   setup_hosted_cluster_vm.yaml renders the two parts into separate files so
+   the BareMetalHosts can be kept and the password-bearing secrets
+   deleted. #}
+{% set part = bmh_render_part | default('all') %}
 {% for w in hcp_workers %}
 {% set sys = sushy_emulator_systems | selectattr('name', 'equalto', w.name) | first %}
+{% if part in ['all', 'secrets'] %}
 ---
 apiVersion: v1
 kind: Secret
@@ -27,6 +35,8 @@ type: Opaque
 data:
   username: {{ sushy_emulator_username | b64encode }}
   password: {{ sushy_emulator_password | string | b64encode }}
+{% endif %}
+{% if part in ['all', 'hosts'] %}
 ---
 apiVersion: metal3.io/v1alpha1
 kind: BareMetalHost
@@ -47,4 +57,5 @@ spec:
     address: {{ sys.address }}
     credentialsName: {{ w.ip_key }}-bmc
     disableCertificateVerification: true
+{% endif %}
 {% endfor %}

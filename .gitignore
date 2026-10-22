@@ -11,4 +11,4 @@ snapshots/
 udn-bgp/
 build-logs/
 # holds the BMC password if setup_hosted_cluster_vm.yaml stops before removing it
-roles/setup-bminfra/templates/.rendered-05-baremetalhosts.yaml
+roles/setup-bminfra/templates/.rendered-05-bmc-secrets.yaml

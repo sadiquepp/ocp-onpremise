@@ -375,25 +375,38 @@
         sushy_emulator_domains: "{{ hcp_workers | map(attribute='name') | list }}"
       when: hcp_worker_bmh | bool
 
-    - name: Render the BMC secrets and BareMetalHosts (bmh)
+    # Two files from one template: the BMC secrets carry the password and are
+    # deleted once applied; the BareMetalHosts carry none and are kept, like
+    # the other .rendered-* bminfra files, as the record of what was applied.
+    - name: Render the BMC secrets and the BareMetalHosts (bmh)
       ansible.builtin.template:
         src: "{{ playbook_dir }}/roles/setup-bminfra/templates/05-baremetalhosts.yaml.j2"
-        dest: "{{ playbook_dir }}/roles/setup-bminfra/templates/.rendered-05-baremetalhosts.yaml"
-        mode: '0600'
+        dest: "{{ playbook_dir }}/roles/setup-bminfra/templates/{{ item.file }}"
+        mode: "{{ item.mode }}"
+      vars:
+        bmh_render_part: "{{ item.part }}"
+      loop:
+        - {part: secrets, file: .rendered-05-bmc-secrets.yaml, mode: '0600'}
+        - {part: hosts, file: .rendered-05-baremetalhosts.yaml, mode: '0644'}
+      loop_control:
+        label: "{{ item.file }}"
       when: hcp_worker_bmh | bool
 
-    - name: Apply the BMC secrets and BareMetalHosts (bmh)
+    # Secrets first: a BareMetalHost whose credentialsName does not exist yet
+    # sits in an error state until the next reconcile.
+    - name: Apply the BMC secrets, then the BareMetalHosts (bmh)
       ansible.builtin.command: >-
-        oc apply -f {{ playbook_dir }}/roles/setup-bminfra/templates/.rendered-05-baremetalhosts.yaml
+        oc apply -f {{ playbook_dir }}/roles/setup-bminfra/templates/{{ item }}
+      loop:
+        - .rendered-05-bmc-secrets.yaml
+        - .rendered-05-baremetalhosts.yaml
       register: hcp_bmh_apply
       changed_when: "'created' in hcp_bmh_apply.stdout or 'configured' in hcp_bmh_apply.stdout"
       when: hcp_worker_bmh | bool
 
-    # Unlike the other rendered bminfra files, this one holds the BMC
-    # password - do not leave it lying around.
-    - name: Remove the rendered BareMetalHosts file (bmh)
+    - name: Remove the rendered BMC secrets, which hold the password (bmh)
       ansible.builtin.file:
-        path: "{{ playbook_dir }}/roles/setup-bminfra/templates/.rendered-05-baremetalhosts.yaml"
+        path: "{{ playbook_dir }}/roles/setup-bminfra/templates/.rendered-05-bmc-secrets.yaml"
         state: absent
       when: hcp_worker_bmh | bool
 
@@ -401,6 +414,7 @@
       ansible.builtin.debug:
         msg:
           - "BareMetalHosts created in {{ oadp_bminfra_namespace }}: {{ hcp_workers | map(attribute='ip_key') | join(', ') }}"
+          - "Manifest kept at roles/setup-bminfra/templates/.rendered-05-baremetalhosts.yaml (BMC secrets not kept: they hold the password)"
           - "The hub now powers each VM on and boots it from the discovery ISO as virtual media."
           - "Watch: oc get bmh,agents -n {{ oadp_bminfra_namespace }}"
           - "The Agents are approved automatically - no approval in the UI."
