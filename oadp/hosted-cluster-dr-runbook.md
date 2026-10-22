@@ -939,7 +939,7 @@ end with:
 | OpenShift (both hubs) | 4.22.10 |
 | ACM / MCE | 2.17.3 / 2.17.3 |
 | OADP | 1.6.1 |
-| HyperShift OADP plugin | upstream `main` build including the OCPBUGS-121709 fix |
+| HyperShift OADP plugin | Builds including the OCPBUGS-121709 fix: upstream `main`, and the `oadp-1.6` branch with the backport ([openshift/hypershift-oadp-plugin#320](https://github.com/openshift/hypershift-oadp-plugin/pull/320)) |
 
 Two things were **not** part of that run: BareMetalHost objects (the
 workers booted from the discovery ISO) and object lock on the bucket.

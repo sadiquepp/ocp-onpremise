@@ -649,12 +649,12 @@ so it can't be reused.
 | Velero log shows skip | PASS: `01:36:32Z ... "Skipping restore of ACM/MCE import secret hcp-cluster1/hcp-cluster1-import (contains stale bootstrap token)" ... logSource=".../pkg/core/restore.go:226" restore=openshift-adp/hcp-cluster1-restore-csi` |
 | Import secret regenerated on hub2 | PASS: restore started `2026-10-22T01:36:22Z`; `hcp-cluster1-import` created `2026-10-22T01:51:02Z`; only label `managedcluster-import-controller.open-cluster-management.io/import-secret`, no `velero.io/*` labels |
 | HostedCluster recovery | PASS: `HostedClusterRestoredFromBackup=True`, `RecoveryFinished`, at `2026-10-22T01:44:34Z`; `restored-from-backup` annotation removed by HyperShift; all other conditions healthy (`Available=True`, `Degraded=False`, `Progressing=False`) |
-| ManagedCluster state | (pending: `oc get managedcluster hcp-cluster1`) |
+| ManagedCluster state | PASS: `hcp-cluster1` `HUB ACCEPTED=true`, `JOINED=True`, `AVAILABLE=True` |
 | NodePool / nodes / workload | Nodes `c1worker1`, `c1worker2` `Ready` (v1.35.6, age 34h: not reprovisioned); `online-boutique` 11/11 pods `Running`. NodePool: (pending) |
 | Restore outcome and warnings | (pending) |
 | Versions (hub2) | OCP 4.22.10; ACM 2.17.3 / MCE 2.17.3; `oadp-operator.v1.6.1` |
 | Timeline (UTC) | 01:36:22 restore started; 01:36:32 plugin skipped the import secret; 01:44:34 HostedCluster recovery finished; 01:51:02 MCE created the new import secret |
-| **Outcome** | PASS so far, pending the ManagedCluster state. Same result as Run 1 with the `oadp-1.6` build |
+| **Outcome** | **PASS.** Same result as Run 1 with the `oadp-1.6` build: the plugin skipped the stale import secret, MCE generated a new one, and the cluster imported without the step 12 workaround |
 
 ### 6.1 Evidence
 
@@ -798,6 +798,14 @@ productcatalogservice-859bfdcc-6567f     1/1     Running   0             24h
 recommendationservice-86ddcd7749-j7mp4   1/1     Running   2 (24h ago)   24h
 redis-cart-79d76df4b-phz9x               1/1     Running   0             24h
 shippingservice-88557f497-778tq          1/1     Running   0             24h
+```
+
+**The cluster imported** (hub2)
+
+```console
+$ oc get managedcluster hcp-cluster1
+NAME           HUB ACCEPTED   MANAGED CLUSTER URLS                      JOINED   AVAILABLE   AGE
+hcp-cluster1   true           https://api.hcp-cluster1.mylab.com:6443   True     True        8m4s
 ```
 
 **Versions** (hub2)
