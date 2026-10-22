@@ -401,7 +401,7 @@ failed restores come from something on this list.
 | 8 | The release image and its payload are pullable from the DR hub, from the registry or the mirror the primary uses | `oc adm release info <release-image>` from the DR hub |
 | 9 | Network: the workers can reach the DR API VIP on TCP 6443 and the DR hub's ingress VIP on TCP 443 | test from a worker, or from a host in the worker segment |
 | 10 | DNS: you can repoint the hosted cluster's API name, and, if the DR hub keeps the primary's apps domain, the hub's `*.apps` name | your DNS change procedure |
-| 11 | If you use BareMetalHosts: the DR hub reaches the workers' BMC addresses | test from the DR hub |
+| 11 | If you use BareMetalHosts: the DR hub reaches the workers' BMCs (Redfish, TCP 443), **and the BMCs reach the DR hub's control-plane nodes on TCP 6183** for virtual media (see below) | test both directions |
 
 ### API address in the DR segment
 
@@ -438,6 +438,46 @@ spec:
 
 Use the **same pool name on both hubs**, each holding that hub's own
 address. Any reference to the pool then stays valid after the restore.
+
+### BareMetalHosts: virtual media traffic
+
+If the workers are BareMetalHosts, the hub's Ironic does **not** send the
+ISO to the BMC. It re-hosts the discovery ISO as a per-host boot ISO on its
+own image server, and passes the BMC a URL in the Redfish `InsertMedia`
+call. The BMC then fetches the ISO from that URL. So traffic flows both ways:
+
+| From | To | Port | For |
+|---|---|---|---|
+| Hub (Ironic, in the metal3 pod) | BMC | 443 | Redfish: power, boot device, virtual media |
+| **BMC** | **Hub control-plane node running metal3** | **6183** (6180 with `disableVirtualMediaTLS`) | Fetching the boot ISO |
+| Booted host | Hub ingress (`*.apps`) | 443 | assisted-service, as for any Agent |
+
+Where that URL points depends on the hub's `Provisioning` CR
+(`oc get provisioning provisioning-configuration -o yaml`):
+
+- **`provisioningNetwork: Disabled`** (typical with virtual media): the
+  address of the control-plane node the metal3 pod runs on, for example
+  `https://<node-ip>:6183/redfish/boot-<node-uuid>.iso`. The pod can be
+  rescheduled, so allow the BMC network to reach **every** control-plane
+  node.
+- **`provisioningNetwork: Managed`:** the `provisioningIP` on the dedicated
+  provisioning network. That's one stable address, but the BMCs must reach
+  that network. `virtualMediaViaExternalNetwork: true` moves virtual media
+  back to the machine network.
+- **`disableVirtualMediaTLS: true`:** plain HTTP on 6180, for BMCs that
+  can't accept the self-signed HTTPS URL.
+
+After a restore, the URL points at the **DR hub's** control-plane nodes, so
+the BMC network has to reach the DR segment on that port. A provisioning
+network is local to one site and won't reach BMCs at the other, so for
+cross-site DR use `Disabled`, or `virtualMediaViaExternalNetwork: true`.
+
+To see the URL a hub hands out:
+
+```bash
+oc logs -n openshift-machine-api deploy/metal3 -c metal3-ironic --since=2h \
+  | grep -iE 'virtual ?media|insert' | grep -oE 'https?://[^ "]+\.iso' | sort -u
+```
 
 ### Hub ingress in the DR segment
 
@@ -927,6 +967,8 @@ found in a real run.
 | Workers `NotReady` after the restore | DNS still points at the old API VIP, or the DR VIP isn't reachable from the worker segment | [5.5](#55-dns-cutover); test TCP 6443 from a worker |
 | `oc logs` / `oc exec` into hosted-cluster pods fail, metrics unavailable | Konnectivity can't reach the DR hub's ingress | Workers need TCP 443 to the DR ingress VIP, and the DR apps domain must resolve from the worker segment |
 | ManagedCluster stuck in `Importing`, `Unauthorized` in the klusterlet logs | The primary's import secret was restored | [5.6](#56-import-secret) |
+| BareMetalHost stuck in `provisioning` with `InsertMedia` failing, or the host never boots the ISO | The BMC can't fetch the boot ISO from the hub's control-plane node on 6183, or rejects its self-signed certificate | Open BMC → control-plane nodes on 6183, or set `disableVirtualMediaTLS: true` ([BareMetalHosts: virtual media traffic](#baremetalhosts-virtual-media-traffic)) |
+| BareMetalHost in `provisioning` while its Agent is approved and available | Expected: Ironic's deploy step `start_assisted_install` runs until the host is installed into a cluster | None. It moves to `provisioned` when installed |
 | `oc get backup` shows nothing | The short name resolved to another operator's `Backup` kind | Use `backup.velero.io` |
 
 ## Appendix B: validated versions
