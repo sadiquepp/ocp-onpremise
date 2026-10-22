@@ -759,10 +759,12 @@ The restore is good when:
 - **`phase` is `Completed`** and
   `restoreItemOperationsCompleted == restoreItemOperationsAttempted`.
 - **Warnings are explained.** Read them with
-  `velero restore describe <name>`. One warning is common and harmless:
-  `secrets "token-<nodepool>-<hash>" not found` in `$HCP_NS`. HyperShift's
-  NodePool controller rotates those token secrets on its own and had
-  already replaced it.
+  `velero restore describe <name>`. Two warnings are common and harmless:
+  `secrets "token-<nodepool>-<hash>" not found` and
+  `secrets "user-data-<nodepool>-<hash>" not found` in `$HCP_NS`.
+  HyperShift's NodePool controller generates and replaces those secrets
+  itself, and had already done so. The NodePool reaching its desired node
+  count confirms it.
 
 Then confirm the control plane came up and took a DR-segment address:
 

@@ -650,8 +650,8 @@ so it can't be reused.
 | Import secret regenerated on hub2 | PASS: restore started `2026-10-22T01:36:22Z`; `hcp-cluster1-import` created `2026-10-22T01:51:02Z`; only label `managedcluster-import-controller.open-cluster-management.io/import-secret`, no `velero.io/*` labels |
 | HostedCluster recovery | PASS: `HostedClusterRestoredFromBackup=True`, `RecoveryFinished`, at `2026-10-22T01:44:34Z`; `restored-from-backup` annotation removed by HyperShift; all other conditions healthy (`Available=True`, `Degraded=False`, `Progressing=False`) |
 | ManagedCluster state | PASS: `hcp-cluster1` `HUB ACCEPTED=true`, `JOINED=True`, `AVAILABLE=True` |
-| NodePool / nodes / workload | Nodes `c1worker1`, `c1worker2` `Ready` (v1.35.6, age 34h: not reprovisioned); `online-boutique` 11/11 pods `Running`. NodePool: (pending) |
-| Restore outcome and warnings | (pending) |
+| NodePool / nodes / workload | Nodes `c1worker1`, `c1worker2` `Ready` (v1.35.6, age 34h: not reprovisioned); `online-boutique` 11/11 pods `Running`. NodePool `nodepool-hcp-cluster1-1`: desired 2, current 2, 4.22.10, not updating, no message |
+| Restore outcome and warnings | `Completed`, 0 errors, 2 warnings; CSI data movement for `data-etcd-0/1/2`: 3 of 3 completed. Warnings: `secrets "token-nodepool-hcp-cluster1-1-6e74db43" not found` and `secrets "user-data-nodepool-hcp-cluster1-1-6e74db43" not found` in `hcp-cluster1-hcp-cluster1`. Both are NodePool secrets (token and ignition user-data, same hash suffix) that HyperShift's NodePool controller generates and replaces itself; Run 1 had the first of the two. The NodePool reconciled to 2/2, so neither is a problem |
 | Versions (hub2) | OCP 4.22.10; ACM 2.17.3 / MCE 2.17.3; `oadp-operator.v1.6.1` |
 | Timeline (UTC) | 01:36:22 restore started; 01:36:32 plugin skipped the import secret; 01:44:34 HostedCluster recovery finished; 01:51:02 MCE created the new import secret |
 | **Outcome** | **PASS.** Same result as Run 1 with the `oadp-1.6` build: the plugin skipped the stale import secret, MCE generated a new one, and the cluster imported without the step 12 workaround |
@@ -806,6 +806,39 @@ shippingservice-88557f497-778tq          1/1     Running   0             24h
 $ oc get managedcluster hcp-cluster1
 NAME           HUB ACCEPTED   MANAGED CLUSTER URLS                      JOINED   AVAILABLE   AGE
 hcp-cluster1   true           https://api.hcp-cluster1.mylab.com:6443   True     True        8m4s
+```
+
+**NodePool and restore outcome** (hub2)
+
+```console
+$ oc get nodepool -n hcp-cluster1
+NAME                      CLUSTER        DESIRED NODES   CURRENT NODES   AUTOSCALING   AUTOREPAIR   VERSION   UPDATINGVERSION   UPDATINGCONFIG   MESSAGE
+nodepool-hcp-cluster1-1   hcp-cluster1   2               2               False         False        4.22.10   False             False
+
+$ oc get restore.velero.io hcp-cluster1-restore-csi -n openshift-adp \
+    -o jsonpath='{.status.phase}  warnings={.status.warnings}  errors={.status.errors}{"\n"}'
+Completed  warnings=2  errors=
+
+$ oc exec deploy/velero -c velero -n openshift-adp -- \
+    ./velero restore describe hcp-cluster1-restore-csi | sed -n '/Warnings:/,/Errors:/p'
+Warnings:
+  Velero:     <none>
+  Cluster:    <none>
+  Namespaces:
+    hcp-cluster1-hcp-cluster1:  secrets "token-nodepool-hcp-cluster1-1-6e74db43" not found
+                                secrets "user-data-nodepool-hcp-cluster1-1-6e74db43" not found
+...
+CSI Snapshot Restores:
+  hcp-cluster1-hcp-cluster1/data-etcd-2:
+    Data Movement: specify --details for more information
+  hcp-cluster1-hcp-cluster1/data-etcd-1:
+    Data Movement: specify --details for more information
+  hcp-cluster1-hcp-cluster1/data-etcd-0:
+    Data Movement: specify --details for more information
+
+Existing Resource Policy:   update
+...
+Restore Item Operations:  3 of 3 completed successfully, 0 failed (specify --details for more information)
 ```
 
 **Versions** (hub2)
