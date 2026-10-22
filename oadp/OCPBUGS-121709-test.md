@@ -640,20 +640,181 @@ so it can't be reused.
 
 | Item | Value |
 |---|---|
-| Date | |
-| Plugin image (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.6-check-skip-import` |
+| Date | 2026-10-22 |
+| Plugin image (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.6-check-skip-import`, pinned as `@sha256:f32db28e12563586894fc0e3a744212666904c4291506ccda405947a4deb42de`, created 2026-10-21 12:41 +02:00 (after the backport merged) |
 | Image source commit | (expected `f573a597` or later on `oadp-1.6`) |
-| Image checks (1.4) | |
-| Plugin image on hub2 (3.1) | |
-| Backup restored | `hcp-cluster1-backup-csi` (same as Run 1) |
-| Velero log shows skip | |
-| Import secret regenerated on hub2 | |
-| HostedCluster recovery | |
-| ManagedCluster state | |
-| NodePool / nodes / workload | |
-| Restore outcome and warnings | |
-| Versions (hub2) | |
-| **Outcome** | |
+| Image checks (1.4) | `amd64`; entrypoint `cp /plugins/* /target/.`; binary contains "Skipping restore of ACM/MCE import secret" (1 match) |
+| Plugin image on hub2 (3.1) | DPA `unsupportedOverrides.hypershiftPluginImageFqin` set to the digest; `deploy/velero` rolled out; init container image and pod `velero-c4f4f67c4-nxxjg` pulled `imageID` both equal the digest |
+| Backup restored | `hcp-cluster1-backup-csi` (same as Run 1), synced from S3 onto the rebuilt hub2 |
+| Velero log shows skip | PASS: `01:36:32Z ... "Skipping restore of ACM/MCE import secret hcp-cluster1/hcp-cluster1-import (contains stale bootstrap token)" ... logSource=".../pkg/core/restore.go:226" restore=openshift-adp/hcp-cluster1-restore-csi` |
+| Import secret regenerated on hub2 | PASS: restore started `2026-10-22T01:36:22Z`; `hcp-cluster1-import` created `2026-10-22T01:51:02Z`; only label `managedcluster-import-controller.open-cluster-management.io/import-secret`, no `velero.io/*` labels |
+| HostedCluster recovery | PASS: `HostedClusterRestoredFromBackup=True`, `RecoveryFinished`, at `2026-10-22T01:44:34Z`; `restored-from-backup` annotation removed by HyperShift; all other conditions healthy (`Available=True`, `Degraded=False`, `Progressing=False`) |
+| ManagedCluster state | (pending: `oc get managedcluster hcp-cluster1`) |
+| NodePool / nodes / workload | Nodes `c1worker1`, `c1worker2` `Ready` (v1.35.6, age 34h: not reprovisioned); `online-boutique` 11/11 pods `Running`. NodePool: (pending) |
+| Restore outcome and warnings | (pending) |
+| Versions (hub2) | OCP 4.22.10; ACM 2.17.3 / MCE 2.17.3; `oadp-operator.v1.6.1` |
+| Timeline (UTC) | 01:36:22 restore started; 01:36:32 plugin skipped the import secret; 01:44:34 HostedCluster recovery finished; 01:51:02 MCE created the new import secret |
+| **Outcome** | PASS so far, pending the ManagedCluster state. Same result as Run 1 with the `oadp-1.6` build |
 
 ### 6.1 Evidence
 
+**Plugin image checks** (workstation)
+
+```console
+$ IMG=quay.io/jparrill/hypershift-oadp-plugin:oadp-1.6-check-skip-import
+$ skopeo inspect --override-arch amd64 docker://$IMG | jq '{Digest, Architecture, Created}'
+{
+  "Digest": "sha256:f32db28e12563586894fc0e3a744212666904c4291506ccda405947a4deb42de",
+  "Architecture": "amd64",
+  "Created": "2026-10-21T12:41:42.187813252+02:00"
+}
+$ skopeo inspect --override-arch amd64 --config docker://$IMG | jq '.config.Entrypoint'
+[
+  "/bin/bash",
+  "-c",
+  "cp /plugins/* /target/."
+]
+$ podman pull --platform linux/amd64 $IMG
+$ cid=$(podman create $IMG); podman cp $cid:/plugins/hypershift-oadp-plugin /tmp/plugin; podman rm $cid
+$ grep -ac "Skipping restore of ACM/MCE import secret" /tmp/plugin
+1
+```
+
+**Hub2 runs the `oadp-1.6` plugin** (hub2, after step 20)
+
+```console
+$ oc get dpa dpa-instance -n openshift-adp -o jsonpath='{.spec.unsupportedOverrides}{"\n"}'
+{"hypershiftPluginImageFqin":"quay.io/jparrill/hypershift-oadp-plugin@sha256:f32db28e12563586894fc0e3a744212666904c4291506ccda405947a4deb42de"}
+
+$ oc rollout status deploy/velero -n openshift-adp
+deployment "velero" successfully rolled out
+
+$ oc get deploy velero -n openshift-adp \
+    -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="hypershift-oadp-plugin")].image}{"\n"}'
+quay.io/jparrill/hypershift-oadp-plugin@sha256:f32db28e12563586894fc0e3a744212666904c4291506ccda405947a4deb42de
+
+$ oc get pod -n openshift-adp -l deploy=velero \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"  "}{.status.initContainerStatuses[?(@.name=="hypershift-oadp-plugin")].imageID}{"\n"}{end}'
+velero-c4f4f67c4-nxxjg  quay.io/jparrill/hypershift-oadp-plugin@sha256:f32db28e12563586894fc0e3a744212666904c4291506ccda405947a4deb42de
+
+$ oc get backup.velero.io hcp-cluster1-backup-csi -n openshift-adp
+NAME                      AGE
+hcp-cluster1-backup-csi   4s
+```
+
+**The plugin skipped the secret** (hub2, after step 21)
+
+```console
+$ oc logs deploy/velero -n openshift-adp | grep "Skipping restore of ACM/MCE import secret"
+Defaulted container "velero" out of: velero, openshift-velero-plugin (init), velero-plugin-for-aws (init), hypershift-oadp-plugin (init)
+time="2026-10-22T01:36:32Z" level=info msg="Skipping restore of ACM/MCE import secret hcp-cluster1/hcp-cluster1-import (contains stale bootstrap token)" cmd=/plugins/hypershift-oadp-plugin logSource="/go/src/github.com/openshift/hypershift-oadp-plugin/pkg/core/restore.go:226" pluginName=hypershift-oadp-plugin process=restore restore=openshift-adp/hcp-cluster1-restore-csi type=hcp-restore
+```
+
+**MCE generated a new import secret** (hub2)
+
+```console
+$ oc get restore.velero.io hcp-cluster1-restore-csi -n openshift-adp -o jsonpath='{.status.startTimestamp}{"\n"}'
+2026-10-22T01:36:22Z
+
+$ oc get secret hcp-cluster1-import -n hcp-cluster1 \
+    -o jsonpath='{.metadata.creationTimestamp}{"\n"}{.metadata.labels}{"\n"}'
+2026-10-22T01:51:02Z
+{"managedcluster-import-controller.open-cluster-management.io/import-secret":""}
+```
+
+**HostedCluster recovery finished** (hub2)
+
+```console
+$ oc get hostedcluster hcp-cluster1 -n hcp-cluster1 \
+    -o jsonpath='{.status.conditions[?(@.type=="HostedClusterRestoredFromBackup")]}{"\n"}' | jq
+{
+  "lastTransitionTime": "2026-10-22T01:44:34Z",
+  "message": "Hosted cluster recovery finished",
+  "observedGeneration": 1,
+  "reason": "RecoveryFinished",
+  "status": "True",
+  "type": "HostedClusterRestoredFromBackup"
+}
+
+$ oc get hostedcluster hcp-cluster1 -n hcp-cluster1 -o json | jq '.metadata.annotations | keys'
+[
+  "create-external-hub-kubeconfig",
+  "hypershift.openshift.io/HasBeenAvailable",
+  "kubectl.kubernetes.io/last-applied-configuration",
+  "metallb.io/address-pool"
+]
+
+$ oc get hostedcluster hcp-cluster1 -n hcp-cluster1 \
+    -o jsonpath='{range .status.conditions[*]}{.type}{"="}{.status}{"\n"}{end}'
+ClusterVersionSucceeding=True
+ClusterVersionProgressing=False
+ClusterVersionReleaseAccepted=True
+ClusterVersionUpgradeable=True
+ClusterVersionAvailable=True
+Degraded=False
+EtcdAvailable=True
+KubeAPIServerAvailable=True
+InfrastructureReady=True
+ExternalDNSReachable=True
+ValidHostedControlPlaneConfiguration=True
+ValidReleaseInfo=True
+ValidIDPConfiguration=True
+HostedClusterRestoredFromBackup=True
+DataPlaneConnectionAvailable=True
+ControlPlaneConnectionAvailable=True
+EtcdBackupSucceeded=Unknown
+AutoNodeEnabled=False
+Available=True
+ValidConfiguration=True
+SupportedHostedCluster=True
+ValidProxyConfiguration=True
+IgnitionEndpointAvailable=True
+ReconciliationActive=True
+ValidReleaseImage=True
+Progressing=False
+PlatformCredentialsFound=True
+ReconciliationSucceeded=True
+ClusterVersionRetrievedUpdates=True
+```
+
+**The hosted cluster after the restore** (hosted cluster kubeconfig)
+
+```console
+$ oc get nodes
+NAME        STATUS   ROLES    AGE   VERSION
+c1worker1   Ready    worker   34h   v1.35.6
+c1worker2   Ready    worker   34h   v1.35.6
+
+$ oc get po -n online-boutique
+NAME                                     READY   STATUS    RESTARTS      AGE
+adservice-6d857b79-j86b2                 1/1     Running   0             24h
+cartservice-59c9b67cfb-dn7rn             1/1     Running   0             24h
+checkoutservice-cb96487df-qw5rx          1/1     Running   0             24h
+currencyservice-686d78b4bc-n2klz         1/1     Running   0             24h
+emailservice-688545b8df-nm6sn            1/1     Running   2 (24h ago)   24h
+frontend-b7c754496-82zzx                 1/1     Running   0             24h
+paymentservice-869d5b5cb9-thjfm          1/1     Running   0             24h
+productcatalogservice-859bfdcc-6567f     1/1     Running   0             24h
+recommendationservice-86ddcd7749-j7mp4   1/1     Running   2 (24h ago)   24h
+redis-cart-79d76df4b-phz9x               1/1     Running   0             24h
+shippingservice-88557f497-778tq          1/1     Running   0             24h
+```
+
+**Versions** (hub2)
+
+```console
+$ oc get clusterversion -o jsonpath='{.items[0].status.desired.version}{"\n"}'
+4.22.10
+$ oc get csv -n openshift-adp -o custom-columns=NAME:.metadata.name,VERSION:.spec.version
+NAME                                    VERSION
+metallb-operator.v4.22.0-202610140833   4.22.0-202610140833
+oadp-operator.v1.6.1                    1.6.1
+$ oc get csv -n open-cluster-management -o custom-columns=NAME:.metadata.name,VERSION:.spec.version
+NAME                                    VERSION
+advanced-cluster-management.v2.17.3     2.17.3
+metallb-operator.v4.22.0-202610140833   4.22.0-202610140833
+$ oc get csv -n multicluster-engine -o custom-columns=NAME:.metadata.name,VERSION:.spec.version
+NAME                                    VERSION
+metallb-operator.v4.22.0-202610140833   4.22.0-202610140833
+multicluster-engine.v2.17.3             2.17.3
+```
