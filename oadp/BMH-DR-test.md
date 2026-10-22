@@ -66,15 +66,34 @@ controller approves them.
 
 ```bash
 export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
-oc get bmh -n bminfra -w          # registering -> provisioning -> provisioned
-oc get agents -n bminfra          # three, APPROVED true
+oc get bmh -n bminfra -w          # registering -> provisioning, and they stay there (below)
+oc get agents -n bminfra          # three, APPROVED true, named after the VMs' UUIDs
 systemctl status sushy-emulator   # on the bare-metal host
 ```
 
+**`provisioning` is the expected state at this point.** The discovery ISO
+also runs Ironic's agent (Ironic's converged flow with assisted-service), and
+each host's Ironic deploy is a single step, `start_assisted_install`, which
+keeps running until assisted-service installs the host. A BareMetalHost
+therefore stays in `provisioning` while its Agent waits in discovery. It moves
+to `provisioned` only when the Agent is installed into a cluster. The console
+shows the Agent as "Available" meanwhile. The Ironic log confirms it:
+
+```bash
+oc logs -n openshift-machine-api deploy/metal3 -c metal3-ironic --since=10m | grep start_assisted_install | tail -2
+#   ... on step {... 'step': 'start_assisted_install'}: None
+```
+
+In the sushy log, each host should show `InsertMedia` 204, a `PATCH` of the
+System (boot settings) 204, and `ComputerSystem.Reset` 204. A few `PATCH` 500s
+that are then retried successfully do no harm.
+
 Then create the hosted cluster as in step 9 (`create_hosted_cluster.yaml`,
 `oc apply` the rendered file). The NodePool takes two of the three Agents.
-The third host (normally `c1worker3`) stays as a **spare**, booted into
-discovery. Case 2 uses it.
+Their BareMetalHosts move to `provisioned` as they install. The third host
+(normally `c1worker3`) stays as a **spare**, booted into discovery and still
+`provisioning`, with Ironic's `start_assisted_install` step running. Case 2
+uses it. Note that this is the state the backup captures it in.
 
 Continue with steps 10-11 (workload, OADP on hub1).
 
