@@ -898,7 +898,7 @@ this run rebuilds the whole lab on **4.21**:
 | Plugin image on hub1 (backup) | stock OADP 1.5 |
 | Plugin image on hub2 (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.5-check-skip-import` |
 | Image checks (1.4) | |
-| Backup with OADP 1.5 (hub1, stock plugin) | `hcp-cluster1-backup-csi`: 3 `DataUpload`s `Completed` (242,427,252 / 242,450,804 / 242,486,460 bytes, BYTES DONE = TOTAL); backup phase: (pending) |
+| Backup with OADP 1.5 (hub1, stock plugin) | `hcp-cluster1-backup-csi`: 3 `DataUpload`s `Completed` (242,427,252 / 242,450,804 / 242,486,460 bytes, BYTES DONE = TOTAL); `phase: Completed`, operations 3/3, items 369/369, 08:48:29Z-08:50:31Z (2 min) |
 | Import secret in the backup | Yes: `velero backup describe --details` lists `hcp-cluster1/hcp-cluster1-import`; the secret carried only `managedcluster-import-controller.open-cluster-management.io/import-secret` (no exclude label) |
 | Velero log shows skip | |
 | Import secret regenerated on hub2 | |
@@ -965,4 +965,21 @@ hcp-cluster1-backup-csi-phs62   Completed   2m53s     242427252    242427252    
 $ oc exec deploy/velero -c velero -n openshift-adp -- \
     ./velero backup describe hcp-cluster1-backup-csi --details | grep hcp-cluster1-import
     - hcp-cluster1/hcp-cluster1-import
+```
+
+```console
+$ oc get backup.velero.io hcp-cluster1-backup-csi -n openshift-adp -o yaml
+status:
+  backupItemOperationsAttempted: 3
+  backupItemOperationsCompleted: 3
+  completionTimestamp: "2026-10-23T08:50:31Z"
+  expiration: "2026-12-03T23:48:29Z"
+  formatVersion: 1.1.0
+  hookStatus: {}
+  phase: Completed
+  progress:
+    itemsBackedUp: 369
+    totalItems: 369
+  startTimestamp: "2026-10-23T08:48:29Z"
+  version: 1
 ```
