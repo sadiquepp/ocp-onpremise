@@ -969,6 +969,8 @@ found in a real run.
 | ManagedCluster stuck in `Importing`, `Unauthorized` in the klusterlet logs | The primary's import secret was restored | [5.6](#56-import-secret) |
 | BareMetalHost stuck in `provisioning` with `InsertMedia` failing, or the host never boots the ISO | The BMC can't fetch the boot ISO from the hub's control-plane node on 6183, or rejects its self-signed certificate | Open BMC → control-plane nodes on 6183, or set `disableVirtualMediaTLS: true` ([BareMetalHosts: virtual media traffic](#baremetalhosts-virtual-media-traffic)) |
 | BareMetalHost in `provisioning` while its Agent is approved and available | Expected: Ironic's deploy step `start_assisted_install` runs until the host is installed into a cluster | None. It moves to `provisioned` when installed |
+| Hosted cluster's `insights` operator `Degraded` after the restore with `TLS handshake timeout` to `172.31.0.1:443`, while every other operator is healthy | Its pod keeps failing on its own connection to the API from before the restore | `oc delete pod -n openshift-insights -l app=insights-operator` on the hosted cluster; it reports `Available` within seconds, and the HostedCluster's `ClusterVersionSucceeding` turns `True` with it |
+| HostedCluster `ControlPlaneConnectionAvailable=Unknown`, "Condition not found in the HCP" | The hosted cluster's release doesn't report this condition (seen on 4.21; 4.22 reports it) | None |
 | `oc get backup` shows nothing | The short name resolved to another operator's `Backup` kind | Use `backup.velero.io` |
 
 ## Appendix B: validated versions

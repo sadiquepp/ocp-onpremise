@@ -301,6 +301,9 @@ oc get restore.velero.io hcp-cluster1-restore-csi -n openshift-adp \
 
 # 3. The cluster imported
 oc get managedcluster hcp-cluster1
+
+# 4. The hosted cluster is healthy (its kubeconfig, from step 10)
+oc --kubeconfig ~/hcp-cluster1.kubeconfig get co | grep -v 'True.*False.*False'
 ```
 
 | Check | Pass when |
@@ -308,7 +311,7 @@ oc get managedcluster hcp-cluster1
 | Velero log | Contains `Skipping restore of ACM/MCE import secret hcp-cluster1/hcp-cluster1-import` |
 | Import secret | `creationTimestamp` is after the restore started, and there are no `velero.io/restore-name` / `velero.io/backup-name` labels |
 | ManagedCluster | `JOINED=True`, `AVAILABLE=True`, not stuck in `Importing` |
-| Hosted cluster | Step 23 checks pass |
+| Hosted cluster | Step 23 checks pass, including no cluster operator unavailable or degraded. If only `insights` is degraded with a TLS handshake timeout to `172.31.0.1`, delete its pod (`oc delete pod -n openshift-insights -l app=insights-operator`); see Run 3 |
 
 ### Negative control (optional)
 
@@ -904,9 +907,9 @@ without the step 12 workaround.
 | Import secret in the backup | Yes: `velero backup describe --details` lists `hcp-cluster1/hcp-cluster1-import`; the secret carried only `managedcluster-import-controller.open-cluster-management.io/import-secret` (no exclude label) |
 | Velero log shows skip | PASS: `14:55:55Z level=info msg="Skipping restore of ACM/MCE import secret hcp-cluster1/hcp-cluster1-import (contains stale bootstrap token)" ... logSource=".../pkg/core/restore.go:177" pluginName=hypershift-oadp-plugin restore=openshift-adp/hcp-cluster1-restore-csi`. The line number differs from Runs 1 and 2 (226) because the `oadp-1.5` branch's `restore.go` is laid out differently; the message is the same |
 | Import secret regenerated on hub2 | PASS: restore started `2026-10-23T14:55:46Z`; `hcp-cluster1-import` created `2026-10-23T15:12:26Z`; only label `managedcluster-import-controller.open-cluster-management.io/import-secret`, no `velero.io/*` labels |
-| HostedCluster recovery | PASS: `HostedClusterRestoredFromBackup=True`, `RecoveryFinished`, "Hosted cluster recovery finished", at `2026-10-23T15:02:31Z`; the `restored-from-backup` annotation removed by HyperShift; `Available=True`, `Degraded=False`, `Progressing=False`. Two conditions differ from Runs 1 and 2: `ClusterVersionSucceeding=False` and `ControlPlaneConnectionAvailable=Unknown` (both `True` there); being checked (see the evidence) |
+| HostedCluster recovery | PASS: `HostedClusterRestoredFromBackup=True`, `RecoveryFinished`, "Hosted cluster recovery finished", at `2026-10-23T15:02:31Z`; the `restored-from-backup` annotation removed by HyperShift; `Available=True`, `Degraded=False`, `Progressing=False`. Two conditions differ from Runs 1 and 2, where both were `True`. `ClusterVersionSucceeding=False` (`ClusterOperatorNotAvailable`, "Cluster operator insights is not available") was the `insights` operator, below; it cleared with it. `ControlPlaneConnectionAvailable=Unknown` (`StatusUnknown`, "Condition not found in the HCP") is the 4.21 release, not the restore: the HostedCluster copies this condition from the HostedControlPlane, and the 4.21.35 control-plane operator doesn't report it (it is absent from the HostedControlPlane's condition list); Runs 1 and 2 ran 4.22.10, which does |
 | ManagedCluster state | PASS: `hcp-cluster1` `HUB ACCEPTED=true`, `JOINED=True`, `AVAILABLE=True`, URL `https://api.hcp-cluster1.mylab.com:6443` |
-| NodePool / nodes / workload | Nodes `c1worker1`, `c1worker2` `Ready` (v1.34.9, age 6h58m: not reprovisioned); `online-boutique` 11/11 pods `Running` (age 6h39m, so they kept running through the restore; `emailservice` has 1 restart from 6h38m ago, at deployment time, not the restore). NodePool `nodepool-hcp-cluster1-1`: desired 2, current 2, 4.21.35, not updating, no message. Cluster operators all `Available=True`, `Degraded=False`, except `insights` (`Available=False`, `Degraded=True` for 5m35s: `Unable to report: Get "https://172.31.0.1:443/...": net/http: TLS handshake timeout`). That is the insights operator failing to reach the hosted API through its service IP while the API endpoint moved to hub2; it has nothing to do with the import secret, and it reports again on its next gather once the connection works |
+| NodePool / nodes / workload | Nodes `c1worker1`, `c1worker2` `Ready` (v1.34.9, age 6h58m: not reprovisioned); `online-boutique` 11/11 pods `Running` (age 6h39m, so they kept running through the restore; `emailservice` has 1 restart from 6h38m ago, at deployment time, not the restore). NodePool `nodepool-hcp-cluster1-1`: desired 2, current 2, 4.21.35, not updating, no message. Cluster operators: all 21 `True / False / False` in the end. Right after the restore `insights` was `Available=False`, `Degraded=True` (`Unable to report: Get "https://172.31.0.1:443/apis/config.openshift.io/v1/clusterversions/version": net/http: TLS handshake timeout`) and stayed that way for over 14 minutes, retrying every 2 minutes (11 failed uploads, threshold 5). Every other operator reached the API through the same service IP, so the path worked: the insights operator's pod, running since before the restore, kept failing on its own connection. Deleting the pod fixed it: the new one reported `True / False / False` within seconds. Not related to the import secret. Runs 1 and 2 didn't record `oc get co` after the restore, so whether they hit the same thing is not known |
 | Restore outcome and warnings | `Completed`, 0 errors, 1 warning; 3 `DataDownload`s `Completed` (BYTES DONE = TOTAL, the same byte counts as the backup's `DataUpload`s); restore item operations 3 of 3. Warning: `hcp-cluster1-hcp-cluster1: secrets "token-nodepool-hcp-cluster1-1-1de7cca4" not found`, the same NodePool token warning as Runs 1 and 2 (HyperShift rotates that secret itself; the NodePool reconciled to 2/2) |
 | Timeline (UTC) | 14:55:46 restore started; 14:55:55 plugin skipped the import secret; 15:02:31 HostedCluster recovery finished; 15:12:26 MCE created the new import secret |
 | **Outcome** | **PASS.** Same result as Runs 1 and 2, with OADP 1.5 on both hubs: the backup taken by stock OADP 1.5.8 contained the stale import secret, the `oadp-1.5` build skipped it on restore, MCE generated a new one, and the cluster imported without the step 12 workaround |
@@ -1212,4 +1215,116 @@ productcatalogservice-759cf6d96d-kglsv   1/1     Running   0               6h39m
 recommendationservice-cc5b7d67b-s5s7c    1/1     Running   0               6h39m
 redis-cart-64f755d977-w4s4g              1/1     Running   0               6h39m
 shippingservice-64b89b46b8-k5kbp         1/1     Running   0               6h39m
+```
+
+**`ClusterVersionSucceeding` and `ControlPlaneConnectionAvailable`** (hub2)
+
+```console
+$ oc get hostedcluster hcp-cluster1 -n hcp-cluster1 -o json | jq '.status.conditions[]
+    | select(.type=="ClusterVersionSucceeding" or .type=="ControlPlaneConnectionAvailable")'
+{
+  "lastTransitionTime": "2026-10-23T15:07:11Z",
+  "message": "Cluster operator insights is not available",
+  "observedGeneration": 1,
+  "reason": "ClusterOperatorNotAvailable",
+  "status": "False",
+  "type": "ClusterVersionSucceeding"
+}
+{
+  "lastTransitionTime": "2026-10-23T14:56:16Z",
+  "message": "Condition not found in the HCP",
+  "observedGeneration": 1,
+  "reason": "StatusUnknown",
+  "status": "Unknown",
+  "type": "ControlPlaneConnectionAvailable"
+}
+
+$ oc get hostedcontrolplane -n hcp-cluster1-hcp-cluster1 -o json \
+    | jq -r '.items[0].status.conditions[].type' | sort
+Available
+CertRotation_CustomerAdminKubeconfigSigner_Degraded
+CertRotation_SREAdminKubeconfigSigner_Degraded
+ClusterVersionAvailable
+ClusterVersionFailing
+ClusterVersionProgressing
+ClusterVersionReleaseAccepted
+ClusterVersionRetrievedUpdates
+ClusterVersionUpgradeable
+DataPlaneConnectionAvailable
+Degraded
+EtcdAvailable
+ExternalDNSReachable
+HostedClusterRestoredFromBackup
+IgnitionServerValidReleaseInfo
+InfrastructureReady
+KubeAPIServerAvailable
+network.operator.openshift.io/Available
+network.operator.openshift.io/Degraded
+network.operator.openshift.io/ManagementStateDegraded
+network.operator.openshift.io/Progressing
+network.operator.openshift.io/Upgradeable
+ReconciliationActive
+TargetConfigControllerDegraded
+ValidHostedControlPlaneConfiguration
+ValidIDPConfiguration
+ValidReleaseInfo
+```
+
+No `ControlPlaneConnectionAvailable` in the HostedControlPlane, hence
+"Condition not found in the HCP" on the HostedCluster.
+
+**`insights` degraded after the restore, fixed by restarting its pod** (hosted cluster)
+
+```console
+$ oc get clusterversion version -o json | jq '.status.conditions[] | select(.type=="Failing")'
+{
+  "lastTransitionTime": "2026-10-23T15:07:06Z",
+  "message": "Cluster operator insights is not available",
+  "reason": "ClusterOperatorNotAvailable",
+  "status": "True",
+  "type": "Failing"
+}
+
+$ oc logs -n openshift-insights deploy/insights-operator --tail=30
+...
+I1023 15:23:33.404365       1 controller.go:313] Number of last upload failures 11 exceeded the threshold 5. Marking as degraded.
+I1023 15:23:33.404532       1 controller.go:578] The operator has some internal errors: Unable to report: Get "https://172.31.0.1:443/apis/config.openshift.io/v1/clusterversions/version": net/http: TLS handshake timeout
+...
+I1023 15:25:33.405627       1 controller.go:313] Number of last upload failures 11 exceeded the threshold 5. Marking as degraded.
+I1023 15:25:33.405754       1 controller.go:578] The operator has some internal errors: Unable to report: Get "https://172.31.0.1:443/apis/config.openshift.io/v1/clusterversions/version": net/http: TLS handshake timeout
+
+$ oc get pod -n openshift-insights -l app=insights-operator
+NAME                                 READY   STATUS    RESTARTS       AGE
+insights-operator-64b68d85b9-vfv29   1/1     Running   1 (7h1m ago)   7h8m
+
+$ oc delete pod -n openshift-insights -l app=insights-operator
+pod "insights-operator-64b68d85b9-vfv29" deleted
+
+$ oc get co insights -w
+NAME       VERSION   AVAILABLE   PROGRESSING   DEGRADED   SINCE   MESSAGE
+insights   4.21.35   True        False         False      3s
+
+$ oc get co
+NAME                                       VERSION   AVAILABLE   PROGRESSING   DEGRADED   SINCE   MESSAGE
+console                                    4.21.35   True        False         False      7h
+csi-snapshot-controller                    4.21.35   True        False         False      7h28m
+dns                                        4.21.35   True        False         False      21m
+image-registry                             4.21.35   True        False         False      21m
+ingress                                    4.21.35   True        False         False      7h
+insights                                   4.21.35   True        False         False      42s
+kube-apiserver                             4.21.35   True        False         False      7h30m
+kube-controller-manager                    4.21.35   True        False         False      7h30m
+kube-scheduler                             4.21.35   True        False         False      7h30m
+kube-storage-version-migrator              4.21.35   True        False         False      7h3m
+monitoring                                 4.21.35   True        False         False      6h52m
+network                                    4.21.35   True        False         False      7h4m
+node-tuning                                4.21.35   True        False         False      21m
+openshift-apiserver                        4.21.35   True        False         False      7h30m
+openshift-controller-manager               4.21.35   True        False         False      7h30m
+openshift-samples                          4.21.35   True        False         False      6h58m
+operator-lifecycle-manager                 4.21.35   True        False         False      7h31m
+operator-lifecycle-manager-catalog         4.21.35   True        False         False      7h30m
+operator-lifecycle-manager-packageserver   4.21.35   True        False         False      7h30m
+service-ca                                 4.21.35   True        False         False      7h3m
+storage                                    4.21.35   True        False         False      7h31m
 ```
