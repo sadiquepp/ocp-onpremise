@@ -898,7 +898,8 @@ this run rebuilds the whole lab on **4.21**:
 | Plugin image on hub1 (backup) | stock OADP 1.5 |
 | Plugin image on hub2 (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.5-check-skip-import` |
 | Image checks (1.4) | |
-| Import secret in the backup | |
+| Backup with OADP 1.5 (hub1, stock plugin) | `hcp-cluster1-backup-csi`: 3 `DataUpload`s `Completed` (242,427,252 / 242,450,804 / 242,486,460 bytes, BYTES DONE = TOTAL); backup phase: (pending) |
+| Import secret in the backup | Yes: `velero backup describe --details` lists `hcp-cluster1/hcp-cluster1-import`; the secret carried only `managedcluster-import-controller.open-cluster-management.io/import-secret` (no exclude label) |
 | Velero log shows skip | |
 | Import secret regenerated on hub2 | |
 | HostedCluster recovery | |
@@ -937,4 +938,31 @@ oadp-operator.v1.5.8                    OADP Operator      1.5.8                
 $ oc get sub advanced-cluster-management -n open-cluster-management \
     -o jsonpath='{.status.installedCSV}{"  "}{.status.state}{"\n"}'
 advanced-cluster-management.v2.17.3  AtLatestKnown
+```
+
+**Backup with OADP 1.5** (hub1)
+
+```console
+$ oc get backupstoragelocations.velero.io -n openshift-adp
+NAME      PHASE       LAST VALIDATED   AGE   DEFAULT
+default   Available   32s              48s   true
+
+$ oc get volumesnapshotclass -L velero.io/csi-volumesnapshot-class
+NAME                                                 DRIVER                                  DELETIONPOLICY   AGE    CSI-VOLUMESNAPSHOT-CLASS
+ocs-external-storagecluster-cephfsplugin-snapclass   openshift-storage.cephfs.csi.ceph.com   Delete           146m
+ocs-external-storagecluster-rbdplugin-snapclass      openshift-storage.rbd.csi.ceph.com      Delete           146m   true
+
+$ oc get secret hcp-cluster1-import -n hcp-cluster1 --show-labels
+NAME                  TYPE     DATA   AGE   LABELS
+hcp-cluster1-import   Opaque   4      55m   managedcluster-import-controller.open-cluster-management.io/import-secret=
+
+$ oc get datauploads.velero.io -n openshift-adp
+NAME                            STATUS      STARTED   BYTES DONE   TOTAL BYTES   STORAGE LOCATION   AGE     NODE
+hcp-cluster1-backup-csi-66f56   Completed   2m36s     242450804    242450804     default            3m1s    worker2
+hcp-cluster1-backup-csi-8hxkj   Completed   2m49s     242486460    242486460     default            3m7s    worker1
+hcp-cluster1-backup-csi-phs62   Completed   2m53s     242427252    242427252     default            3m12s   worker3
+
+$ oc exec deploy/velero -c velero -n openshift-adp -- \
+    ./velero backup describe hcp-cluster1-backup-csi --details | grep hcp-cluster1-import
+    - hcp-cluster1/hcp-cluster1-import
 ```
