@@ -1846,17 +1846,20 @@ instead; `vars.yaml` carries the values commented in place.
 
 ### Requirements
 
-**OCP 4.22 or later on the cluster consuming the storage.** Below 4.22 the
-in-kernel RBD client cannot attach to an RHCS 9 (Tentacle) cluster: `rbd map`
-fails with `failed to add secret to kernel` and the CSI attach ends in error
-524, so the PV binds but never mounts. This is a client-side kernel gap - the
-cluster health, the CSI user's caps and the image features all check out, and
-the same image maps by hand from a RHEL 9 node. OCP 4.22 ships the kernel that
-fixes it. `ocp_major_version` in `vars.yaml` (currently `"4.21"`) drives both
-the hub's OCP version and the ODF channel the consumer role subscribes to
-(`stable-{{ ocp_major_version }}`), so moving to 4.22 moves both together.
+**OCP 4.22 is the version known to work on the cluster consuming the
+storage.** On **4.20**, the in-kernel RBD client could not attach to an RHCS 9
+(Tentacle) cluster: `rbd map` failed with `failed to add secret to kernel` and
+the CSI attach ended in error 524, so the PV bound but never mounted. This is a
+client-side kernel gap - the cluster health, the CSI user's caps and the image
+features all checked out, and the same image mapped by hand from a RHEL 9 node.
+On **4.22** it works. **4.21 has not been tested**: whether its kernel has the
+fix is unknown, so on 4.21 run the RBD smoke test under
+[Verifying](#verifying-1) before building anything on the storage.
+`ocp_major_version` in `vars.yaml` drives both the hub's OCP version and the ODF
+channel the consumer role subscribes to (`stable-{{ ocp_major_version }}`), so
+changing it moves both together.
 
-If you are pinned below 4.22, take krbd out of the path and mount through
+On a version where the smoke test fails, take krbd out of the path and mount through
 rbd-nbd in userspace instead, by giving the RBD StorageClass
 `parameters.mounter: rbd-nbd`. StorageClass parameters are immutable, so this
 means exporting the generated class, renaming it, adding the parameter and
@@ -2032,8 +2035,8 @@ oc exec ceph-rbd-smoke -- sh -c 'echo ok > /data/f && cat /data/f'
 ```
 
 A PVC that goes `Bound` while the pod stays `ContainerCreating` with
-`rbd: map failed ... failed to add secret to kernel` is the 4.22 issue above,
-not a Ceph or credentials problem.
+`rbd: map failed ... failed to add secret to kernel` is the kernel issue
+above (seen on 4.20, fixed on 4.22), not a Ceph or credentials problem.
 
 ### Notes and constraints
 

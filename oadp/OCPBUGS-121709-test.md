@@ -875,6 +875,14 @@ this run rebuilds the whole lab on **4.21**:
   CSV, and `acm_operator_channel` is set to whatever the 4.21 catalog
   offers.
 - Workers in agent mode, as in Runs 1 and 2.
+- Ceph stays on **RHCS 9**. Its kernel RBD issue was seen on OCP 4.20 and is
+  fixed on 4.22; 4.21 is untested. **Gate:** right after step 7, run the
+  README's RBD smoke test (`ceph-rbd-smoke` PVC and pod). If the pod stays
+  `ContainerCreating` with `failed to add secret to kernel`, stop: 4.21 has
+  the issue too. Then rebuild Ceph on RHCS 8
+  (`ceph_container_image: .../rhceph/rhceph-8-rhel9:latest`), or use an
+  rbd-nbd StorageClass (README, Ceph requirements). Record the result either
+  way: it answers the 4.21 question.
 - Step 12 is skipped, so the import secret is in the backup.
 - Hub1 runs **stock OADP 1.5** for the backup. Hub2 runs
   `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.5-check-skip-import`,
@@ -886,6 +894,7 @@ this run rebuilds the whole lab on **4.21**:
 | OCP (hub1 / hub2) | |
 | ACM / MCE | |
 | OADP CSV (hub1 / hub2) | |
+| Ceph RHCS 9 RBD on OCP 4.21 (smoke test) | |
 | Plugin image on hub1 (backup) | stock OADP 1.5 |
 | Plugin image on hub2 (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.5-check-skip-import` |
 | Image checks (1.4) | |
