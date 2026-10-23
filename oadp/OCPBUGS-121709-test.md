@@ -904,7 +904,7 @@ without the step 12 workaround.
 | Import secret in the backup | Yes: `velero backup describe --details` lists `hcp-cluster1/hcp-cluster1-import`; the secret carried only `managedcluster-import-controller.open-cluster-management.io/import-secret` (no exclude label) |
 | Velero log shows skip | PASS: `14:55:55Z level=info msg="Skipping restore of ACM/MCE import secret hcp-cluster1/hcp-cluster1-import (contains stale bootstrap token)" ... logSource=".../pkg/core/restore.go:177" pluginName=hypershift-oadp-plugin restore=openshift-adp/hcp-cluster1-restore-csi`. The line number differs from Runs 1 and 2 (226) because the `oadp-1.5` branch's `restore.go` is laid out differently; the message is the same |
 | Import secret regenerated on hub2 | PASS: restore started `2026-10-23T14:55:46Z`; `hcp-cluster1-import` created `2026-10-23T15:12:26Z`; only label `managedcluster-import-controller.open-cluster-management.io/import-secret`, no `velero.io/*` labels |
-| HostedCluster recovery | PASS: `HostedClusterRestoredFromBackup=True`, `RecoveryFinished`, "Hosted cluster recovery finished", at `2026-10-23T15:02:31Z` |
+| HostedCluster recovery | PASS: `HostedClusterRestoredFromBackup=True`, `RecoveryFinished`, "Hosted cluster recovery finished", at `2026-10-23T15:02:31Z`; the `restored-from-backup` annotation removed by HyperShift; `Available=True`, `Degraded=False`, `Progressing=False`. Two conditions differ from Runs 1 and 2: `ClusterVersionSucceeding=False` and `ControlPlaneConnectionAvailable=Unknown` (both `True` there); being checked (see the evidence) |
 | ManagedCluster state | PASS: `hcp-cluster1` `HUB ACCEPTED=true`, `JOINED=True`, `AVAILABLE=True`, URL `https://api.hcp-cluster1.mylab.com:6443` |
 | NodePool / nodes / workload | Nodes `c1worker1`, `c1worker2` `Ready` (v1.34.9, age 6h58m: not reprovisioned); `online-boutique` 11/11 pods `Running` (age 6h39m, so they kept running through the restore; `emailservice` has 1 restart from 6h38m ago, at deployment time, not the restore). NodePool `nodepool-hcp-cluster1-1`: desired 2, current 2, 4.21.35, not updating, no message. Cluster operators all `Available=True`, `Degraded=False`, except `insights` (`Available=False`, `Degraded=True` for 5m35s: `Unable to report: Get "https://172.31.0.1:443/...": net/http: TLS handshake timeout`). That is the insights operator failing to reach the hosted API through its service IP while the API endpoint moved to hub2; it has nothing to do with the import secret, and it reports again on its next gather once the connection works |
 | Restore outcome and warnings | `Completed`, 0 errors, 1 warning; 3 `DataDownload`s `Completed` (BYTES DONE = TOTAL, the same byte counts as the backup's `DataUpload`s); restore item operations 3 of 3. Warning: `hcp-cluster1-hcp-cluster1: secrets "token-nodepool-hcp-cluster1-1-1de7cca4" not found`, the same NodePool token warning as Runs 1 and 2 (HyperShift rotates that secret itself; the NodePool reconciled to 2/2) |
@@ -1114,6 +1114,46 @@ HooksFailed:      0
 $ oc get hostedcluster hcp-cluster1 -n hcp-cluster1 \
     -o jsonpath='{.status.conditions[?(@.type=="HostedClusterRestoredFromBackup")]}{"\n"}'
 {"lastTransitionTime":"2026-10-23T15:02:31Z","message":"Hosted cluster recovery finished","observedGeneration":1,"reason":"RecoveryFinished","status":"True","type":"HostedClusterRestoredFromBackup"}
+
+$ oc get hostedcluster hcp-cluster1 -n hcp-cluster1 -o json | jq '.metadata.annotations | keys'
+[
+  "create-external-hub-kubeconfig",
+  "hypershift.openshift.io/HasBeenAvailable",
+  "kubectl.kubernetes.io/last-applied-configuration",
+  "metallb.io/address-pool"
+]
+
+$ oc get hostedcluster hcp-cluster1 -n hcp-cluster1 \
+    -o jsonpath='{range .status.conditions[*]}{.type}{"="}{.status}{"\n"}{end}'
+ClusterVersionUpgradeable=True
+ClusterVersionAvailable=True
+ClusterVersionSucceeding=False
+ClusterVersionProgressing=False
+ClusterVersionReleaseAccepted=True
+Degraded=False
+EtcdAvailable=True
+KubeAPIServerAvailable=True
+InfrastructureReady=True
+ExternalDNSReachable=True
+ValidHostedControlPlaneConfiguration=True
+ValidReleaseInfo=True
+ValidIDPConfiguration=True
+HostedClusterRestoredFromBackup=True
+DataPlaneConnectionAvailable=True
+ControlPlaneConnectionAvailable=Unknown
+EtcdBackupSucceeded=Unknown
+AutoNodeEnabled=False
+Available=True
+ValidConfiguration=True
+SupportedHostedCluster=True
+ValidProxyConfiguration=True
+IgnitionEndpointAvailable=True
+ReconciliationActive=True
+ValidReleaseImage=True
+Progressing=False
+PlatformCredentialsFound=True
+ReconciliationSucceeded=True
+ClusterVersionRetrievedUpdates=True
 
 $ oc get managedcluster hcp-cluster1
 NAME           HUB ACCEPTED   MANAGED CLUSTER URLS                      JOINED   AVAILABLE   AGE
