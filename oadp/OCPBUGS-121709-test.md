@@ -890,14 +890,14 @@ this run rebuilds the whole lab on **4.21**:
 
 | Item | Value |
 |---|---|
-| Date | |
+| Date | 2026-10-23 |
 | OCP (hub1 / hub2) | hub1: 4.21.35 / hub2: (pending) |
 | ACM / MCE | hub1: ACM `advanced-cluster-management.v2.17.3` (channel `release-2.17`, offered on 4.21); MCE `multicluster-engine.v2.17.3` |
 | OADP CSV (hub1 / hub2) | hub1: `oadp-operator.v1.5.8` (channel `stable`, unpinned: the 4.21 catalog has no 1.6) / hub2: (pending) |
 | Ceph RHCS 9 RBD on OCP 4.21 | **Works.** krbd maps RHCS 9 images on 4.21: `noobaa-db-pg-cluster-1` and `-2` `Running` for 77 min on `ocs-external-storagecluster-ceph-rbd`, data on `/dev/rbd0` (`/var/lib/postgresql/data`); the assisted-service PVCs mounted too. (On 4.20 the same mount failed with `failed to add secret to kernel`, error 524.) |
 | Plugin image on hub1 (backup) | stock OADP 1.5 |
-| Plugin image on hub2 (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.5-check-skip-import` |
-| Image checks (1.4) | |
+| Plugin image on hub2 (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.5-check-skip-import`, pinned as `@sha256:31b802f83285c2bafd2a7572ee974d9230c4033d73e40b82ff3ddd9bb34ef941`. The DPA override, the Deployment's init container and the running Velero pod's `imageID` all carry that digest |
+| Image checks (1.4) | Pass: amd64, created 2026-10-22 12:20 UTC (after #326 merged), entrypoint `cp /plugins/* /target/.`, the binary contains `Skipping restore of ACM/MCE import secret` (count 1) |
 | Backup with OADP 1.5 (hub1, stock plugin) | `hcp-cluster1-backup-csi`: 3 `DataUpload`s `Completed` (242,427,252 / 242,450,804 / 242,486,460 bytes, BYTES DONE = TOTAL); `phase: Completed`, operations 3/3, items 369/369, 08:48:29Z-08:50:31Z (2 min) |
 | Import secret in the backup | Yes: `velero backup describe --details` lists `hcp-cluster1/hcp-cluster1-import`; the secret carried only `managedcluster-import-controller.open-cluster-management.io/import-secret` (no exclude label) |
 | Velero log shows skip | |
@@ -993,4 +993,50 @@ $ oc get csv -n multicluster-engine -o custom-columns=NAME:.metadata.name,VERSIO
 NAME                                    VERSION
 metallb-operator.v4.21.0-202610151411   4.21.0-202610151411
 multicluster-engine.v2.17.3             2.17.3
+```
+
+**Plugin image pinned by digest** (bare-metal host)
+
+```console
+$ IMG=quay.io/jparrill/hypershift-oadp-plugin:oadp-1.5-check-skip-import
+$ skopeo inspect --override-arch amd64 docker://$IMG | jq '{Digest, Architecture, Created}'
+{
+  "Digest": "sha256:31b802f83285c2bafd2a7572ee974d9230c4033d73e40b82ff3ddd9bb34ef941",
+  "Architecture": "amd64",
+  "Created": "2026-10-22T14:20:19.850513428+02:00"
+}
+$ skopeo inspect --override-arch amd64 --config docker://$IMG | jq '.config.Entrypoint'
+[
+  "/bin/bash",
+  "-c",
+  "cp /plugins/* /target/."
+]
+
+$ IMG=quay.io/jparrill/hypershift-oadp-plugin@sha256:31b802f83285c2bafd2a7572ee974d9230c4033d73e40b82ff3ddd9bb34ef941
+$ podman pull --platform linux/amd64 $IMG
+$ cid=$(podman create $IMG); podman cp $cid:/plugins/hypershift-oadp-plugin /tmp/plugin; podman rm $cid
+$ grep -ac "Skipping restore of ACM/MCE import secret" /tmp/plugin
+1
+```
+
+**Step 20 with the patched plugin** (hub2)
+
+```console
+$ oc get dpa dpa-instance -n openshift-adp -o jsonpath='{.spec.unsupportedOverrides}{"\n"}'
+{"hypershiftPluginImageFqin":"quay.io/jparrill/hypershift-oadp-plugin@sha256:31b802f83285c2bafd2a7572ee974d9230c4033d73e40b82ff3ddd9bb34ef941"}
+
+$ oc rollout status deploy/velero -n openshift-adp
+deployment "velero" successfully rolled out
+
+$ oc get deploy velero -n openshift-adp \
+    -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="hypershift-oadp-plugin")].image}{"\n"}'
+quay.io/jparrill/hypershift-oadp-plugin@sha256:31b802f83285c2bafd2a7572ee974d9230c4033d73e40b82ff3ddd9bb34ef941
+
+$ oc get pod -n openshift-adp -l deploy=velero \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"  "}{.status.initContainerStatuses[?(@.name=="hypershift-oadp-plugin")].imageID}{"\n"}{end}'
+velero-5b7bd7d9d4-r9vgh  quay.io/jparrill/hypershift-oadp-plugin@sha256:31b802f83285c2bafd2a7572ee974d9230c4033d73e40b82ff3ddd9bb34ef941
+
+$ oc get backup.velero.io -n openshift-adp
+NAME                      AGE
+hcp-cluster1-backup-csi   6m40s
 ```
