@@ -892,8 +892,8 @@ this run rebuilds the whole lab on **4.21**:
 |---|---|
 | Date | |
 | OCP (hub1 / hub2) | |
-| ACM / MCE | |
-| OADP CSV (hub1 / hub2) | |
+| ACM / MCE | hub1: ACM `advanced-cluster-management.v2.17.3` (channel `release-2.17`, offered on 4.21); MCE: (pending) |
+| OADP CSV (hub1 / hub2) | hub1: `oadp-operator.v1.5.8` (channel `stable`, unpinned: the 4.21 catalog has no 1.6) / hub2: (pending) |
 | Ceph RHCS 9 RBD on OCP 4.21 | **Works.** krbd maps RHCS 9 images on 4.21: `noobaa-db-pg-cluster-1` and `-2` `Running` for 77 min on `ocs-external-storagecluster-ceph-rbd`, data on `/dev/rbd0` (`/var/lib/postgresql/data`); the assisted-service PVCs mounted too. (On 4.20 the same mount failed with `failed to add secret to kernel`, error 524.) |
 | Plugin image on hub1 (backup) | stock OADP 1.5 |
 | Plugin image on hub2 (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.5-check-skip-import` |
@@ -924,4 +924,17 @@ NAME                                          STATUS   VOLUME                   
 assisted-service                              Bound    pvc-ce18fed5-b9af-4fdc-b3bf-e488cb69099d   100Gi      RWO            ocs-external-storagecluster-ceph-rbd
 image-service-data-assisted-image-service-0   Bound    pvc-65ec2286-9fa9-4a6c-8b90-361ce15f2b6c   50Gi       RWO            ocs-external-storagecluster-ceph-rbd
 postgres                                      Bound    pvc-5684fb0b-2721-4cfc-afaf-59c7e4381ec7   10Gi       RWO            ocs-external-storagecluster-ceph-rbd
+```
+
+**Operator versions** (hub1)
+
+```console
+$ oc get csv -n openshift-adp
+NAME                                    DISPLAY            VERSION               REPLACES               PHASE
+metallb-operator.v4.21.0-202610151411   MetalLB Operator   4.21.0-202610151411                          Succeeded
+oadp-operator.v1.5.8                    OADP Operator      1.5.8                 oadp-operator.v1.5.7   Succeeded
+
+$ oc get sub advanced-cluster-management -n open-cluster-management \
+    -o jsonpath='{.status.installedCSV}{"  "}{.status.state}{"\n"}'
+advanced-cluster-management.v2.17.3  AtLatestKnown
 ```
