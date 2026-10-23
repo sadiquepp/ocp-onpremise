@@ -906,7 +906,7 @@ without the step 12 workaround.
 | Import secret regenerated on hub2 | PASS: restore started `2026-10-23T14:55:46Z`; `hcp-cluster1-import` created `2026-10-23T15:12:26Z`; only label `managedcluster-import-controller.open-cluster-management.io/import-secret`, no `velero.io/*` labels |
 | HostedCluster recovery | PASS: `HostedClusterRestoredFromBackup=True`, `RecoveryFinished`, "Hosted cluster recovery finished", at `2026-10-23T15:02:31Z` |
 | ManagedCluster state | PASS: `hcp-cluster1` `HUB ACCEPTED=true`, `JOINED=True`, `AVAILABLE=True`, URL `https://api.hcp-cluster1.mylab.com:6443` |
-| NodePool / nodes / workload | Nodes `c1worker1`, `c1worker2` `Ready` (v1.34.9, age 6h58m: not reprovisioned). NodePool `nodepool-hcp-cluster1-1`: desired 2, current 2, 4.21.35, not updating, no message. Cluster operators all `Available=True`, `Degraded=False`, except `insights` (`Available=False`, `Degraded=True` for 5m35s: `Unable to report: Get "https://172.31.0.1:443/...": net/http: TLS handshake timeout`). That is the insights operator failing to reach the hosted API through its service IP while the API endpoint moved to hub2; it has nothing to do with the import secret, and it reports again on its next gather once the connection works |
+| NodePool / nodes / workload | Nodes `c1worker1`, `c1worker2` `Ready` (v1.34.9, age 6h58m: not reprovisioned); `online-boutique` 11/11 pods `Running` (age 6h39m, so they kept running through the restore; `emailservice` has 1 restart from 6h38m ago, at deployment time, not the restore). NodePool `nodepool-hcp-cluster1-1`: desired 2, current 2, 4.21.35, not updating, no message. Cluster operators all `Available=True`, `Degraded=False`, except `insights` (`Available=False`, `Degraded=True` for 5m35s: `Unable to report: Get "https://172.31.0.1:443/...": net/http: TLS handshake timeout`). That is the insights operator failing to reach the hosted API through its service IP while the API endpoint moved to hub2; it has nothing to do with the import secret, and it reports again on its next gather once the connection works |
 | Restore outcome and warnings | `Completed`, 0 errors, 1 warning; 3 `DataDownload`s `Completed` (BYTES DONE = TOTAL, the same byte counts as the backup's `DataUpload`s); restore item operations 3 of 3. Warning: `hcp-cluster1-hcp-cluster1: secrets "token-nodepool-hcp-cluster1-1-1de7cca4" not found`, the same NodePool token warning as Runs 1 and 2 (HyperShift rotates that secret itself; the NodePool reconciled to 2/2) |
 | Timeline (UTC) | 14:55:46 restore started; 14:55:55 plugin skipped the import secret; 15:02:31 HostedCluster recovery finished; 15:12:26 MCE created the new import secret |
 | **Outcome** | **PASS.** Same result as Runs 1 and 2, with OADP 1.5 on both hubs: the backup taken by stock OADP 1.5.8 contained the stale import secret, the `oadp-1.5` build skipped it on restore, MCE generated a new one, and the cluster imported without the step 12 workaround |
@@ -1156,4 +1156,20 @@ operator-lifecycle-manager-catalog         4.21.35   True        False         F
 operator-lifecycle-manager-packageserver   4.21.35   True        False         False      7h20m
 service-ca                                 4.21.35   True        False         False      6h52m
 storage                                    4.21.35   True        False         False      7h20m
+```
+
+```console
+$ oc get po -n online-boutique
+NAME                                     READY   STATUS    RESTARTS        AGE
+adservice-77c984bf5d-22q5f               1/1     Running   0               6h39m
+cartservice-694bc8f787-knw4l             1/1     Running   0               6h39m
+checkoutservice-5fcf7f9d84-s6s8p         1/1     Running   0               6h39m
+currencyservice-5865f58546-hllfj         1/1     Running   0               6h39m
+emailservice-574cd854d8-vjq4k            1/1     Running   1 (6h38m ago)   6h39m
+frontend-cc985c899-qnd4c                 1/1     Running   0               6h39m
+paymentservice-5f8c4c964-t6cfz           1/1     Running   0               6h39m
+productcatalogservice-759cf6d96d-kglsv   1/1     Running   0               6h39m
+recommendationservice-cc5b7d67b-s5s7c    1/1     Running   0               6h39m
+redis-cart-64f755d977-w4s4g              1/1     Running   0               6h39m
+shippingservice-64b89b46b8-k5kbp         1/1     Running   0               6h39m
 ```
