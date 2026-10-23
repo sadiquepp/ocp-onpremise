@@ -891,9 +891,9 @@ this run rebuilds the whole lab on **4.21**:
 | Item | Value |
 |---|---|
 | Date | 2026-10-23 |
-| OCP (hub1 / hub2) | hub1: 4.21.35 / hub2: (pending) |
-| ACM / MCE | hub1: ACM `advanced-cluster-management.v2.17.3` (channel `release-2.17`, offered on 4.21); MCE `multicluster-engine.v2.17.3` |
-| OADP CSV (hub1 / hub2) | hub1: `oadp-operator.v1.5.8` (channel `stable`, unpinned: the 4.21 catalog has no 1.6) / hub2: (pending) |
+| OCP (hub1 / hub2) | 4.21.35 / 4.21.35 |
+| ACM / MCE | hub1: ACM `advanced-cluster-management.v2.17.3` (channel `release-2.17`, offered on 4.21); MCE `multicluster-engine.v2.17.3` (both hubs) |
+| OADP CSV (hub1 / hub2) | hub1: `oadp-operator.v1.5.8` (channel `stable`, unpinned: the 4.21 catalog has no 1.6) / hub2: `oadp-operator.v1.5.8` (same) |
 | Ceph RHCS 9 RBD on OCP 4.21 | **Works.** krbd maps RHCS 9 images on 4.21: `noobaa-db-pg-cluster-1` and `-2` `Running` for 77 min on `ocs-external-storagecluster-ceph-rbd`, data on `/dev/rbd0` (`/var/lib/postgresql/data`); the assisted-service PVCs mounted too. (On 4.20 the same mount failed with `failed to add secret to kernel`, error 524.) |
 | Plugin image on hub1 (backup) | stock OADP 1.5 |
 | Plugin image on hub2 (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.5-check-skip-import`, pinned as `@sha256:31b802f83285c2bafd2a7572ee974d9230c4033d73e40b82ff3ddd9bb34ef941`. The DPA override, the Deployment's init container and the running Velero pod's `imageID` all carry that digest |
@@ -989,6 +989,21 @@ status:
 ```console
 $ oc get clusterversion -o jsonpath='{.items[0].status.desired.version}{"\n"}'
 4.21.35
+$ oc get csv -n multicluster-engine -o custom-columns=NAME:.metadata.name,VERSION:.spec.version
+NAME                                    VERSION
+metallb-operator.v4.21.0-202610151411   4.21.0-202610151411
+multicluster-engine.v2.17.3             2.17.3
+```
+
+**OCP, OADP and MCE versions** (hub2, before the restore)
+
+```console
+$ oc get clusterversion -o jsonpath='{.items[0].status.desired.version}{"\n"}'
+4.21.35
+$ oc get csv -n openshift-adp
+NAME                                    DISPLAY            VERSION               REPLACES               PHASE
+metallb-operator.v4.21.0-202610151411   MetalLB Operator   4.21.0-202610151411                          Succeeded
+oadp-operator.v1.5.8                    OADP Operator      1.5.8                 oadp-operator.v1.5.7   Succeeded
 $ oc get csv -n multicluster-engine -o custom-columns=NAME:.metadata.name,VERSION:.spec.version
 NAME                                    VERSION
 metallb-operator.v4.21.0-202610151411   4.21.0-202610151411
