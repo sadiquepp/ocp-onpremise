@@ -870,7 +870,7 @@ the same as the one in Runs 1 and 2.
 
 OADP 1.5 supports OCP 4.19-4.21, and 4.22's catalog only offers 1.6, so
 this run rebuilds the whole lab on **4.21**:
-- `vars.yaml`: `ocp_major_version: "4.21"`, `ocp_minor_version: 15`.
+- `vars.yaml`: `ocp_major_version: "4.21"`, `ocp_minor_version: 35` (4.21.35).
 - `oadp_operator_channel` / `oadp_operator_starting_csv` pin the OADP 1.5
   CSV, and `acm_operator_channel` is set to whatever the 4.21 catalog
   offers.
@@ -891,8 +891,8 @@ this run rebuilds the whole lab on **4.21**:
 | Item | Value |
 |---|---|
 | Date | |
-| OCP (hub1 / hub2) | |
-| ACM / MCE | hub1: ACM `advanced-cluster-management.v2.17.3` (channel `release-2.17`, offered on 4.21); MCE: (pending) |
+| OCP (hub1 / hub2) | hub1: 4.21.35 / hub2: (pending) |
+| ACM / MCE | hub1: ACM `advanced-cluster-management.v2.17.3` (channel `release-2.17`, offered on 4.21); MCE `multicluster-engine.v2.17.3` |
 | OADP CSV (hub1 / hub2) | hub1: `oadp-operator.v1.5.8` (channel `stable`, unpinned: the 4.21 catalog has no 1.6) / hub2: (pending) |
 | Ceph RHCS 9 RBD on OCP 4.21 | **Works.** krbd maps RHCS 9 images on 4.21: `noobaa-db-pg-cluster-1` and `-2` `Running` for 77 min on `ocs-external-storagecluster-ceph-rbd`, data on `/dev/rbd0` (`/var/lib/postgresql/data`); the assisted-service PVCs mounted too. (On 4.20 the same mount failed with `failed to add secret to kernel`, error 524.) |
 | Plugin image on hub1 (backup) | stock OADP 1.5 |
@@ -982,4 +982,15 @@ status:
     totalItems: 369
   startTimestamp: "2026-10-23T08:48:29Z"
   version: 1
+```
+
+**OCP and MCE versions** (hub1)
+
+```console
+$ oc get clusterversion -o jsonpath='{.items[0].status.desired.version}{"\n"}'
+4.21.35
+$ oc get csv -n multicluster-engine -o custom-columns=NAME:.metadata.name,VERSION:.spec.version
+NAME                                    VERSION
+metallb-operator.v4.21.0-202610151411   4.21.0-202610151411
+multicluster-engine.v2.17.3             2.17.3
 ```
