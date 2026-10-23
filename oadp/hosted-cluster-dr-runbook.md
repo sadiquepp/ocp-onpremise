@@ -978,12 +978,13 @@ onto a DR hub in a different network segment with a new API VIP, Agent
 platform workers re-adopted without reprovisioning) was exercised end to
 end with:
 
-| Component | Version |
-|---|---|
-| OpenShift (both hubs) | 4.22.10 |
-| ACM / MCE | 2.17.3 / 2.17.3 |
-| OADP | 1.6.1 |
-| HyperShift OADP plugin | Builds including the OCPBUGS-121709 fix: upstream `main`, and the `oadp-1.6` branch with the backport ([openshift/hypershift-oadp-plugin#320](https://github.com/openshift/hypershift-oadp-plugin/pull/320)) |
+| Component | OADP 1.6 runs | OADP 1.5 run |
+|---|---|---|
+| OpenShift (both hubs) | 4.22.10 | 4.21.35 |
+| ACM / MCE | 2.17.3 / 2.17.3 | 2.17.3 / 2.17.3 |
+| OADP (both hubs) | 1.6.1 | 1.5.8 |
+| HyperShift OADP plugin on the DR hub | Builds including the OCPBUGS-121709 fix: upstream `main`, and the `oadp-1.6` branch with the backport ([openshift/hypershift-oadp-plugin#320](https://github.com/openshift/hypershift-oadp-plugin/pull/320)) | The `oadp-1.5` branch with the backport ([openshift/hypershift-oadp-plugin#326](https://github.com/openshift/hypershift-oadp-plugin/pull/326)) |
+| Storage | Ceph RHCS 9 (external ODF), RBD | Same; RBD over krbd works on 4.21 |
 
 Two things were **not** part of that run: BareMetalHost objects (the
 workers booted from the discovery ISO) and object lock on the bucket.

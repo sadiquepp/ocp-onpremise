@@ -3,7 +3,9 @@
 How the fix from
 [openshift/hypershift-oadp-plugin#316](https://github.com/openshift/hypershift-oadp-plugin/pull/316)
 is built for OADP 1.6 and tested with the hub1 → hub2 restore in
-[steps.md](../steps.md).
+[steps.md](../steps.md). Runs 1 and 2 (sections 5 and 6) cover OADP 1.6 on
+OCP 4.22; Run 3 (section 7) covers the `oadp-1.5` backport on OADP 1.5 and
+OCP 4.21. All three pass.
 
 ## The problem
 
@@ -871,22 +873,22 @@ the same as the one in Runs 1 and 2.
 OADP 1.5 supports OCP 4.19-4.21, and 4.22's catalog only offers 1.6, so
 this run rebuilds the whole lab on **4.21**:
 - `vars.yaml`: `ocp_major_version: "4.21"`, `ocp_minor_version: 35` (4.21.35).
-- `oadp_operator_channel` / `oadp_operator_starting_csv` pin the OADP 1.5
-  CSV, and `acm_operator_channel` is set to whatever the 4.21 catalog
-  offers.
+- No operator pin was needed: on 4.21, OADP's `stable` channel installs
+  1.5 (`oadp_operator_starting_csv` stays empty), and ACM's `release-2.17`
+  is offered there too.
 - Workers in agent mode, as in Runs 1 and 2.
 - Ceph stays on **RHCS 9**. Its kernel RBD issue was seen on OCP 4.20 and is
-  fixed on 4.22; 4.21 is untested. **Gate:** right after step 7, run the
-  README's RBD smoke test (`ceph-rbd-smoke` PVC and pod). If the pod stays
-  `ContainerCreating` with `failed to add secret to kernel`, stop: 4.21 has
-  the issue too. Then rebuild Ceph on RHCS 8
-  (`ceph_container_image: .../rhceph/rhceph-8-rhel9:latest`), or use an
-  rbd-nbd StorageClass (README, Ceph requirements). Record the result either
-  way: it answers the 4.21 question.
+  fixed on 4.22; 4.21 had not been tested. It works: RBD volumes mount over
+  krbd on 4.21 (table and evidence below).
 - Step 12 is skipped, so the import secret is in the backup.
 - Hub1 runs **stock OADP 1.5** for the backup. Hub2 runs
   `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.5-check-skip-import`,
   pinned by digest, for the restore.
+
+**Outcome: PASS.** OADP 1.5.8 on OCP 4.21.35, both hubs. The `oadp-1.5`
+build skipped the stale `hcp-cluster1-import` secret, MCE on hub2 generated
+a new one, and the cluster imported (`JOINED=True`, `AVAILABLE=True`)
+without the step 12 workaround.
 
 | Item | Value |
 |---|---|
@@ -900,13 +902,14 @@ this run rebuilds the whole lab on **4.21**:
 | Image checks (1.4) | Pass: amd64, created 2026-10-22 12:20 UTC (after #326 merged), entrypoint `cp /plugins/* /target/.`, the binary contains `Skipping restore of ACM/MCE import secret` (count 1) |
 | Backup with OADP 1.5 (hub1, stock plugin) | `hcp-cluster1-backup-csi`: 3 `DataUpload`s `Completed` (242,427,252 / 242,450,804 / 242,486,460 bytes, BYTES DONE = TOTAL); `phase: Completed`, operations 3/3, items 369/369, 08:48:29Z-08:50:31Z (2 min) |
 | Import secret in the backup | Yes: `velero backup describe --details` lists `hcp-cluster1/hcp-cluster1-import`; the secret carried only `managedcluster-import-controller.open-cluster-management.io/import-secret` (no exclude label) |
-| Velero log shows skip | |
-| Import secret regenerated on hub2 | |
-| HostedCluster recovery | |
-| ManagedCluster state | |
-| NodePool / nodes / workload | |
-| Restore outcome and warnings | |
-| **Outcome** | |
+| Velero log shows skip | PASS: `14:55:55Z level=info msg="Skipping restore of ACM/MCE import secret hcp-cluster1/hcp-cluster1-import (contains stale bootstrap token)" ... logSource=".../pkg/core/restore.go:177" pluginName=hypershift-oadp-plugin restore=openshift-adp/hcp-cluster1-restore-csi`. The line number differs from Runs 1 and 2 (226) because the `oadp-1.5` branch's `restore.go` is laid out differently; the message is the same |
+| Import secret regenerated on hub2 | PASS: restore started `2026-10-23T14:55:46Z`; `hcp-cluster1-import` created `2026-10-23T15:12:26Z`; only label `managedcluster-import-controller.open-cluster-management.io/import-secret`, no `velero.io/*` labels |
+| HostedCluster recovery | PASS: `HostedClusterRestoredFromBackup=True`, `RecoveryFinished`, "Hosted cluster recovery finished", at `2026-10-23T15:02:31Z` |
+| ManagedCluster state | PASS: `hcp-cluster1` `HUB ACCEPTED=true`, `JOINED=True`, `AVAILABLE=True`, URL `https://api.hcp-cluster1.mylab.com:6443` |
+| NodePool / nodes / workload | Nodes `c1worker1`, `c1worker2` `Ready` (v1.34.9, age 6h58m: not reprovisioned). NodePool `nodepool-hcp-cluster1-1`: desired 2, current 2, 4.21.35, not updating, no message. Cluster operators all `Available=True`, `Degraded=False`, except `insights` (`Available=False`, `Degraded=True` for 5m35s: `Unable to report: Get "https://172.31.0.1:443/...": net/http: TLS handshake timeout`). That is the insights operator failing to reach the hosted API through its service IP while the API endpoint moved to hub2; it has nothing to do with the import secret, and it reports again on its next gather once the connection works |
+| Restore outcome and warnings | `Completed`, 0 errors, 1 warning; 3 `DataDownload`s `Completed` (BYTES DONE = TOTAL, the same byte counts as the backup's `DataUpload`s); restore item operations 3 of 3. Warning: `hcp-cluster1-hcp-cluster1: secrets "token-nodepool-hcp-cluster1-1-1de7cca4" not found`, the same NodePool token warning as Runs 1 and 2 (HyperShift rotates that secret itself; the NodePool reconciled to 2/2) |
+| Timeline (UTC) | 14:55:46 restore started; 14:55:55 plugin skipped the import secret; 15:02:31 HostedCluster recovery finished; 15:12:26 MCE created the new import secret |
+| **Outcome** | **PASS.** Same result as Runs 1 and 2, with OADP 1.5 on both hubs: the backup taken by stock OADP 1.5.8 contained the stale import secret, the `oadp-1.5` build skipped it on restore, MCE generated a new one, and the cluster imported without the step 12 workaround |
 
 ### 7.1 Evidence
 
@@ -1054,4 +1057,103 @@ velero-5b7bd7d9d4-r9vgh  quay.io/jparrill/hypershift-oadp-plugin@sha256:31b802f8
 $ oc get backup.velero.io -n openshift-adp
 NAME                      AGE
 hcp-cluster1-backup-csi   6m40s
+```
+
+**Restore with the patched plugin** (hub2)
+
+```console
+$ oc logs deploy/velero -n openshift-adp | grep "Skipping restore of ACM/MCE import secret"
+Defaulted container "velero" out of: velero, openshift-velero-plugin (init), velero-plugin-for-aws (init), hypershift-oadp-plugin (init)
+time="2026-10-23T14:55:55Z" level=info msg="Skipping restore of ACM/MCE import secret hcp-cluster1/hcp-cluster1-import (contains stale bootstrap token)" cmd=/plugins/hypershift-oadp-plugin logSource="/go/src/github.com/openshift/hypershift-oadp-plugin/pkg/core/restore.go:177" pluginName=hypershift-oadp-plugin process=restore restore=openshift-adp/hcp-cluster1-restore-csi type=hcp-restore
+
+$ oc get secret hcp-cluster1-import -n hcp-cluster1 \
+    -o jsonpath='{.metadata.creationTimestamp}{"\n"}{.metadata.labels}{"\n"}'
+2026-10-23T15:12:26Z
+{"managedcluster-import-controller.open-cluster-management.io/import-secret":""}
+
+$ oc get restore.velero.io hcp-cluster1-restore-csi -n openshift-adp \
+    -o jsonpath='{.status.startTimestamp}{"\n"}'
+2026-10-23T14:55:46Z
+```
+
+```console
+$ oc get restore.velero.io hcp-cluster1-restore-csi -n openshift-adp \
+    -o jsonpath='{.status.phase}  warnings={.status.warnings}  errors={.status.errors}{"\n"}'
+Completed  warnings=1  errors=
+
+$ oc get datadownloads.velero.io -n openshift-adp
+NAME                             STATUS      STARTED   BYTES DONE   TOTAL BYTES   STORAGE LOCATION   AGE   NODE
+hcp-cluster1-restore-csi-b8vpt   Completed   19m       242427252    242427252     default            19m   worker1
+hcp-cluster1-restore-csi-jzvf5   Completed   19m       242486460    242486460     default            19m   worker2
+hcp-cluster1-restore-csi-kllpl   Completed   19m       242450804    242450804     default            19m   worker3
+
+$ oc exec deploy/velero -c velero -n openshift-adp -- \
+    ./velero restore describe hcp-cluster1-restore-csi | sed -n '/Warnings:/,/Errors:/p'
+Warnings:
+  Velero:     <none>
+  Cluster:    <none>
+  Namespaces:
+    hcp-cluster1-hcp-cluster1:  secrets "token-nodepool-hcp-cluster1-1-1de7cca4" not found
+
+Backup:  hcp-cluster1-backup-csi
+...
+Existing Resource Policy:   update
+ItemOperationTimeout:       4h0m0s
+
+Preserve Service NodePorts:  auto
+
+Restore Item Operations:  3 of 3 completed successfully, 0 failed (specify --details for more information)
+
+HooksAttempted:   0
+HooksFailed:      0
+```
+
+**HostedCluster recovery finished, and the cluster imported** (hub2)
+
+```console
+$ oc get hostedcluster hcp-cluster1 -n hcp-cluster1 \
+    -o jsonpath='{.status.conditions[?(@.type=="HostedClusterRestoredFromBackup")]}{"\n"}'
+{"lastTransitionTime":"2026-10-23T15:02:31Z","message":"Hosted cluster recovery finished","observedGeneration":1,"reason":"RecoveryFinished","status":"True","type":"HostedClusterRestoredFromBackup"}
+
+$ oc get managedcluster hcp-cluster1
+NAME           HUB ACCEPTED   MANAGED CLUSTER URLS                      JOINED   AVAILABLE   AGE
+hcp-cluster1   true           https://api.hcp-cluster1.mylab.com:6443   True     True        3m43s
+
+$ oc get nodepool -n hcp-cluster1
+NAME                      CLUSTER        DESIRED NODES   CURRENT NODES   AUTOSCALING   AUTOREPAIR   VERSION   UPDATINGVERSION   UPDATINGCONFIG   MESSAGE
+nodepool-hcp-cluster1-1   hcp-cluster1   2               2               False         False        4.21.35   False             False
+```
+
+**Hosted cluster** (its kubeconfig, from step 10)
+
+```console
+$ export KUBECONFIG=~/hcp-cluster1.kubeconfig
+$ oc get nodes
+NAME        STATUS   ROLES    AGE     VERSION
+c1worker1   Ready    worker   6h58m   v1.34.9
+c1worker2   Ready    worker   6h58m   v1.34.9
+
+$ oc get co
+NAME                                       VERSION   AVAILABLE   PROGRESSING   DEGRADED   SINCE   MESSAGE
+console                                    4.21.35   True        False         False      6h49m
+csi-snapshot-controller                    4.21.35   True        False         False      7h17m
+dns                                        4.21.35   True        False         False      10m
+image-registry                             4.21.35   True        False         False      10m
+ingress                                    4.21.35   True        False         False      6h49m
+insights                                   4.21.35   False       False         True       5m41s   Unable to report: Get "https://172.31.0.1:443/apis/config.openshift.io/v1/clusterversions/version": net/http: TLS handshake timeout
+kube-apiserver                             4.21.35   True        False         False      7h20m
+kube-controller-manager                    4.21.35   True        False         False      7h20m
+kube-scheduler                             4.21.35   True        False         False      7h20m
+kube-storage-version-migrator              4.21.35   True        False         False      6h52m
+monitoring                                 4.21.35   True        False         False      6h41m
+network                                    4.21.35   True        False         False      6h53m
+node-tuning                                4.21.35   True        False         False      10m
+openshift-apiserver                        4.21.35   True        False         False      7h20m
+openshift-controller-manager               4.21.35   True        False         False      7h20m
+openshift-samples                          4.21.35   True        False         False      6h47m
+operator-lifecycle-manager                 4.21.35   True        False         False      7h20m
+operator-lifecycle-manager-catalog         4.21.35   True        False         False      7h19m
+operator-lifecycle-manager-packageserver   4.21.35   True        False         False      7h20m
+service-ca                                 4.21.35   True        False         False      6h52m
+storage                                    4.21.35   True        False         False      7h20m
 ```
