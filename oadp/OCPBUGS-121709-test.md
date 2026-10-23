@@ -7,6 +7,31 @@ is built for OADP 1.6 and tested with the hub1 → hub2 restore in
 OCP 4.22; Run 3 (section 7) covers the `oadp-1.5` backport on OADP 1.5 and
 OCP 4.21. All three pass.
 
+## Contents
+
+- [The problem](#the-problem)
+- [The fix](#the-fix)
+- [1. Get a plugin image with the fix](#1-get-a-plugin-image-with-the-fix)
+  - [1.0 If you already have an image: just use it](#10-if-you-already-have-an-image-just-use-it)
+  - [1.1 Cherry-pick onto `oadp-1.6`](#11-cherry-pick-onto-oadp-16)
+  - [1.2 Unit tests (Go 1.26)](#12-unit-tests-go-126)
+  - [1.3 Build and push](#13-build-and-push)
+  - [1.4 Check that the image contains the fix](#14-check-that-the-image-contains-the-fix)
+- [2. Run the backup without the workaround](#2-run-the-backup-without-the-workaround)
+  - [2.1 Skip step 12: remove the exclude label](#21-skip-step-12-remove-the-exclude-label)
+  - [2.2 Step 13: backup](#22-step-13-backup)
+- [3. Restore on hub2 with the patched plugin](#3-restore-on-hub2-with-the-patched-plugin)
+  - [3.1 Step 20 with the patched plugin image](#31-step-20-with-the-patched-plugin-image)
+  - [3.2 Step 21: restore](#32-step-21-restore)
+- [4. Verify](#4-verify)
+  - [Negative control (optional)](#negative-control-optional)
+- [5. Results: Run 1, `main` image](#5-results)
+  - [5.1 Evidence](#51-evidence)
+- [6. Run 2: `oadp-1.6` image](#6-run-2-oadp-16-image)
+  - [6.1 Evidence](#61-evidence)
+- [7. Run 3: OADP 1.5 on OCP 4.21](#7-run-3-oadp-15-on-ocp-421)
+  - [7.1 Evidence](#71-evidence)
+
 ## The problem
 
 When a hosted cluster is restored onto a different ACM/MCE hub, Velero
