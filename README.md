@@ -1846,15 +1846,15 @@ instead; `vars.yaml` carries the values commented in place.
 
 ### Requirements
 
-**OCP 4.22 is the version known to work on the cluster consuming the
-storage.** On **4.20**, the in-kernel RBD client could not attach to an RHCS 9
+**OCP 4.21 or later on the cluster consuming the storage.** On **4.20**, the
+in-kernel RBD client could not attach to an RHCS 9
 (Tentacle) cluster: `rbd map` failed with `failed to add secret to kernel` and
 the CSI attach ended in error 524, so the PV bound but never mounted. This is a
 client-side kernel gap - the cluster health, the CSI user's caps and the image
 features all checked out, and the same image mapped by hand from a RHEL 9 node.
-On **4.22** it works. **4.21 has not been tested**: whether its kernel has the
-fix is unknown, so on 4.21 run the RBD smoke test under
-[Verifying](#verifying-1) before building anything on the storage.
+It works on **4.21** (krbd mounts RHCS 9 images: `/dev/rbd0` under the NooBaa
+database, 2026-10-23) and on **4.22**. On any other version, run the RBD smoke
+test under [Verifying](#verifying-1) before building anything on the storage.
 `ocp_major_version` in `vars.yaml` drives both the hub's OCP version and the ODF
 channel the consumer role subscribes to (`stable-{{ ocp_major_version }}`), so
 changing it moves both together.
@@ -2036,7 +2036,7 @@ oc exec ceph-rbd-smoke -- sh -c 'echo ok > /data/f && cat /data/f'
 
 A PVC that goes `Bound` while the pod stays `ContainerCreating` with
 `rbd: map failed ... failed to add secret to kernel` is the kernel issue
-above (seen on 4.20, fixed on 4.22), not a Ceph or credentials problem.
+above (seen on 4.20; 4.21 and 4.22 work), not a Ceph or credentials problem.
 
 ### Notes and constraints
 

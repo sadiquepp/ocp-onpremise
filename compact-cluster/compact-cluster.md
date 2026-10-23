@@ -981,7 +981,7 @@ oc get volumesnapshotclass                            # one for RBD, one for Cep
 ```
 
 **Mount a volume.** A PVC that binds only shows that provisioning works. On a
-node kernel that cannot map a Ceph 9 RBD image (OCP below 4.22), the PVC binds
+node kernel that cannot map a Ceph 9 RBD image (seen on OCP 4.20; 4.21 and 4.22 work), the PVC binds
 and the pod then fails to start. Test with a pod:
 
 ```bash
@@ -1158,5 +1158,5 @@ virsh list --all | grep -E 'ceph[123]|cephadmin'     # nothing
 | Ceph: `setup_ceph_odf.yaml` fails with `oc: command not found` | No `oc` in `/usr/bin` on a hypervisor that has never built a hub | `cp $WORK/oc /usr/bin/oc` (Step 12b) |
 | Ceph: the ODF CSV is `Failed` with reason `TooManyOperatorGroups` | LVM Storage's OperatorGroup is still in `openshift-storage` | `oc -n openshift-storage get operatorgroup`. Delete `openshift-storage-operatorgroup`, as in Step 12b. |
 | Ceph: the StorageCluster stays `Progressing` | Ceph is not `HEALTH_OK`, or the compact nodes cannot reach the mons on `.24`-`.26` | `ssh root@192.168.122.27 ceph -s`. `oc -n openshift-storage get storagecluster ocs-external-storagecluster -o yaml` shows the conditions. |
-| Ceph: the PVC is `Bound` but the pod stays `ContainerCreating` with `failed to add secret to kernel` or error 524 | The node kernel cannot map a Ceph 9 RBD image: OCP below 4.22 | Build with OCP 4.22 or later. See [README, Requirements](../README.md#requirements). |
+| Ceph: the PVC is `Bound` but the pod stays `ContainerCreating` with `failed to add secret to kernel` or error 524 | The node kernel cannot map a Ceph 9 RBD image: seen on OCP 4.20 | Build with OCP 4.21 or later. See [README, Requirements](../README.md#requirements). |
 | Ceph: hosted cluster etcd or AgentServiceConfig PVCs are on `lvms-vg1` | They were created while `lvms-vg1` was the default StorageClass | Bound PVCs do not move. Remove LVM Storage, attach Ceph, then recreate them (Step 12b). |

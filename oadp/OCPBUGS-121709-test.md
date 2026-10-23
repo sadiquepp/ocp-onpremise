@@ -894,7 +894,7 @@ this run rebuilds the whole lab on **4.21**:
 | OCP (hub1 / hub2) | |
 | ACM / MCE | |
 | OADP CSV (hub1 / hub2) | |
-| Ceph RHCS 9 RBD on OCP 4.21 (smoke test) | |
+| Ceph RHCS 9 RBD on OCP 4.21 | **Works.** krbd maps RHCS 9 images on 4.21: `noobaa-db-pg-cluster-1` and `-2` `Running` for 77 min on `ocs-external-storagecluster-ceph-rbd`, data on `/dev/rbd0` (`/var/lib/postgresql/data`); the assisted-service PVCs mounted too. (On 4.20 the same mount failed with `failed to add secret to kernel`, error 524.) |
 | Plugin image on hub1 (backup) | stock OADP 1.5 |
 | Plugin image on hub2 (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.5-check-skip-import` |
 | Image checks (1.4) | |
@@ -909,3 +909,19 @@ this run rebuilds the whole lab on **4.21**:
 
 ### 7.1 Evidence
 
+**Ceph RHCS 9 RBD mounts on OCP 4.21** (hub1, after step 8)
+
+```console
+$ oc get pods -n openshift-storage | grep noobaa-db-pg
+noobaa-db-pg-cluster-1                                            1/1     Running   0              77m
+noobaa-db-pg-cluster-2                                            1/1     Running   0              76m
+
+$ oc exec -n openshift-storage pod/noobaa-db-pg-cluster-1 -- df -h | grep -E 'rbd|pgdata'
+/dev/rbd0        49G  337M   49G   1% /var/lib/postgresql/data
+
+$ oc get pvc -n multicluster-engine
+NAME                                          STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS
+assisted-service                              Bound    pvc-ce18fed5-b9af-4fdc-b3bf-e488cb69099d   100Gi      RWO            ocs-external-storagecluster-ceph-rbd
+image-service-data-assisted-image-service-0   Bound    pvc-65ec2286-9fa9-4a6c-8b90-361ce15f2b6c   50Gi       RWO            ocs-external-storagecluster-ceph-rbd
+postgres                                      Bound    pvc-5684fb0b-2721-4cfc-afaf-59c7e4381ec7   10Gi       RWO            ocs-external-storagecluster-ceph-rbd
+```
