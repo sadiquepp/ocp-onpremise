@@ -143,6 +143,17 @@ acm_mirror_catalog_source: "cs-{{ mirror_catalog_index | regex_replace('^.*/', '
 acm_catalog_source: "{{ acm_mirror_catalog_source if disconnected_install | bool else 'redhat-operators' }}"
 acm_catalog_source_namespace: openshift-marketplace
 
+## Operator versions. The defaults follow the newest the catalog offers, as
+## before; vars.yaml sets them per OpenShift version (see the operator versions
+## block there).
+acm_operator_channel: release-2.17
+oadp_operator_channel: stable
+## Empty: OLM installs and keeps upgrading to the channel head (automatic
+## approval). Set to a CSV (e.g. oadp-operator.v1.5.4) to pin it: the
+## Subscription gets startingCSV with manual approval, and the role approves
+## only that CSV's InstallPlan, so later versions are never installed.
+oadp_operator_starting_csv: ""
+
 ## Namespace assisted-service (MCE) runs in. AgentServiceConfig's
 ## mirrorRegistryRef is a name-only reference resolved in this namespace, so
 ## the ConfigMap has to be created here and nowhere else.

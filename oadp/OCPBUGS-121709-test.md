@@ -859,3 +859,44 @@ NAME                                    VERSION
 metallb-operator.v4.22.0-202610140833   4.22.0-202610140833
 multicluster-engine.v2.17.3             2.17.3
 ```
+
+## 7. Run 3: OADP 1.5 on OCP 4.21
+
+The same test with **OADP 1.5** for both the backup and the restore, using
+the plugin's `oadp-1.5` backport
+([openshift/hypershift-oadp-plugin#326](https://github.com/openshift/hypershift-oadp-plugin/pull/326),
+merged `2b0a1c4d`, 2026-10-22). Its `restore.go` change is line-for-line
+the same as the one in Runs 1 and 2.
+
+OADP 1.5 supports OCP 4.19-4.21, and 4.22's catalog only offers 1.6, so
+this run rebuilds the whole lab on **4.21**:
+- `vars.yaml`: `ocp_major_version: "4.21"`, `ocp_minor_version: 15`.
+- `oadp_operator_channel` / `oadp_operator_starting_csv` pin the OADP 1.5
+  CSV, and `acm_operator_channel` is set to whatever the 4.21 catalog
+  offers.
+- Workers in agent mode, as in Runs 1 and 2.
+- Step 12 is skipped, so the import secret is in the backup.
+- Hub1 runs **stock OADP 1.5** for the backup. Hub2 runs
+  `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.5-check-skip-import`,
+  pinned by digest, for the restore.
+
+| Item | Value |
+|---|---|
+| Date | |
+| OCP (hub1 / hub2) | |
+| ACM / MCE | |
+| OADP CSV (hub1 / hub2) | |
+| Plugin image on hub1 (backup) | stock OADP 1.5 |
+| Plugin image on hub2 (tag and pulled digest) | `quay.io/jparrill/hypershift-oadp-plugin:oadp-1.5-check-skip-import` |
+| Image checks (1.4) | |
+| Import secret in the backup | |
+| Velero log shows skip | |
+| Import secret regenerated on hub2 | |
+| HostedCluster recovery | |
+| ManagedCluster state | |
+| NodePool / nodes / workload | |
+| Restore outcome and warnings | |
+| **Outcome** | |
+
+### 7.1 Evidence
+

@@ -53,6 +53,44 @@
     oc apply -f "{{ role_path }}/files/oadp/02-operatorGroup.yaml"
     oc apply -f "{{ role_path }}/files/oadp/.rendered-03-subscription.yaml"
 
+# Pinned OADP (oadp_operator_starting_csv): the Subscription asks for manual
+# approval, so nothing installs until its InstallPlan is approved. Approve
+# only the plan that installs exactly that CSV; a later plan offering an
+# upgrade stays unapproved.
+- name: Approve the InstallPlan for the pinned OADP version
+  ansible.builtin.shell: |
+    set -o pipefail
+    line=$(oc get installplan -n openshift-adp \
+      -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.approved}{" "}{.spec.clusterServiceVersionNames}{"\n"}{end}' \
+      | grep -F '"{{ oadp_operator_starting_csv }}"' | head -1)
+    [ -n "$line" ] || { echo "no InstallPlan for {{ oadp_operator_starting_csv }} yet"; exit 1; }
+    name=${line%% *}
+    if echo "$line" | grep -q ' true '; then echo "$name already approved"; exit 0; fi
+    oc patch installplan "$name" -n openshift-adp --type merge -p '{"spec":{"approved":true}}'
+    echo "approved $name"
+  args:
+    executable: /bin/bash
+  register: oadp_installplan
+  until: oadp_installplan.rc == 0
+  retries: 40
+  delay: 15
+  changed_when: "'approved ' in oadp_installplan.stdout and 'already' not in oadp_installplan.stdout"
+  when: oadp_operator_starting_csv | default('') | length > 0
+  tags:
+    - oadp
+
+- name: Wait for the pinned OADP CSV to succeed
+  ansible.builtin.command: >-
+    oc get csv {{ oadp_operator_starting_csv }} -n openshift-adp -o jsonpath='{.status.phase}'
+  register: oadp_csv_phase
+  until: oadp_csv_phase.stdout == 'Succeeded'
+  retries: 40
+  delay: 15
+  changed_when: false
+  when: oadp_operator_starting_csv | default('') | length > 0
+  tags:
+    - oadp
+
 - name: Lets wait for 300 seconds for Operators to be ACTIVE
   ansible.builtin.wait_for:
      timeout: 300
