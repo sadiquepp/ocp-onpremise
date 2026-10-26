@@ -82,7 +82,7 @@
       - bash
       - -c
       - >-
-        nic=$(ip -o link show | awk '/{{ clab_fabric_mac_prefix }}:{{ ip_list[item.ip_key] }}/ && !f {gsub(":","",$2); print $2; f=1}');
+        nic=$(ip -o link show | awk '/{{ clab_fabric_mac_prefix }}:{{ ('%02d' | format(ip_list[item.ip_key] | int)) }}/ && !f {gsub(":","",$2); print $2; f=1}');
         [ -n "$nic" ] || { echo "NONE"; exit 0; };
         err=$(sysctl -w net.ipv4.conf.$nic.forwarding=1 net.ipv4.conf.default.forwarding=1
         net.ipv4.conf.all.rp_filter=2 net.ipv4.conf.$nic.rp_filter=2 net.ipv4.conf.default.rp_filter=2 2>&1 >/dev/null); rc=$?;

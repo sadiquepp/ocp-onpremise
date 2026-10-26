@@ -19,7 +19,7 @@ the only way out of its rack is up through leaf3 and the spine:
 hub workers, sno -- virbr1 (192.168.140.0/24) -- leaf1 --+
                                                           spine -- leaf2 (green-ext, purple-ext)
 sno2             -- virbr2 (192.168.160.0/24) -- leaf3 --+
-                    VTEP 100.64.1.18                       10.1.0.8/30
+                    VTEP 100.64.1.2                        10.1.0.8/30
 ```
 
 green and purple are built on sno2 too. A pod on sno2 and a pod on the hub
@@ -117,7 +117,7 @@ ansible-playbook -i ../inventory/hosts setup_udn_bgp_lab.yaml --ask-vault-pass \
 ```
 
 The role points the fabric addressing at rack2 for this run:
-`192.168.160.0/24`, leaf3 at `.1` in AS 64518, and VTEP `100.64.1.18`. It
+`192.168.160.0/24`, leaf3 at `.1` in AS 64518, and VTEP `100.64.1.2`. It
 checks sessions against leaf3 rather than leaf1. sno2 builds green and purple
 only, and allocates their pods from `10.204.254.0/24` (see "Known gaps").
 
@@ -147,7 +147,7 @@ spine, and leaf1 learned rack2's VTEP block from the spine:
 leaf1 'show ip route 100.64.1.0/24'           # B>* via 10.1.0.2 (spine)
 leaf3 'show bgp summary'                      # spine x2 and sno2: all Established
 lab hub
-oc debug node/worker1 --quiet -- chroot /host ip route get 100.64.1.18
+oc debug node/worker1 --quiet -- chroot /host ip route get 100.64.1.2
 #   via 192.168.140.1 (leaf1), with no "cache" line: nothing redirects this one
 ```
 
@@ -159,8 +159,8 @@ the interface the packet came in on, so leaf1 has nothing to redirect.
 every hub worker has an all-zeros FDB entry toward it:
 
 ```bash
-leaf1 'show bgp l2vpn evpn route type multicast' | grep -B2 100.64.1.18
-oc debug node/worker1 --quiet -- chroot /host bridge fdb show | grep 100.64.1.18
+leaf1 'show bgp l2vpn evpn route type multicast' | grep -B2 100.64.1.2
+oc debug node/worker1 --quiet -- chroot /host bridge fdb show | grep 100.64.1.2
 ```
 
 **One broadcast domain, three routers.** Ping from green on sno2 to green on
@@ -176,10 +176,10 @@ Capture both rack segments on the lab host at once:
 
 ```bash
 timeout 20 tcpdump -lnvi virbr2 'udp port 4789' -c 4 &
-timeout 20 tcpdump -lnvi virbr1 'udp port 4789 and host 100.64.1.18' -c 4
+timeout 20 tcpdump -lnvi virbr1 'udp port 4789 and host 100.64.1.2' -c 4
 ```
 
-Outer source and destination are the two VTEPs, `100.64.1.18` and the hub
+Outer source and destination are the two VTEPs, `100.64.1.2` and the hub
 worker's `100.64.0.3x`. The outer TTL on `virbr1` should be three lower than
 on `virbr2`, one for each of leaf3, the spine and leaf1. The inner TTL is
 the same on both.
@@ -188,7 +188,7 @@ the same on both.
 
 ```bash
 onleaf3 ip link set eth10 down
-leaf1 'show bgp l2vpn evpn route type multicast' | grep -c 100.64.1.18   # 0, after hold time
+leaf1 'show bgp l2vpn evpn route type multicast' | grep -c 100.64.1.2   # 0, after hold time
 inpod green ping -c3 ...                                                   # sno2 -> hub fails
 # hub <-> sno green still works: their path never used leaf3
 onleaf3 ip link set eth10 up

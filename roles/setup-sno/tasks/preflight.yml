@@ -67,22 +67,23 @@
     success_msg: >-
       .{{ ip_list[sno_name] }} is clear of every MetalLB pool.
 
-# The lab's MAC scheme appends the ip_list octet verbatim, so a three-digit
-# octet renders 52:54:00:e2:54:100 - not a MAC. libvirt rejects it, but only
-# after the ISO has been built, and the error names the XML rather than
-# vars.yaml.
+# The lab's MAC scheme appends the ip_list octet, zero-padded to two digits
+# ('%02d', as default-network.xml.j2 does), so .2-.9 render 52:54:00:e2:54:02.
+# A three-digit octet still renders 52:54:00:e2:54:100 - not a MAC. libvirt
+# rejects it, but only after the ISO has been built, and the error names the
+# XML rather than vars.yaml.
 - name: Fail if the SNO's octet cannot form a valid MAC
   ansible.builtin.assert:
     that:
-      - (ip_list[sno_name] | int) >= 10
+      - (ip_list[sno_name] | int) >= 2
       - (ip_list[sno_name] | int) <= 99
     fail_msg: >-
       ip_list.{{ sno_name }} is {{ ip_list[sno_name] }}. This lab builds MACs
-      as {{ sno_mgmt_mac_prefix }}:<octet>, so the octet has to be two digits -
-      {{ sno_mgmt_mac_prefix }}:{{ ip_list[sno_name] }} is not a valid MAC.
-      Pick an octet between 10 and 99 that is outside the MetalLB pools.
+      as {{ sno_mgmt_mac_prefix }}:<octet, two digits>, so the octet has to be
+      between 2 and 99 - {{ sno_mgmt_mac_prefix }}:{{ ip_list[sno_name] }} is
+      not a valid MAC. Pick one outside the MetalLB pools.
     success_msg: >-
-      {{ sno_mgmt_mac_prefix }}:{{ ip_list[sno_name] }} is a well-formed MAC.
+      {{ sno_mgmt_mac_prefix }}:{{ '%02d' | format(ip_list[sno_name] | int) }} is a well-formed MAC.
 
 - name: Read the lab ssh public key
   ansible.builtin.shell:
@@ -93,7 +94,7 @@
 - name: Record the addressing this install will use
   ansible.builtin.set_fact:
     sno_ip: "{{ lab_network_prefix }}.{{ ip_list[sno_name] }}"
-    sno_mgmt_mac: "{{ (sno_mgmt_mac_prefix ~ ':' ~ ip_list[sno_name]) | lower }}"
+    sno_mgmt_mac: "{{ (sno_mgmt_mac_prefix ~ ':' ~ ('%02d' | format(ip_list[sno_name] | int))) | lower }}"
     sno_ssh_key: "{{ sno_ssh_out.stdout }}"
     sno_cluster_domain: "{{ sno_name }}.{{ base_domain }}"
 

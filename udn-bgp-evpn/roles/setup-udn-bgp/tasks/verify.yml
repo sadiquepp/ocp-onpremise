@@ -92,7 +92,7 @@
       - bash
       - -c
       - >-
-        nic=$(ip -o link show | awk '/{{ clab_fabric_mac_prefix }}:{{ ip_list[item.ip_key] }}/ && !f {gsub(":","",$2); print $2; f=1}');
+        nic=$(ip -o link show | awk '/{{ clab_fabric_mac_prefix }}:{{ ('%02d' | format(ip_list[item.ip_key] | int)) }}/ && !f {gsub(":","",$2); print $2; f=1}');
         echo "${nic:-NONE} $(cat /proc/sys/net/ipv4/conf/${nic:-lo}/forwarding 2>/dev/null || echo unknown)
         all=$(cat /proc/sys/net/ipv4/conf/all/forwarding)
         default=$(cat /proc/sys/net/ipv4/conf/default/forwarding)

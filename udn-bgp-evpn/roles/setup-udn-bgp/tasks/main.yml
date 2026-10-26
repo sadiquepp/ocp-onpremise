@@ -582,7 +582,7 @@
       - bash
       - -c
       - >-
-        ip -o link show | grep -i -c '{{ clab_fabric_mac_prefix }}:{{ ip_list[item.ip_key] }}' || true
+        ip -o link show | grep -i -c '{{ clab_fabric_mac_prefix }}:{{ ('%02d' | format(ip_list[item.ip_key] | int)) }}' || true
   loop: "{{ udn_bgp_cluster_nodes }}"
   loop_control:
     label: "{{ item.ip_key }}"
@@ -636,7 +636,7 @@
     fail_msg: >-
       Node {{ udn_bgp_node_names[item.item.ip_key] }} ({{ item.item.ip_key }},
       cluster '{{ udn_bgp_cluster }}') has no interface with MAC
-      {{ clab_fabric_mac_prefix }}:{{ ip_list[item.item.ip_key] }}, so the
+      {{ clab_fabric_mac_prefix }}:{{ ('%02d' | format(ip_list[item.item.ip_key] | int)) }}, so the
       NodeNetworkConfigurationPolicy that captures on that MAC cannot match
       anything. nmstate reports this as
       "PolicyError: interface with 'mac-address=...' not found" and the policy
