@@ -55,6 +55,26 @@ With it true:
   `vars.yaml` on the lab host, or add `-e sno2_enabled=true` to each command.
   The commands here show the `-e`.
 
+## With build-lab.sh
+
+Set `sno2_enabled: true` in `vars.yaml` (or `../vars-metal.yaml`, or pass
+`-e sno2_enabled=true`) and `./build-lab.sh` does everything below as part of
+the normal build: sno2 is installed in parallel with the hub and the SNO, the
+fabric step builds rack2 with the rest of the fabric, and the tenants, web and
+xcluster steps run for sno2 as well. DNS, the leaf and the ingress names follow
+the same flag.
+
+On a lab whose hub and SNO are already up, the `clusters` step refuses to run
+(it would rebuild them), so install sno2 with steps 1 and 2 below and then:
+
+```bash
+./build-lab.sh --from fabric
+```
+
+That redeploys leaf1, leaf2 and the spine, like any fabric run. To add the rack
+without touching them, follow steps 3 onwards instead. Under `--vrflite` or
+`--shared` the script leaves sno2 out and says so; rack2 is EVPN only.
+
 ## Steps
 
 ### 1. DNS
@@ -228,13 +248,7 @@ onleaf3 ip link set eth10 up
   management port. sno2 adds a third copy of each to the broadcast domain.
   That is the problem already noted at green's `evpn_l2_excludes` in
   `vars.yaml`, not a new one.
-- **Not in `build-lab.sh` or `cleanup.yaml`.** Both run without sno2. To
-  remove it by hand:
-  ```bash
-  virsh destroy sno2; virsh undefine sno2 --remove-all-storage
-  ssh root@192.168.122.40 'cd /root/udn-bgp-fabric-rack2 && containerlab destroy --topo udnbgp-rack2.clab.yml'
-  ssh root@192.168.122.40 docker exec clab-udnbgp-spine vtysh -c 'conf t' -c 'router bgp 65000' \
-      -c 'no neighbor 10.1.0.10' -c 'no neighbor 10.0.0.3'
-  virsh net-destroy fabric2; virsh net-undefine fabric2
-  ```
-  Then set `sno2_enabled` back to false.
+- **Removing it.** `cleanup.yaml --tags sno2` removes the VM and its
+  folders. `--tags udnlab` also removes `virbr2` and, in host mode, the leaf3
+  lab; in vm mode leaf3 goes with the containerlab VM. A full `cleanup.yaml`
+  run does both.

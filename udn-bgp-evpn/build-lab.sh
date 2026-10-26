@@ -68,6 +68,14 @@
 # derived from it. The step formerly called 'evpn' is now 'tenants'; --from
 # evpn and --only vrflite still work and name the same step.
 #
+# SNO2. With sno2_enabled: true - in ../vars.yaml, ../vars-metal.yaml or -e -
+# the build adds the second SNO behind its own leaf (udn-bgp-evpn/rack2.md):
+# sno2 is installed beside the hub and the SNO, the fabric step builds rack2
+# (virbr2, leaf3) with the rest of the fabric, and the tenants, web, prep and
+# xcluster steps run for sno2 too. Its DNS zone, its ingress names and its
+# leaf come from the playbooks reading the same flag. EVPN only: under
+# --vrflite or --shared the script turns it off for the run and says so.
+#
 # RUN IT UNDER tmux (or screen). A full build installs two OpenShift
 # clusters and takes hours; if the ssh session drops, the shell gets
 # SIGHUP and takes the build with it, usually mid-install, leaving VMs
@@ -118,6 +126,8 @@ MODE="evpn"                             # --evpn | --vrflite
 TOPOLOGY="evpn"                         # derived from MODE, see below
 KUBECONFIG_HUB="${KUBECONFIG_HUB:-/var/lib/libvirt/images/hub_install/auth/kubeconfig}"
 KUBECONFIG_SNO="${KUBECONFIG_SNO:-/var/lib/libvirt/images/sno_install/auth/kubeconfig}"
+KUBECONFIG_SNO2="${KUBECONFIG_SNO2:-/var/lib/libvirt/images/sno2_install/auth/kubeconfig}"
+SNO2=0                                  # sno2_enabled, resolved below
 LOGDIR="${LOGDIR:-./build-logs}"
 PARALLEL_TENANTS=0
 REBUILD_CLUSTERS=0
@@ -153,7 +163,8 @@ usage() { sed -n '2,/^set -/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
 list_steps() {
     cat <<EOF
   bmhost     the helper VM: DNS, load balancer, the generated inventory
-  clusters   hub (--skip-tags acm) and the SNO, IN PARALLEL
+  clusters   hub (--skip-tags acm) and the SNO, IN PARALLEL - and sno2,
+             when sno2_enabled is true
   fabric     containerlab leaf1/spine/leaf2, virbr1, the node NICs
   preflight  report what the clusters can do; changes nothing
   tenants    the cluster half, hub then sno (--parallel-tenants to overlap).
@@ -196,7 +207,8 @@ list_steps() {
              Verified against the published checksum before it is moved
              into place, so a truncated download never becomes the image
 EOF
-    printf '\n  this run (--%s%s): %s\n' "$MODE" "$( (( WORKSHOP )) && echo ' --workshop')" "${STEPS[*]}"
+    printf '\n  this run (--%s%s%s): %s\n' "$MODE" "$( (( WORKSHOP )) && echo ' --workshop')" \
+           "$( (( SNO2 )) && echo ', with sno2')" "${STEPS[*]}"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -252,6 +264,33 @@ fi
 if [[ -r "$HOST_VARS" ]]; then
     EXTRA_VARS=(-e "@$HOST_VARS" "${EXTRA_VARS[@]}")
 fi
+
+# sno2_enabled as the playbooks will see it: vars.yaml, then this host's
+# vars-metal.yaml, the workshop file and any -e, the last one winning. Asked of
+# Ansible itself, with the same extra vars in the same order, so this script
+# and the plays cannot disagree about it. Without Ansible (a --dry-run on a
+# machine with no lab) it falls back to reading vars.yaml.
+sno2_from_vars() {
+    if command -v ansible >/dev/null 2>&1; then
+        ANSIBLE_LOCALHOST_WARNING=False ANSIBLE_INVENTORY_UNPARSED_WARNING=False \
+            ansible localhost -c local -i localhost, -m ansible.builtin.debug \
+            -a "msg={{ 'SNO2_ON' if (sno2_enabled | default(false) | bool) else 'SNO2_OFF' }}" \
+            -e @../vars.yaml "${EXTRA_VARS[@]}" 2>/dev/null | grep -q SNO2_ON
+    else
+        grep -qE '^sno2_enabled:[[:space:]]*(true|True|yes)[[:space:]]*$' ../vars.yaml
+    fi
+}
+if sno2_from_vars; then
+    if [[ "$MODE" == "evpn" ]]; then
+        SNO2=1
+    else
+        # rack2 is EVPN only, and the plays read the flag from vars.yaml too,
+        # so it has to be turned off for them, not just for this script.
+        echo "note: sno2_enabled is true, but sno2 is EVPN only - leaving it out of this --$MODE run." >&2
+        EXTRA_VARS+=(-e sno2_enabled=false)
+    fi
+fi
+if (( SNO2 && WORKSHOP )); then EXTRA_STEPS+=(check-sno2); fi
 TOTAL=${#STEPS[@]}
 
 (( WANT_LIST )) && { list_steps; exit 0; }
@@ -391,7 +430,7 @@ wipe_lab() {
 --rebuild-clusters: running cleanup.yaml first. This DESTROYS, on this host:
 
   - the hub cluster (masters, workers, bootstrap) and its install folder
-  - the SNO and its install folder
+  - the SNO and its install folder, and sno2's if it exists
   - the helper VM, and the containerlab VM with the fabric inside it
   - the tenant client VMs
   - hub2, the mirror registry, minio and the Ceph VMs, if you have them
@@ -414,7 +453,7 @@ guard_clusters() {
     [[ -r "$KUBECONFIG_HUB" ]] && found+=("a hub kubeconfig at $KUBECONFIG_HUB")
     if command -v virsh >/dev/null 2>&1; then
         local d
-        for d in hub_master1 sno; do
+        for d in hub_master1 sno $( (( SNO2 )) && echo sno2 ); do
             virsh dominfo "$d" >/dev/null 2>&1 && found+=("libvirt domain '$d'")
         done
     fi
@@ -454,9 +493,10 @@ run_step() {
         play ../setup_bm_host.yaml -e "clab_topology=$TOPOLOGY" ;;
     clusters)
         guard_clusters
-        say "$(pos clusters)  hub and SNO, in parallel"
+        say "$(pos clusters)  hub and SNO$( (( SNO2 )) && echo ' and sno2'), in parallel"
         play_bg hub ../setup_hub_cluster.yaml --skip-tags acm
         play_bg sno ../setup_sno.yaml
+        if (( SNO2 )); then play_bg sno2 ../setup_sno2.yaml; fi
         wait_all ;;
     image-publish)
         say "publish the lab image to S3, for other hosts to pull"
@@ -494,6 +534,9 @@ run_step() {
             say "$(pos tenants)  $MODE on both clusters, in parallel"
             play_bg "$MODE-hub" setup_udn_bgp_lab.yaml --tags "$MODE" -e udn_bgp_cluster=hub
             play_bg "$MODE-sno" setup_udn_bgp_lab.yaml --tags "$MODE" -e udn_bgp_cluster=sno
+            if (( SNO2 )); then
+                play_bg "$MODE-sno2" setup_udn_bgp_lab.yaml --tags "$MODE" -e udn_bgp_cluster=sno2
+            fi
             wait_all
         else
             # Sequential by default. Both runs patch cluster-scoped state, and
@@ -503,6 +546,10 @@ run_step() {
             play setup_udn_bgp_lab.yaml --tags "$MODE" -e udn_bgp_cluster=hub
             say "$(pos tenants)  $MODE on the SNO"
             play setup_udn_bgp_lab.yaml --tags "$MODE" -e udn_bgp_cluster=sno
+            if (( SNO2 )); then
+                say "$(pos tenants)  $MODE on sno2"
+                play setup_udn_bgp_lab.yaml --tags "$MODE" -e udn_bgp_cluster=sno2
+            fi
         fi ;;
     # Each cluster deploys the tenants it actually has in this phase - the SNO
     # under --vrflite has violet and not green or purple - and webload.yml
@@ -511,7 +558,11 @@ run_step() {
         say "$(pos web)  web pods, hub"
         play setup_udn_bgp_lab.yaml --tags web -e udn_bgp_cluster=hub
         say "$(pos web)  web pods, SNO"
-        play setup_udn_bgp_lab.yaml --tags web -e udn_bgp_cluster=sno ;;
+        play setup_udn_bgp_lab.yaml --tags web -e udn_bgp_cluster=sno
+        if (( SNO2 )); then
+            say "$(pos web)  web pods, sno2"
+            play setup_udn_bgp_lab.yaml --tags web -e udn_bgp_cluster=sno2
+        fi ;;
     nsclient)
         say "$(pos nsclient)  namespace client VM"
         play setup_udn_bgp_lab.yaml --tags clabnsclient -e "clab_topology=$TOPOLOGY" ;;
@@ -519,11 +570,14 @@ run_step() {
         # Parallel: the hub's half waits a quarter of an hour on OpenShift
         # Virtualization and the SNO's has nothing to wait for. Separate
         # logs, as with the cluster installs.
-        say "$(pos prep)  workshop plumbing on the hub and the SNO, in parallel"
+        say "$(pos prep)  workshop plumbing on the hub and the SNO$( (( SNO2 )) && echo ' and sno2'), in parallel"
         play_bg prep-hub setup_udn_bgp_lab.yaml --tags prep -e udn_bgp_cluster=hub -e "clab_topology=$TOPOLOGY"
         play_bg prep-sno setup_udn_bgp_lab.yaml --tags prep -e udn_bgp_cluster=sno -e "clab_topology=$TOPOLOGY"
+        if (( SNO2 )); then
+            play_bg prep-sno2 setup_udn_bgp_lab.yaml --tags prep -e udn_bgp_cluster=sno2 -e "clab_topology=$TOPOLOGY"
+        fi
         wait_all ;;
-    check-hub|check-sno)
+    check-hub|check-sno|check-sno2)
         # The phase's own verify, against what the attendee applied by hand.
         # Same tag as the build, so the same tenant lists and the same checks;
         # udn_bgp_check_only stops it before it applies anything.
@@ -578,19 +632,25 @@ run_step() {
     # built with the SNO skipped should say so and move on, not fail nine
     # steps of good work on a missing file.
     xcluster)
-        say "$(pos xcluster)  pod to pod, across both clusters"
+        say "$(pos xcluster)  pod to pod, across $( (( SNO2 )) && echo 'all three' || echo 'both') clusters"
         if [[ ! -r "$KUBECONFIG_SNO" ]]; then
             echo "    no SNO kubeconfig at $KUBECONFIG_SNO - skipping." >&2
             echo "    This test needs two clusters. Set KUBECONFIG_SNO if it" >&2
             echo "    lives elsewhere, or run the SNO half first." >&2
             return 0
         fi
+        # sno2 joins as a third cluster: the script keys every cell by cluster
+        # and tenant, so green and purple are then asked across all three.
+        local -a xkc=("$KUBECONFIG_HUB" "$KUBECONFIG_SNO")
+        if (( SNO2 )); then
+            if [[ -r "$KUBECONFIG_SNO2" ]] || (( DRY_RUN )); then xkc+=("$KUBECONFIG_SNO2")
+            else echo "    no sno2 kubeconfig at $KUBECONFIG_SNO2 - testing hub and SNO only." >&2; fi
+        fi
         if (( DRY_RUN )); then
-            printf '    scripts/udn-xcluster-curl.sh %s%s %s\n' \
-                   "${XCLUSTER_FLAG:+$XCLUSTER_FLAG }" "$KUBECONFIG_HUB" "$KUBECONFIG_SNO"
+            printf '    scripts/udn-xcluster-curl.sh %s%s\n' \
+                   "${XCLUSTER_FLAG:+$XCLUSTER_FLAG }" "${xkc[*]}"
         else
-            scripts/udn-xcluster-curl.sh ${XCLUSTER_FLAG:+"$XCLUSTER_FLAG"} \
-                "$KUBECONFIG_HUB" "$KUBECONFIG_SNO"
+            scripts/udn-xcluster-curl.sh ${XCLUSTER_FLAG:+"$XCLUSTER_FLAG"} "${xkc[@]}"
         fi ;;
     esac
 }

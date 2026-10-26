@@ -8,6 +8,7 @@
 ## tags to remove everything, or narrow it:
 ##
 ##   --tags sno      the single-node OpenShift cluster only
+##   --tags sno2     the second single-node cluster (setup_sno2.yaml) only
 ##   --tags compact  the three-node compact cluster only, with the worker VMs
 ##                   of the hosted cluster it manages (hcp-compact1)
 ##   --tags compacthcp  just those hosted cluster worker VMs and their cached
@@ -266,6 +267,18 @@
       rm -rf {{ sno_vm_folder | default(download_dir ~ '/' ~ sno_name) }}
       rm -rf {{ sno_install_folder }}
 
+  ## sno2 (setup_sno2.yaml, sno2_enabled), the same way and for the same
+  ## reasons. Not conditional on sno2_enabled: a sno2 left behind after the
+  ## flag was turned off is exactly what this has to find.
+  - name: Destroy the second single-node OpenShift VM (sno2)
+    tags: [sno2]
+    shell: |
+      virsh destroy  sno2 >/dev/null 2>&1 || true
+      virsh undefine sno2 --remove-all-storage >/dev/null 2>&1 || \
+        virsh undefine sno2 >/dev/null 2>&1 || true
+      rm -rf {{ sno2_vm_folder | default(download_dir ~ '/sno2') }}
+      rm -rf {{ sno2_install_folder | default(download_dir ~ '/sno2_install') }}
+
   ## -------------------------------------------------------------------------
   ## The three-node compact cluster (compact-cluster/setup_compact_cluster.yaml)
   ## -------------------------------------------------------------------------
@@ -368,6 +381,21 @@
       containerlab destroy -t {{ clab_lab_dir }}/{{ clab_lab_name }}.clab.yml --cleanup || true
       rm -rf {{ clab_lab_dir }}
 
+  ## The further segments' leaves (clab_fabric_segments - rack2's leaf3), each
+  ## its own containerlab lab in <clab_lab_dir>-<segment>. Same reasoning as
+  ## above: a no-op in vm mode, where they went with the VM.
+  - name: Destroy the rack leaves' topologies if they run on this host
+    tags: [udnlab]
+    shell: |
+      command -v containerlab >/dev/null 2>&1 || exit 0
+      {% for seg in (clab_fabric_segments | default({})) %}
+      if [ -f {{ clab_lab_dir }}-{{ seg }}/{{ clab_lab_name }}-{{ seg }}.clab.yml ]; then
+        containerlab destroy -t {{ clab_lab_dir }}-{{ seg }}/{{ clab_lab_name }}-{{ seg }}.clab.yml --cleanup || true
+      fi
+      rm -rf {{ clab_lab_dir }}-{{ seg }}
+      {% endfor %}
+      exit 0
+
   ## Last, because the VMs above have interfaces on it and libvirt will not
   ## destroy a network that is still in use. <forward mode='none'> - it carries
   ## nothing but the fabric, so removing it cannot affect virbr0 or the lab's
@@ -377,6 +405,10 @@
     shell: |
       virsh net-destroy  {{ clab_fabric_network }} >/dev/null 2>&1 || true
       virsh net-undefine {{ clab_fabric_network }} >/dev/null 2>&1 || true
+      {% for seg in (clab_fabric_segments | default({})).values() %}
+      virsh net-destroy  {{ seg.network }} >/dev/null 2>&1 || true
+      virsh net-undefine {{ seg.network }} >/dev/null 2>&1 || true
+      {% endfor %}
       exit 0
 
   ## Rendered per-cluster manifests, which name pod addresses that will not
