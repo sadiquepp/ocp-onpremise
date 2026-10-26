@@ -3112,9 +3112,14 @@ udn_proxy_phase: "{{ 'evpn' if clab_topology | default('bgp') == 'evpn' else 'vr
 ## Only the backend address differs.
 ##
 ## Set to [hub] to go back to a single-cluster ingress.
-udn_proxy_clusters:
-  - hub
-  - sno
+##
+## sno2 joins when sno2_enabled is true and the lab is EVPN - it is on rack2,
+## which is EVPN only. green-sno2 and purple-sno2 are served out of the same
+## green and purple namespaces: the stretched L2VNI reaches sno2's pods through
+## leaf2, the spine and leaf3, so it too needs no new plumbing.
+udn_proxy_clusters: >-
+  {{ ['hub', 'sno']
+     + (['sno2'] if ((sno2_enabled | bool) and udn_proxy_phase == 'evpn') else []) }}
 
 ## Every hostname the ingress answers to, as a space-separated string.
 ##

@@ -124,7 +124,26 @@ only, and allocates their pods from `10.204.254.0/24` (see "Known gaps").
 Only `prep`, `evpn` and `web` are allowed for sno2. rack2 has no VRF-Lite
 VLANs, so the role refuses `vrflite`, `shared` and `default` there.
 
-### 5. Helpers
+### 5. Tenant ingress
+
+The ingress on udnnsclient adds `green-sno2` and `purple-sno2` when
+`sno2_enabled` is true: `udn_proxy_clusters` includes sno2 under EVPN. Each
+name is served out of its tenant's namespace, which sits in that tenant's
+stretched L2VNI, so it reaches sno2's pods through leaf2, the spine and leaf3.
+Rebuild the proxy, then the DNS names, from `udn-bgp-evpn/`:
+
+```bash
+ansible-playbook -i ../inventory/hosts setup_udn_bgp_lab.yaml --ask-vault-pass \
+  --tags clabnsproxy -e clab_topology=evpn -e sno2_enabled=true
+ansible-playbook -i ../inventory/hosts ../setup_bm_host.yaml --ask-vault-pass \
+  --tags dns -e clab_topology=evpn -e sno2_enabled=true
+./scripts/udn-web-demo.sh --proxy      # green-sno2, purple-sno2 -> "I am green on sno2", ...
+```
+
+The demo needs no DNS: it sends the Host header itself. The DNS run is for
+browsers and plain curl.
+
+### 6. Helpers
 
 `workshop.env` gains `SNO2_KUBECONFIG`, `lab sno2`, `leaf3` and `onleaf3`
 the next time the hub's or the SNO's `--tags prep` writes it. sno2's own prep
