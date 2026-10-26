@@ -225,6 +225,7 @@ add the access key from the last command to `vault.yaml` as below.
 Review and adjust lab-specific values:
 
 - Review the variables in `vars.yaml` and adjust them to your needs. Each section has a description of the variables and their purpose.
+- [ip-allocation.md](ip-allocation.md) lists every address on the lab network in order, with the free ones, and the rules for picking a new one.
 
 ### vault.yaml (encrypted)
 - Configure the vault.yaml file. All the values are mandatory unless marked optional below
