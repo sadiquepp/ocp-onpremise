@@ -376,8 +376,8 @@ ip_list:
   worker3: 36
   hublb: 39
   ## The single-node cluster (setup-sno). Two constraints, both load-bearing:
-  ## clear of every hosted_cluster_metallb_pools band below (60-62, 67-69,
-  ## 90-95), because an address MetalLB may hand out is one the SNO would lose
+  ## clear of every hosted_cluster_metallb_pools address below (all in
+  ## .100-.199), because an address MetalLB may hand out is one the SNO would lose
   ## an ARP fight for intermittently, long after the install looked fine; and
   ## TWO DIGITS, because this lab's MAC scheme appends the octet verbatim
   ## (52:54:00:e2:54:<octet>) and a three-digit octet is not a valid MAC.
@@ -415,6 +415,9 @@ ip_list:
   #  sit between the hub MetalLB band at 60-62 and the hubd band at 67-69,
   #  which is why setup-compact-cluster's pre-flight refuses to build if a
   #  pool ever claims one. .63 is the last free two-digit octet.)
+  # (The MetalLB pools have since moved to .1xx - each old address plus 100 -
+  #  which frees .60-.63, .67-.69 and .90-.95 for VMs. See
+  #  hosted_cluster_metallb_pools.)
   c1dworker1: 44
   c1dworker2: 45
   c1dworker3: 46
@@ -499,10 +502,9 @@ ip_list:
   # for ssh/management; the fabric itself lives on virbr1 and this VM's
   # second NIC gets clab_fabric_prefix.40 there, same last octet.
   clab: 40
-  ## UDN-over-BGP lab clients. Kept OUT of 60-69 and 90-99 entirely: those are
-  ## the hosted clusters' MetalLB pool bands (hosted_cluster_metallb_pools),
-  ## and .60/.61/.62 in particular are the hcp-cluster1/2/3 API addresses on
-  ## hub1. MetalLB L2 mode ARPs for its pool addresses itself, so a VM holding
+  ## UDN-over-BGP lab clients. Kept clear of the hosted clusters' MetalLB
+  ## addresses (hosted_cluster_metallb_pools - .60-.62, .67-.69 and .90-.95
+  ## when this was written, all in .100-.199 now). MetalLB L2 mode ARPs for its pool addresses itself, so a VM holding
   ## one does not fail cleanly - it fights the API VIP for the address and
   ## whichever answers first wins, intermittently. An earlier version of this
   ## file put udnclient on .60 and the tenant clients on .61-.63, straight
@@ -933,23 +935,33 @@ compact_hosted_cluster_memory: 16384
 ## (hosted_cluster_metallb_network_prefixes below, defaulting to
 ## lab_network_prefix). It must stay clear of every ip_list octet on that hub's
 ## segment and of the .201-.249 libvirt DHCP range, since MetalLB L2 mode ARPs
-## for these addresses itself and nothing else may own them.
+## for these addresses itself and nothing else may own them. roles/setup-hub-acm
+## checks all three before it renders a pool.
+##
+## All of them are in .100-.199, a VIP being the one kind of address that does
+## not need the two-digit MAC every VM's octet becomes (52:54:00:e2:54:<octet>).
+## That leaves .2-.99 to the VMs, which is where they are short of room. Each
+## is its old address plus 100 - hub .160-.162, hubd .167-.169, hub2
+## .190-.195 - so the old notes and backups still read across. Nothing hands
+## out .100-.199 dynamically: libvirt's DHCP range is .201-.249, and the
+## helper dhcpd that would serve .100-.200 (roles/setup-dhcp) is deployed by
+## no playbook.
 hosted_cluster_metallb_pools:
   hcp-cluster1:
     pool: hcp-cluster1-api-pool
     ip:
-      hub: 60
-      hub2: 90
+      hub: 160
+      hub2: 190
   hcp-cluster2:
     pool: hcp-cluster2-api-pool
     ip:
-      hub: 61
-      hub2: 91
+      hub: 161
+      hub2: 191
   hcp-cluster3:
     pool: hcp-cluster3-api-pool
     ip:
-      hub: 62
-      hub2: 92
+      hub: 162
+      hub2: 192
 
   ## Disconnected hosted clusters. Separate clusters from hcp-cluster1/2/3 -
   ## their own names, namespaces, pools and DNS zones - so a connected and a
@@ -973,18 +985,18 @@ hosted_cluster_metallb_pools:
   hcp-cluster1-d:
     pool: hcp-cluster1-d-api-pool
     ip:
-      hub2: 93
-      hubd: 67
+      hub2: 193
+      hubd: 167
   hcp-cluster2-d:
     pool: hcp-cluster2-d-api-pool
     ip:
-      hub2: 94
-      hubd: 68
+      hub2: 194
+      hubd: 168
   hcp-cluster3-d:
     pool: hcp-cluster3-d-api-pool
     ip:
-      hub2: 95
-      hubd: 69
+      hub2: 195
+      hubd: 169
 
   ## Managed by the compact cluster: its only address is under 'compact', the
   ## metallb_hub value compact-cluster/setup_compact_cluster.yaml --tags acm
@@ -1307,7 +1319,7 @@ bminfra_ignition_extra_files: []
 ## plus per-cluster overrides), and the same hosted_cluster_* defaults apply.
 ##
 ## These are their own clusters, not hcp-cluster1/2/3 rendered differently:
-## their own namespace, MetalLB pool (hubd 67-69 above), DNS zone and worker
+## their own namespace, MetalLB pool (hubd .167-.169 above), DNS zone and worker
 ## VMs. The role refuses to run if a name appears in both lists, since it would
 ## collide on all three. The '-d' suffix is just the convention - what matters
 ## is that the sets are disjoint and each name here has a pool entry with a
@@ -1564,7 +1576,7 @@ minio_data_dir: /data/minio
 # 1) Four new entries in the existing `ip_list:` map (pick any free
 #    two-digit last-octets - these four are free as of this repo's
 #    current vars.yaml: 21,22,23 are used by helper/mirror_registry/
-#    minio, 60-62 are the per-hosted-cluster MetalLB pools
+#    minio; the per-hosted-cluster MetalLB pools are in .100-.199
 #    (hosted_cluster_metallb_pools), everything else in 24-27 is open):
 # -----------------------------------------------------------------------
 #   ceph1: 24

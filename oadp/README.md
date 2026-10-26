@@ -719,7 +719,7 @@ needed.
 ### Point DNS at the DR hub
 
 The DR hub is on its own network segment, so the restored hosted clusters come
-up on its MetalLB addresses (`.90`/`.91`/`.92`) rather than hub1's - the pool
+up on its MetalLB addresses (`.190`/`.191`/`.192`) rather than hub1's - the pool
 names are the same, the addresses are not. Re-render the zone files so
 `api`/`api-int` follow them:
 

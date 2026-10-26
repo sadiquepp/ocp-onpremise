@@ -74,10 +74,11 @@ step that failed. Each section names the role task file that automates it.
 
 **Why these addresses.** They were five of the last six free two-digit octets
 on the lab network. They are clear of every hosted-cluster MetalLB pool
-(`hosted_cluster_metallb_pools`: .60-.62, .67-.69, .90-.95) and of both DHCP
+(`hosted_cluster_metallb_pools`, all in .100-.199) and of both DHCP
 ranges (dhcpd .100-.200, libvirt .201-.249). They are two digits because this
 lab builds MACs by appending the octet: `52:54:00:e2:54:100` is not a MAC.
-`.63` is the only free two-digit octet left.
+The MetalLB pools have since moved out of the two-digit range, so `.60`-`.63`,
+`.67`-`.69` and `.90`-`.95` are free as well.
 
 **Why `e2:56` for the second NIC.** `52:54:00:e2:54:<octet>` is the lab-wide
 scheme, and `52:54:00:e2:55:<octet>` is already taken by the containerlab
