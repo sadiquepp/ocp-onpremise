@@ -109,13 +109,19 @@ api.{{ hub2_disconnected_domain }}
     invariant the comment at the top of this dhcp block states. 'sno.sno' reads
     oddly and is right: hostname 'sno' inside zone sno.<base_domain>. -#}
 {{ sno_name }}.{{ sno_name }}.{{ base_domain }}
+{%- elif key == 'sno2' -%}
+{#- sno2 likewise lives in its own zone, sno2.<base_domain>. -#}
+sno2.sno2.{{ base_domain }}
 {%- elif key in compact_dhcp_names -%}
 {{ compact_dhcp_names[key] }}
 {%- else -%}
 {{ key }}.{{ hub_domain }}
 {%- endif -%}
 {%- endmacro %}
-     {% for key, value in ip_list.items() %}
+{# sno2 is optional: no reservation unless sno2_enabled. setup-sno adds its
+   reservation live (virsh net-update) when it builds the VM, so this line only
+   matters on the next full redefine of the network. #}
+     {% for key, value in ip_list.items() if key != 'sno2' or (sno2_enabled | default(false) | bool) %}
 {# '%02d': the octet is used as the MAC's last byte verbatim, so a single-digit
    octet (the compactd cluster's .3-.7) is padded to 03 - otherwise the MAC
    here would be 52:54:00:e2:54:3, which nothing but libvirt accepts. Every

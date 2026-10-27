@@ -27,7 +27,7 @@ spec:
   nodeSelector:
     kubernetes.io/hostname: {{ vrf_fact.node }}
   capture:
-    fabric-nic: interfaces.mac-address=="{{ clab_fabric_mac_prefix | upper }}:{{ ip_list[vrf_fact.ip_key] }}"
+    fabric-nic: interfaces.mac-address=="{{ clab_fabric_mac_prefix | upper }}:{{ '%02d' | format(ip_list[vrf_fact.ip_key] | int) }}"
   desiredState:
     interfaces:
       - name: "{{ '{{' }} capture.fabric-nic.interfaces.0.name {{ '}}' }}.{{ vrf_fact.vlan }}"

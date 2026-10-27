@@ -55,7 +55,7 @@
       --disk "{{ sno_install_folder }}/agent.x86_64.iso",device=cdrom,bus=sata \
       --boot hd,cdrom \
       --network network:default,mac={{ sno_mgmt_mac }},model=virtio \
-      {% if sno_fabric_nic | bool %}--network network:{{ clab_fabric_network }},mac={{ clab_fabric_mac_prefix }}:{{ ip_list[sno_name] }},model=virtio \
+      {% if sno_fabric_nic | bool %}--network network:{{ clab_fabric_network }},mac={{ clab_fabric_mac_prefix }}:{{ ('%02d' | format(ip_list[sno_name] | int)) }},model=virtio \
       {% endif %}--memballoon model=virtio,freePageReporting=on \
       --noautoconsole
   register: sno_virt_install

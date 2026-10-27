@@ -59,13 +59,13 @@
       virsh attach-interface {{ item.0.domain }}
       --type network --source {{ clab_fabric_network }}
       --model virtio
-      --mac {{ clab_fabric_mac_prefix }}:{{ ip_list[item.0.ip_key] }}
+      --mac {{ clab_fabric_mac_prefix }}:{{ ('%02d' | format(ip_list[item.0.ip_key] | int)) }}
       --live --config
   loop: "{{ clab_fabric_nodes | zip(clab_domiflist.results, clab_domstate.results) | list }}"
   loop_control:
     label: "{{ item.0.domain }}"
   when:
-    - clab_fabric_mac_prefix ~ ':' ~ ip_list[item.0.ip_key] not in item.1.stdout
+    - clab_fabric_mac_prefix ~ ':' ~ ('%02d' | format(ip_list[item.0.ip_key] | int)) not in item.1.stdout
     - "'running' in item.2.stdout"
 
 - name: Attach the fabric NIC to shut-off node VMs (persist only)
@@ -74,13 +74,13 @@
       virsh attach-interface {{ item.0.domain }}
       --type network --source {{ clab_fabric_network }}
       --model virtio
-      --mac {{ clab_fabric_mac_prefix }}:{{ ip_list[item.0.ip_key] }}
+      --mac {{ clab_fabric_mac_prefix }}:{{ ('%02d' | format(ip_list[item.0.ip_key] | int)) }}
       --config
   loop: "{{ clab_fabric_nodes | zip(clab_domiflist.results, clab_domstate.results) | list }}"
   loop_control:
     label: "{{ item.0.domain }}"
   when:
-    - clab_fabric_mac_prefix ~ ':' ~ ip_list[item.0.ip_key] not in item.1.stdout
+    - clab_fabric_mac_prefix ~ ':' ~ ('%02d' | format(ip_list[item.0.ip_key] | int)) not in item.1.stdout
     - "'running' not in item.2.stdout"
 
 - name: Re-read each node VM's interfaces
@@ -96,7 +96,7 @@
   ansible.builtin.debug:
     msg: >-
       {{ item.item.domain }} ({{ item.item.ip_key }}):
-      fabric MAC {{ clab_fabric_mac_prefix }}:{{ ip_list[item.item.ip_key] }}
+      fabric MAC {{ clab_fabric_mac_prefix }}:{{ ('%02d' | format(ip_list[item.item.ip_key] | int)) }}
       -> {{ clab_fabric_prefix }}.{{ ip_list[item.item.ip_key] }}/{{ clab_fabric_netmask_bits }},
       expected in-guest name {{ clab_fabric_nic_name }}
   loop: "{{ clab_domiflist_after.results }}"
