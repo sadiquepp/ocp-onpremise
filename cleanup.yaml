@@ -1,12 +1,24 @@
----
 ## Tear the lab down.
 ##
 ##   ansible-playbook -i inventory/hosts cleanup.yaml
 ##
 ## Everything here is idempotent and safe to run against a partially-built
 ## lab: a missing domain or a missing disk is not an error. Run it with no
-## tags to remove everything, or narrow it:
+## tags to remove everything, or narrow it to one or more pieces with
+## --tags a,b:
 ##
+##   --tags hub      hub1 - VMs, VM folder and install folder
+##   --tags hub2     the DR hub (setup_hub_cluster2.yaml), the same way
+##   --tags hubd     the disconnected hub (setup_hub_cluster.yaml
+##                   -e disconnected_install=true) - VMs, folders, staged
+##                   oc-mirror manifests and its egress-blocking iptables rules
+##   --tags hub2d    the disconnected DR hub, the same way
+##   --tags hosted   the hosted clusters' worker VMs (c1 and c1-d)
+##   --tags helper   the helper VM
+##   --tags registry shut the mirror registry down (see below - it is kept)
+##   --tags minio    the MinIO VM
+##   --tags ceph     the Ceph VMs and their OSD disks - also the DR demo's
+##                   deliberate storage-loss step
 ##   --tags sno      the single-node OpenShift cluster only
 ##   --tags sno2     the second single-node cluster (setup_sno2.yaml) only
 ##   --tags compact  the three-node compact cluster only, with the worker VMs
@@ -17,20 +29,24 @@
 ##                   its egress-blocking iptables rules)
 ##   --tags udnlab   the UDN/BGP/EVPN lab - clab VM, client VMs, fabric net
 ##
-## The untagged tasks (hub, hub2, hosted clusters, helper, registry, minio,
-## ceph) have no tag of their own, so they run on an untagged invocation and
-## are skipped by any tag above.
+## Every tag leaves the others' VMs alone: hub, hub2, hubd and hub2d are
+## namespaced apart, so removing one never touches another. /root/.ssh/known_hosts
+## is cleared on every run, whatever the tags, since a rebuilt VM comes back on
+## the same address with a new host key.
 ##
-## THE MIRROR REGISTRY IS ONLY SHUT DOWN, never deleted. Its VM, its 500G disk
-## and everything oc-mirror put on it survive, so the disconnected flows can be
-## picked up again with `virsh start registry` instead of another mirror run
-## over tens of gigabytes. The CA this host trusts and its podman login are
-## left alone too, since they still match that registry.
+## THE MIRROR REGISTRY IS ONLY SHUT DOWN, never deleted, by a plain run. Its VM,
+## its 500G disk and everything oc-mirror put on it survive, so the
+## disconnected flows can be picked up again with `virsh start registry`
+## instead of another mirror run over tens of gigabytes. The CA this host
+## trusts and its podman login are left alone too, since they still match that
+## registry.
 ##
-##   ansible-playbook -i inventory/hosts cleanup-mirror-registry.yaml
+##   ansible-playbook -i inventory/hosts cleanup.yaml --tags registry-destroy
 ##
 ## is the one that really removes it - the VM, the disks and, unless told
-## otherwise, the local trust that would otherwise outlive it.
+## otherwise, the local trust that would otherwise outlive it. It is tagged
+## `never`, so no run that does not name it can reach it - not even
+## `--tags all`. See the second play below.
 ##
 ## WHAT THIS DOES NOT TOUCH. The DHCP reservations these VMs hold on the
 ## libvirt 'default' network are left in place. Every MAC in this lab is
@@ -39,124 +55,119 @@
 ## them would be churn with a failure mode (a half-removed <host> entry) and
 ## no benefit.
 ##
-## ORDER MATTERS, and not the way the old version of this file had it. A
-## `virsh undefine` on a RUNNING domain succeeds by converting it to a
-## transient domain - it does not stop it - while `virsh destroy` on a domain
-## that is already off fails. Destroy first, then undefine, and tolerate both
-## failing: that is the only sequence that works whatever state the domain was
-## in. The commands are also separated by `;` rather than `&&`, because the
-## chained form stopped at the first VM that did not exist and left the rest
-## of the line unexecuted while the task still reported success, the trailing
-## `rm -f` having reset the return code.
+## HOW A VM IS REMOVED. roles/cleanup-vms does it for most of the clusters
+## below: destroy, then undefine, tolerating both failing, then delete its
+## disks and folders. Its tasks say why that order and no other. It is pulled
+## in with import_role, not include_role, so the tags on each call reach the
+## role's tasks.
 - name: Cleanup
   hosts: localhost
   become: true
   vars_files:
     - vars.yaml
   tasks:
-  - name: Destroy Hub Workers
-    shell: |
-      for d in hub_worker1 hub_worker2 hub_worker3; do
-        virsh destroy  "$d" >/dev/null 2>&1 || true
-        virsh undefine "$d" >/dev/null 2>&1 || true
-      done
-      rm -f /var/lib/libvirt/images/hub/hub_worker1.qcow2
-      rm -f /var/lib/libvirt/images/hub/hub_worker2.qcow2
-      rm -f /var/lib/libvirt/images/hub/hub_worker3.qcow2
-      rm -f /var/lib/libvirt/images/hub/storage_worker1.qcow2
-      rm -f /var/lib/libvirt/images/hub/storage_worker2.qcow2
-      rm -f /var/lib/libvirt/images/hub/storage_worker3.qcow2
-
-  - name: Destroy Hub2 Workers
-    shell: |
-      for d in hub2_worker1 hub2_worker2 hub2_worker3; do
-        virsh destroy  "$d" >/dev/null 2>&1 || true
-        virsh undefine "$d" >/dev/null 2>&1 || true
-      done
-      rm -f /var/lib/libvirt/images/hub2/hub2_worker1.qcow2
-      rm -f /var/lib/libvirt/images/hub2/hub2_worker2.qcow2
-      rm -f /var/lib/libvirt/images/hub2/hub2_worker3.qcow2
-      rm -f /var/lib/libvirt/images/hub2/storage_worker1.qcow2
-      rm -f /var/lib/libvirt/images/hub2/storage_worker2.qcow2
-
-  - name: Destroy Hub Masters
-    shell: |
-      for d in hub_master1 hub_master2 hub_master3; do
-        virsh destroy  "$d" >/dev/null 2>&1 || true
-        virsh undefine "$d" >/dev/null 2>&1 || true
-      done
-      rm -f /var/lib/libvirt/images/hub/hub_master1.qcow2
-      rm -f /var/lib/libvirt/images/hub/hub_master2.qcow2
-      rm -f /var/lib/libvirt/images/hub/hub_master3.qcow2
-
-  - name: Destroy Hub2 Masters
-    shell: |
-      for d in hub2_master1 hub2_master2 hub2_master3; do
-        virsh destroy  "$d" >/dev/null 2>&1 || true
-        virsh undefine "$d" >/dev/null 2>&1 || true
-      done
-      rm -f /var/lib/libvirt/images/hub2/hub2_master1.qcow2
-      rm -f /var/lib/libvirt/images/hub2/hub2_master2.qcow2
-      rm -f /var/lib/libvirt/images/hub2/hub2_master3.qcow2
-
-  - name: Destroy hosted cluster workers
-    shell: |
-      for d in c1_worker1 c1_worker2 c1_worker3; do
-        virsh destroy  "$d" >/dev/null 2>&1 || true
-        virsh undefine "$d" >/dev/null 2>&1 || true
-      done
-      rm -f /var/lib/libvirt/images/hosted_cluster/c1_worker1.qcow2
-      rm -f /var/lib/libvirt/images/hosted_cluster/c1_worker2.qcow2
-      rm -f /var/lib/libvirt/images/hosted_cluster/c1_worker3.qcow2
-
-  - name: Destroy disconnected hosted cluster workers
-    shell: |
-      for d in c1-d-worker1 c1-d-worker2 c1-d-worker3; do
-        virsh destroy  "$d" >/dev/null 2>&1 || true
-        virsh undefine "$d" >/dev/null 2>&1 || true
-      done
-      rm -f /var/lib/libvirt/images/hosted_cluster_disconnected/c1-d-worker1.qcow2
-      rm -f /var/lib/libvirt/images/hosted_cluster_disconnected/c1-d-worker2.qcow2
-      rm -f /var/lib/libvirt/images/hosted_cluster_disconnected/c1-d-worker3.qcow2
-
-  - name: Destroy Hub Bootstrap
-    shell: |
-      virsh destroy  hub_bootstrap >/dev/null 2>&1 || true
-      virsh undefine hub_bootstrap >/dev/null 2>&1 || true
-      rm -f /var/lib/libvirt/images/hub/hub_bootstrap.qcow2
-
-  ## The install folders, for the same reason the SNO's goes below: each holds
-  ## auth/kubeconfig - the only copy of the credentials for a cluster that no
-  ## longer exists - plus the agent ISO its domain booted from. A stale
-  ## kubeconfig left on this host is what setup_udn_bgp_lab.yaml's pre-flight
-  ## exists to catch, because an `oc` that silently falls through to the WRONG
-  ## cluster looks exactly like a working run.
+  ## The install folders go with the VMs: each holds auth/kubeconfig - the
+  ## only copy of the credentials for a cluster that no longer exists - plus
+  ## the agent ISO its domain booted from. A stale kubeconfig left on this
+  ## host is what setup_udn_bgp_lab.yaml's pre-flight exists to catch, because
+  ## an `oc` that silently falls through to the WRONG cluster looks exactly
+  ## like a working run.
   ##
-  ## The VM folders go too. The tasks above delete the disks they know the
-  ## names of; anything else in there belongs to the cluster being removed.
-  ##
-  ## setup-hub-cluster recreates both on a fresh install, so this costs nothing.
-  - name: Remove the hub install and VM folders
-    ansible.builtin.file:
-      path: "{{ item }}"
-      state: absent
-    loop:
-      - "{{ hub_install_folder }}"
-      - "{{ hub_vm_folder }}"
-      - "{{ hub2_install_folder }}"
-      - "{{ hub2_vm_folder }}"
+  ## The VM folders hold every disk of the cluster, its storage workers'
+  ## included, and anything else in there belongs to the cluster being
+  ## removed. The setup roles recreate both on a fresh install, so this costs
+  ## nothing.
+  - name: Destroy hub1
+    tags: [hub]
+    ansible.builtin.import_role:
+      name: cleanup-vms
+    vars:
+      cleanup_vms_name: hub1
+      cleanup_vms_domains: [hub_bootstrap, hub_master1, hub_master2, hub_master3,
+                            hub_worker1, hub_worker2, hub_worker3]
+      cleanup_vms_paths:
+        - "{{ hub_vm_folder }}"
+        - "{{ hub_install_folder }}"
 
-  - name: Destroy Hub2 Bootstrap
-    shell: |
-      virsh destroy  hub2_bootstrap >/dev/null 2>&1 || true
-      virsh undefine hub2_bootstrap >/dev/null 2>&1 || true
-      rm -f /var/lib/libvirt/images/hub2/hub2_bootstrap.qcow2
+  - name: Destroy hub2
+    tags: [hub2]
+    ansible.builtin.import_role:
+      name: cleanup-vms
+    vars:
+      cleanup_vms_name: hub2
+      cleanup_vms_domains: [hub2_bootstrap, hub2_master1, hub2_master2, hub2_master3,
+                            hub2_worker1, hub2_worker2, hub2_worker3]
+      cleanup_vms_paths:
+        - "{{ hub2_vm_folder }}"
+        - "{{ hub2_install_folder }}"
 
-  - name: Destroy Helper VM
-    shell: |
-      virsh destroy  helper >/dev/null 2>&1 || true
-      virsh undefine helper >/dev/null 2>&1 || true
-      rm -f /var/lib/libvirt/images/helper_disk.qcow2
+  ## The disconnected hubs also leave behind the oc-mirror cluster-resources
+  ## manifests staged on this host, which describe the mirror as it was at
+  ## install time, and the iptables rules that cut their nodes off from the
+  ## internet. Both go: each build re-fetches the manifests, and stale rules
+  ## would cut off whatever next takes the same addresses.
+  - name: Destroy the disconnected hub (hubd)
+    tags: [hubd]
+    ansible.builtin.import_role:
+      name: cleanup-vms
+    vars:
+      cleanup_vms_name: hubd
+      cleanup_vms_domains: [hubd_bootstrap, hubd_master1, hubd_master2, hubd_master3,
+                            hubd_worker1, hubd_worker2, hubd_worker3]
+      cleanup_vms_paths:
+        - "{{ hub_disconnected_vm_folder }}"
+        - "{{ hub_disconnected_install_folder }}"
+        - "{{ hub_disconnected_cluster_resources_dir | default('/tmp/hubd-cluster-resources') }}"
+        - "{{ hub_disconnected_cluster_resources_archive | default('/tmp/hubd-cluster-resources.tar.gz') }}"
+      cleanup_vms_nat_label: "{{ hub_disconnected_name | default('hubd') }}"
+
+  - name: Destroy the disconnected DR hub (hub2d)
+    tags: [hub2d]
+    ansible.builtin.import_role:
+      name: cleanup-vms
+    vars:
+      cleanup_vms_name: hub2d
+      cleanup_vms_domains: [hub2d_bootstrap, hub2d_master1, hub2d_master2, hub2d_master3,
+                            hub2d_worker1, hub2d_worker2, hub2d_worker3]
+      cleanup_vms_paths:
+        - "{{ hub2_disconnected_vm_folder }}"
+        - "{{ hub2_disconnected_install_folder }}"
+        - "{{ hub2_disconnected_cluster_resources_dir | default('/tmp/hub2d-cluster-resources') }}"
+        - "{{ hub2_disconnected_cluster_resources_archive | default('/tmp/hub2d-cluster-resources.tar.gz') }}"
+      cleanup_vms_nat_label: "{{ hub2_disconnected_name | default('hub2d') }}"
+
+  - name: Destroy the hosted cluster workers
+    tags: [hosted]
+    ansible.builtin.import_role:
+      name: cleanup-vms
+    vars:
+      cleanup_vms_name: hosted cluster c1
+      cleanup_vms_domains: [c1_worker1, c1_worker2, c1_worker3]
+      cleanup_vms_paths:
+        - /var/lib/libvirt/images/hosted_cluster/c1_worker1.qcow2
+        - /var/lib/libvirt/images/hosted_cluster/c1_worker2.qcow2
+        - /var/lib/libvirt/images/hosted_cluster/c1_worker3.qcow2
+
+  - name: Destroy the disconnected hosted cluster workers
+    tags: [hosted]
+    ansible.builtin.import_role:
+      name: cleanup-vms
+    vars:
+      cleanup_vms_name: hosted cluster c1-d
+      cleanup_vms_domains: [c1-d-worker1, c1-d-worker2, c1-d-worker3]
+      cleanup_vms_paths:
+        - /var/lib/libvirt/images/hosted_cluster_disconnected/c1-d-worker1.qcow2
+        - /var/lib/libvirt/images/hosted_cluster_disconnected/c1-d-worker2.qcow2
+        - /var/lib/libvirt/images/hosted_cluster_disconnected/c1-d-worker3.qcow2
+
+  - name: Destroy the helper VM
+    tags: [helper]
+    ansible.builtin.import_role:
+      name: cleanup-vms
+    vars:
+      cleanup_vms_name: helper
+      cleanup_vms_domains: [helper]
+      cleanup_vms_paths: [/var/lib/libvirt/images/helper_disk.qcow2]
 
   ## The mirror registry is the one VM here that is kept. Everything else in
   ## this lab is rebuilt from a playbook in minutes; the registry's content is
@@ -168,12 +179,13 @@
   ## `virsh start registry` brings it back, and the disconnected playbooks work
   ## again with no mirror run: this host's CA trust and podman login are
   ## untouched here, and the registry comes up with the same name, address and
-  ## certificate. To really remove it, run cleanup-mirror-registry.yaml.
+  ## certificate. To really remove it, run with --tags registry-destroy.
   ##
   ## Graceful first (quay stops cleanly, so a restart has no recovery to do),
   ## with a forced power-off only if it does not stop in three minutes. A
   ## domain that is absent or already off is left as it is.
   - name: Check the mirror registry VM's state
+    tags: [registry]
     shell: "virsh domstate {{ mirror_registry_name | default('registry') }} 2>/dev/null || true"
     register: mirror_registry_state
     changed_when: false
@@ -181,14 +193,17 @@
   ## 'running', but also 'paused' or 'pmsuspended' - anything holding its
   ## memory. Absent is '' and gives nothing to do.
   - name: Note whether it is up
+    tags: [registry]
     ansible.builtin.set_fact:
       mirror_registry_up: "{{ mirror_registry_state.stdout | trim not in ['', 'shut off'] }}"
 
   - name: Ask the mirror registry VM to shut down
+    tags: [registry]
     shell: "virsh shutdown {{ mirror_registry_name | default('registry') }}"
     when: mirror_registry_up | bool
 
   - name: Wait for it to stop (up to 3 minutes)
+    tags: [registry]
     shell: "virsh domstate {{ mirror_registry_name | default('registry') }} 2>/dev/null || true"
     register: mirror_registry_stopping
     until: "'shut off' in mirror_registry_stopping.stdout"
@@ -202,12 +217,14 @@
   ## power-off endangers - quay's data is on the disk and its database is
   ## crash-safe - so this is a last resort, not a risk.
   - name: Force it off if the graceful shutdown did not finish
+    tags: [registry]
     shell: "virsh destroy {{ mirror_registry_name | default('registry') }} >/dev/null 2>&1 || true"
     when:
       - mirror_registry_up | bool
       - "'shut off' not in (mirror_registry_stopping.stdout | default(''))"
 
   - name: Report what happened to the mirror registry
+    tags: [registry]
     ansible.builtin.debug:
       msg: >-
         {{ mirror_registry_name | default('registry') }}:
@@ -217,36 +234,38 @@
                  | ternary('already shut off - VM and mirrored content kept.',
                            'not defined, nothing to do.')) }}
         Start it again with: virsh start {{ mirror_registry_name | default('registry') }}
-        - or remove it for good with cleanup-mirror-registry.yaml.
+        - or remove it for good with: cleanup.yaml --tags registry-destroy
 
-  - name: Destroy Minio VM
-    shell: |
-      virsh destroy  minio >/dev/null 2>&1 || true
-      virsh undefine minio >/dev/null 2>&1 || true
-      rm -f /var/lib/libvirt/images/minio_disk.qcow2
+  - name: Destroy the MinIO VM
+    tags: [minio]
+    ansible.builtin.import_role:
+      name: cleanup-vms
+    vars:
+      cleanup_vms_name: minio
+      cleanup_vms_domains: [minio]
+      cleanup_vms_paths: [/var/lib/libvirt/images/minio_disk.qcow2]
 
-  - name: Destroy Ceph VMs
-    shell: |
-      for d in ceph1 ceph2 ceph3 cephadmin; do
-        virsh destroy  "$d" >/dev/null 2>&1 || true
-        virsh undefine "$d" >/dev/null 2>&1 || true
-      done
-      rm -f /var/lib/libvirt/images/ceph1_disk.qcow2
-      rm -f /var/lib/libvirt/images/ceph2_disk.qcow2
-      rm -f /var/lib/libvirt/images/ceph3_disk.qcow2
-      rm -f /var/lib/libvirt/images/cephadmin_disk.qcow2
-
-  - name: Destroy Ceph OSD Disks
-    shell: |
-      rm -f /var/lib/libvirt/images/ceph1_osd1.qcow2
-      rm -f /var/lib/libvirt/images/ceph1_osd2.qcow2
-      rm -f /var/lib/libvirt/images/ceph1_osd3.qcow2
-      rm -f /var/lib/libvirt/images/ceph2_osd1.qcow2
-      rm -f /var/lib/libvirt/images/ceph2_osd2.qcow2
-      rm -f /var/lib/libvirt/images/ceph2_osd3.qcow2
-      rm -f /var/lib/libvirt/images/ceph3_osd1.qcow2
-      rm -f /var/lib/libvirt/images/ceph3_osd2.qcow2
-      rm -f /var/lib/libvirt/images/ceph3_osd3.qcow2
+  - name: Destroy the Ceph VMs and their OSD disks
+    tags: [ceph]
+    ansible.builtin.import_role:
+      name: cleanup-vms
+    vars:
+      cleanup_vms_name: ceph
+      cleanup_vms_domains: [ceph1, ceph2, ceph3, cephadmin]
+      cleanup_vms_paths:
+        - /var/lib/libvirt/images/ceph1_disk.qcow2
+        - /var/lib/libvirt/images/ceph2_disk.qcow2
+        - /var/lib/libvirt/images/ceph3_disk.qcow2
+        - /var/lib/libvirt/images/cephadmin_disk.qcow2
+        - /var/lib/libvirt/images/ceph1_osd1.qcow2
+        - /var/lib/libvirt/images/ceph1_osd2.qcow2
+        - /var/lib/libvirt/images/ceph1_osd3.qcow2
+        - /var/lib/libvirt/images/ceph2_osd1.qcow2
+        - /var/lib/libvirt/images/ceph2_osd2.qcow2
+        - /var/lib/libvirt/images/ceph2_osd3.qcow2
+        - /var/lib/libvirt/images/ceph3_osd1.qcow2
+        - /var/lib/libvirt/images/ceph3_osd2.qcow2
+        - /var/lib/libvirt/images/ceph3_osd3.qcow2
 
   ## -------------------------------------------------------------------------
   ## The single-node OpenShift cluster (setup_sno.yaml)
@@ -420,6 +439,135 @@
       path: "{{ playbook_dir }}/udn-bgp-evpn/udn-bgp"
       state: absent
 
-  - name: Cleanup SSH Know Hostss
+  - name: Clear root's SSH known_hosts
+    tags: [always]
     shell: |
       rm -f /root/.ssh/known_hosts
+
+## ===========================================================================
+## Remove the mirror registry for good: the VM, its disks, and the trust this
+## host holds for it.
+##
+##   ansible-playbook -i inventory/hosts cleanup.yaml --tags registry-destroy
+##
+## This is the counterpart to the play above, which deliberately only SHUTS the
+## registry DOWN. Rebuilding it costs an oc-mirror run of tens of gigabytes, so
+## tearing the lab's clusters down leaves it stopped and intact; this play is
+## the explicit "I am done with it" step, and it is tagged `never` so that
+## nothing short of naming it runs it.
+##
+## WHAT GOES:
+##   - the registry VM (destroyed and undefined)
+##   - its root disk and its extra disk, with every mirrored image on them
+##   - this host's trust in it: the CA in /etc/pki/ca-trust/source/anchors and
+##     the podman login entry in mirror_registry_authfile
+##
+## The trust goes by default because a rebuilt registry generates a NEW CA, and
+## a stale one is worse than none: it is what roles/setup-compact-cluster and
+## setup_hub_cluster.yaml check to decide the mirror registry "has been set up",
+## so leaving it behind makes a disconnected run start and then fail on a TLS
+## error instead of stopping with a clear message. Keep it with:
+##
+##   -e mirror_registry_remove_local_trust=false
+##
+## Only the mirror registry's own entry is removed from the authfile
+## (podman logout, not rm): mirror_registry_authfile defaults to
+## /root/.docker/config.json, which also holds your quay.io and
+## registry.redhat.io credentials.
+##
+## WHAT STAYS: everything else. The DHCP reservation and DNS record for the
+## registry's address come from ip_list in vars.yaml, like every other VM's,
+## and a rebuild reuses them - the same reasoning as the play above. Clusters
+## already installed from this registry keep running; they only break when
+## they next need to pull an image.
+##
+## Re-create it with:
+##   ansible-playbook -i inventory/hosts setup_mirror_registry.yaml \
+##     -e disconnected_install=true --ask-vault-pass
+- name: Remove the mirror registry
+  hosts: localhost
+  become: true
+  tags: [never, registry-destroy]
+  vars_files:
+    - vars.yaml
+  vars:
+    ## Also remove the CA this host trusts and the podman login for the
+    ## registry. See the note above before turning this off.
+    mirror_registry_remove_local_trust: true
+  tasks:
+  - name: Report what is about to be removed
+    ansible.builtin.debug:
+      msg: >-
+        Removing the mirror registry VM '{{ mirror_registry_name }}'
+        ({{ mirror_registry_domain }}:{{ mirror_registry_port }}), its disks
+        and every mirrored image on them.
+        Local CA trust and podman login:
+        {{ (mirror_registry_remove_local_trust | bool) | ternary('also removed', 'kept') }}.
+
+  ## Destroy before undefine, and tolerate both failing - the same sequence and
+  ## for the same reason as roles/cleanup-vms: undefining a running domain makes it
+  ## transient rather than stopping it, and destroying one that is already off
+  ## fails.
+  - name: Destroy and undefine the mirror registry VM
+    shell: |
+      virsh destroy  {{ mirror_registry_name }} >/dev/null 2>&1 || true
+      virsh undefine {{ mirror_registry_name }} >/dev/null 2>&1 || true
+
+  - name: Delete its disks
+    ansible.builtin.file:
+      path: "/var/lib/libvirt/images/{{ item }}"
+      state: absent
+    loop:
+      - "{{ mirror_registry_disk }}"
+      - "{{ mirror_registry_extra_disk }}"
+
+  ## The registry's own copy of these lives on the disk just deleted; this is
+  ## the hypervisor's side of it, left by roles/setup-mirror-registry-trust.
+  - name: Log podman out of the mirror registry
+    shell: >-
+      podman logout --authfile {{ mirror_registry_authfile }}
+      {{ mirror_registry_domain }}:{{ mirror_registry_port }}
+    register: mirror_registry_logout
+    failed_when: false
+    changed_when: "'Removed login credentials' in mirror_registry_logout.stdout"
+    when: mirror_registry_remove_local_trust | bool
+
+  - name: Remove the mirror registry CA from this host's trust anchors
+    ansible.builtin.file:
+      path: /etc/pki/ca-trust/source/anchors/mirror-registry-rootCA.pem
+      state: absent
+    register: mirror_registry_ca
+    when: mirror_registry_remove_local_trust | bool
+
+  - name: Rebuild the CA trust bundle
+    ansible.builtin.command:
+      cmd: update-ca-trust extract
+    when:
+      - mirror_registry_remove_local_trust | bool
+      - mirror_registry_ca is changed
+
+  ## Staged copies of what oc-mirror published, pulled off the registry VM by
+  ## the disconnected cluster builds. They describe a registry that no longer
+  ## exists, and each build re-fetches them anyway.
+  - name: Remove the staged oc-mirror cluster-resources on this host
+    ansible.builtin.file:
+      path: "{{ item }}"
+      state: absent
+    loop:
+      - "{{ hub_disconnected_cluster_resources_dir | default('/tmp/hubd-cluster-resources') }}"
+      - "{{ hub_disconnected_cluster_resources_archive | default('/tmp/hubd-cluster-resources.tar.gz') }}"
+      - "{{ hub2_disconnected_cluster_resources_dir | default('/tmp/hub2d-cluster-resources') }}"
+      - "{{ hub2_disconnected_cluster_resources_archive | default('/tmp/hub2d-cluster-resources.tar.gz') }}"
+      - "/tmp/{{ compactd_name | default('compactd') }}-cluster-resources"
+      - "/tmp/{{ compactd_name | default('compactd') }}-cluster-resources.tar.gz"
+
+  - name: Report
+    ansible.builtin.debug:
+      msg: >-
+        {{ mirror_registry_name }} is gone, with its disks and everything
+        mirrored onto them.
+        {{ 'The CA and podman login for it were removed from this host too.'
+           if (mirror_registry_remove_local_trust | bool)
+           else 'The CA and podman login for it were kept, and now point at a registry that no longer exists.' }}
+        Rebuild it with: ansible-playbook -i inventory/hosts
+        setup_mirror_registry.yaml -e disconnected_install=true --ask-vault-pass

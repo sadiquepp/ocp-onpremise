@@ -1055,7 +1055,7 @@ harmless: the cluster from the earlier run already holds its copy as a Secret.
 
 A Ceph cluster shared with a hub also shares the hub's lifecycle. The DR
 walkthrough in [steps.md](../steps.md) destroys and rebuilds Ceph with
-`cleanup-ceph.yaml`. Doing that takes the compact cluster's volumes with it,
+`cleanup.yaml --tags ceph`. Doing that takes the compact cluster's volumes with it,
 etcd included.
 
 ##### Switching a cluster that already has LVM Storage
@@ -1132,7 +1132,7 @@ The RBD images the cluster left behind stay in the pool. To remove the Ceph
 cluster too, and only if no hub still uses it, run from the repository root:
 
 ```bash
-ansible-playbook -i inventory/hosts cleanup-ceph.yaml
+ansible-playbook -i inventory/hosts cleanup.yaml --tags ceph
 virsh list --all | grep -E 'ceph[123]|cephadmin'     # nothing
 ```
 

@@ -1,6 +1,6 @@
 ## Shuts down the original (hub1) management cluster's VMs so a
 ## replacement hub can be built and used for the OADP restore-to-new-hub
-## test. Unlike cleanup-hub.yaml, this does NOT undefine the domains or
+## test. Unlike `cleanup.yaml --tags hub`, this does NOT undefine the domains or
 ## delete disks - the VMs and their DNS/LB records are left in place so
 ## the old hub can still be inspected, or powered back on, if needed.
 ##

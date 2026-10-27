@@ -433,7 +433,8 @@ wipe_lab() {
   - the SNO and its install folder, and sno2's if it exists
   - the helper VM, and the containerlab VM with the fabric inside it
   - the tenant client VMs
-  - hub2, the mirror registry, minio and the Ceph VMs, if you have them
+  - hub2, the disconnected hubs (hubd, hub2d), minio and the Ceph VMs,
+    if you have them - the mirror registry is only shut down
 
 There is no undo and no snapshot. If anything on this host matters and is not
 part of this lab, stop now and check cleanup.yaml.
