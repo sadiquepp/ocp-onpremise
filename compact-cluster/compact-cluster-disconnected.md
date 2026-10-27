@@ -59,8 +59,8 @@ Each step names the role file that automates it.
 | master1 (rendezvous host) | `192.168.122.3` | `ip_list.compactd_master1` |
 | master2 | `192.168.122.4` | `ip_list.compactd_master2` |
 | master3 | `192.168.122.5` | `ip_list.compactd_master3` |
-| API VIP: `api`, `api-int` | `192.168.122.6` | `ip_list.compactd_api` |
-| Ingress VIP: `*.apps` | `192.168.122.7` | `ip_list.compactd_ingress` |
+| API VIP: `api`, `api-int` | `192.168.122.106` | `ip_list.compactd_api` |
+| Ingress VIP: `*.apps` | `192.168.122.107` | `ip_list.compactd_ingress` |
 | Bond | `bond0`, `active-backup`, `miimon=100`, `primary=enp1s0` | role defaults, as for `compact` |
 | Bond port 1 / port 2 MACs | `52:54:00:e2:54:0N` / `52:54:00:e2:56:0N` (N = 3, 4, 5) | `compact_*_mac_prefix` |
 | Mirror registry | `registry.hub.mylab.com:8443` (`192.168.122.22`) | `mirror_registry_domain`, `ip_list.registry` |
@@ -70,12 +70,17 @@ Each step names the role file that automates it.
 | Default StorageClass | `lvms-vg1` (LVM Storage), from the mirrored catalog | `roles/setup-lvm-storage`, `use_lvm_storage` in `vars.yaml` |
 | Egress block | `LAB_NO_NAT` (nat) and `LAB_NO_EGRESS` (filter) chains | shared with hubd |
 
-**Why `.3`-`.7`.** All but one of the free two-digit octets are now in use.
-`.2`-`.9` are free and sit below both DHCP ranges (dhcpd `.100`-`.200`,
+**Why `.3`-`.5` and `.106`/`.107`.** The nodes were picked when no two-digit
+octet was free. `.2`-`.9` sit below both DHCP ranges (dhcpd `.100`-`.200`,
 libvirt `.201`-`.249`) and outside every MetalLB pool. The lab builds each MAC
 from the octet, so a single digit is **zero-padded**: `.3` becomes
 `52:54:00:e2:54:03`. The role and libvirt's DHCP reservations both pad this
 way. Every two-digit octet renders exactly as before.
+
+The VIPs build no MAC, so they sit in `.100`-`.199` with the lab's other VIPs,
+at their old `.6`/`.7` plus 100. They are fixed at install time, so a cluster
+built on `.6`/`.7` keeps them until it is reinstalled. See
+[ip-allocation.md](../ip-allocation.md).
 
 ---
 
@@ -182,8 +187,8 @@ export OCP=4.22.10                         # ocp_major_version.ocp_minor_version
 export WORK=/var/lib/libvirt/images/compactd_install
 export VMDIR=/var/lib/libvirt/images/compactd
 
-export API_VIP=$LAB.6
-export INGRESS_VIP=$LAB.7
+export API_VIP=$LAB.106
+export INGRESS_VIP=$LAB.107
 export NODES="master1:3 master2:4 master3:5"   # hostname:octet, rendezvous host first
 export RENDEZVOUS=$LAB.3
 
@@ -210,8 +215,8 @@ The same records as for the connected cluster
 
 | Name | Address |
 |---|---|
-| `api`, `api-int` | `192.168.122.6` |
-| `*.apps` | `192.168.122.7` |
+| `api`, `api-int` | `192.168.122.106` |
+| `*.apps` | `192.168.122.107` |
 | `master1`, `master2`, `master3` | `192.168.122.3`, `.4`, `.5` (plus PTRs) |
 
 `setup_bm_host.yaml --tags dns` renders the zone and reverse records on the
@@ -223,7 +228,7 @@ forwarder, which is the one name a disconnected node must resolve. The nodes
 do not need any internet names.
 
 ```bash
-getent hosts api.$ZONE                                  # 192.168.122.6 on the hypervisor
+getent hosts api.$ZONE                                  # 192.168.122.106 on the hypervisor
 dig +short @$LAB.1 registry.hub.mylab.com               # 192.168.122.22, as the nodes see it
 ```
 

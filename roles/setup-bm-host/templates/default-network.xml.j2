@@ -134,7 +134,7 @@ sno2.sno2.{{ base_domain }}
    matters on the next full redefine of the network. #}
      {% for key, value in ip_list.items() if key not in vip_keys and (key != 'sno2' or (sno2_enabled | default(false) | bool)) %}
 {# '%02d': the octet is used as the MAC's last byte verbatim, so a single-digit
-   octet (the compactd cluster's .3-.7) is padded to 03 - otherwise the MAC
+   octet (the compactd cluster's .3-.5) is padded to 03 - otherwise the MAC
    here would be 52:54:00:e2:54:3, which nothing but libvirt accepts. Every
    two-digit octet renders exactly as before. #}
      <host mac='52:54:00:e2:54:{{ '%02d' | format(value | int) }}' name='{{ dhcp_fqdn(key) }}' ip='{{ lab_network_prefix }}.{{ value }}'/>

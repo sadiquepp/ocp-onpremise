@@ -20,8 +20,9 @@ from these maps:
   so a three-digit octet cannot become a MAC. Single digits (`.2`-`.9`) are
   zero-padded to `:02`-`:09`.
 - **VIPs belong in `.100`-`.199`.** A VIP has no MAC, so it does not use up a
-  two-digit octet. The helper haproxy's VIPs (`ip_list.*lb`) and the MetalLB
-  addresses live there, each at its old two-digit address plus 100.
+  two-digit octet. The helper haproxy's VIPs (`ip_list.*lb`), the compact
+  clusters' keepalived VIPs and the MetalLB addresses live there, each at its
+  old address plus 100.
   `roles/setup-bm-host` gives no `ip_list` VIP a libvirt DHCP reservation, and
   `roles/setup-hub-acm` refuses a MetalLB address that is any `ip_list`
   entry's, that is inside libvirt's DHCP pool, or that two clusters share.
@@ -49,6 +50,13 @@ zones and libvirt's dnsmasq cap TTLs at 60s, so clients may keep the old address
 for up to a minute. The clusters need no change: their certificates name
 `api.<cluster>`, not an address.
 
+The compact clusters' VIPs (`.17`/`.18` to `.117`/`.118`, `.6`/`.7` to
+`.106`/`.107`) are different: they are set in each cluster's `install-config`,
+so a compact cluster built on the old addresses keeps them until it is
+reinstalled. Re-rendering DNS before then points its `api` and `*.apps` at
+addresses it does not answer on, so run `dns` together with the reinstall, or
+point the names back by hand until then.
+
 `virtnet` is not needed. It only drops the VIPs' unused DHCP reservations, and
 it restarts the `default` network under every VM, so leave it for the next
 rebuild.
@@ -63,8 +71,7 @@ rebuild.
 | `.3` | VM | compactd (disconnected three-node compact cluster) master1 | `ip_list.compactd_master1` |  |
 | `.4` | VM | compactd (disconnected three-node compact cluster) master2 | `ip_list.compactd_master2` |  |
 | `.5` | VM | compactd (disconnected three-node compact cluster) master3 | `ip_list.compactd_master3` |  |
-| `.6` | VIP | compactd API VIP (keepalived on its masters) | `ip_list.compactd_api` |  |
-| `.7` | VIP | compactd *.apps ingress VIP (keepalived on its masters) | `ip_list.compactd_ingress` |  |
+| `.6`–`.7` |  |  |  |  |
 | `.8` | VM | hcp-compact1 worker1 (hosted cluster managed by the compact cluster) | `ip_list.hcpc1worker1` |  |
 | `.9` | VM | hcp-compact1 worker2 (hosted cluster managed by the compact cluster) | `ip_list.hcpc1worker2` |  |
 | `.10` | VM | hub2d (disconnected DR hub) bootstrap | `ip_list.hub2d_bootstrap` |  |
@@ -74,9 +81,7 @@ rebuild.
 | `.14` | VM | hub2d (disconnected DR hub) worker1 | `ip_list.hub2d_worker1` |  |
 | `.15` | VM | hub2d (disconnected DR hub) worker2 | `ip_list.hub2d_worker2` |  |
 | `.16` | VM | hub2d (disconnected DR hub) worker3 | `ip_list.hub2d_worker3` |  |
-| `.17` | VIP | compact API VIP (keepalived on its masters) | `ip_list.compact_api` |  |
-| `.18` | VIP | compact *.apps ingress VIP (keepalived on its masters) | `ip_list.compact_ingress` |  |
-| `.19` |  |  |  |  |
+| `.17`–`.19` |  |  |  |  |
 | `.20` | VM | sno, single-node OpenShift: node, API and *.apps | `ip_list.sno` |  |
 | `.21` | VM | helper VM: DNS (named), haproxy, PXE/HTTP | `ip_list.helper_server` |  |
 | `.22` | VM | mirror registry VM (registry.hub.mylab.com:8443) | `ip_list.registry` |  |
@@ -144,7 +149,12 @@ rebuild.
 | `.99` |  |  |  |  |
 | `.100` | MetalLB VIP | hcp-compact1 API (kube-apiserver LoadBalancer) on the compact cluster | `hosted_cluster_metallb_pools.hcp-compact1.ip.compact` | pool `hcp-compact1-api-pool` |
 | `.101` | MetalLB VIP | hcp-compact1 *.apps (MetalLB inside the hosted cluster, in front of its routers) | `hosted_cluster_node_keys.hcp-compact1.apps_vip` |  |
-| `.102`–`.118` |  |  |  |  |
+| `.102`–`.105` |  |  |  |  |
+| `.106` | VIP | compactd API VIP (keepalived on its masters) | `ip_list.compactd_api` |  |
+| `.107` | VIP | compactd *.apps ingress VIP (keepalived on its masters) | `ip_list.compactd_ingress` |  |
+| `.108`–`.116` |  |  |  |  |
+| `.117` | VIP | compact API VIP (keepalived on its masters) | `ip_list.compact_api` |  |
+| `.118` | VIP | compact *.apps ingress VIP (keepalived on its masters) | `ip_list.compact_ingress` |  |
 | `.119` | VIP | hub2d (disconnected DR hub) API (6443), machine-config (22623) and *.apps (80/443) VIP on the helper's haproxy | `ip_list.hub2dlb` |  |
 | `.120`–`.137` |  |  |  |  |
 | `.138` | VIP | hcp-cluster2-d *.apps VIP on the helper's haproxy | `ip_list.c2dlb` |  |

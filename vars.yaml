@@ -390,7 +390,7 @@ ip_list:
   sno: 20
   ## A second single-node cluster, on its own fabric segment (rack2). Only used
   ## when sno2_enabled is true. .2 because no two-digit octet was free when it
-  ## was added. Like compactd's .3-.7 it is
+  ## was added. Like compactd's .3-.5 it is
   ## zero-padded wherever a MAC is built from it: 52:54:00:e2:54:02 on virbr0,
   ## 52:54:00:e2:56:02 on rack2 - setup-sno, node-nics.yml and the NNCPs all
   ## format it with '%02d'.
@@ -432,7 +432,8 @@ ip_list:
   #  which frees .60-.63, .67-.69 and .90-.95 for VMs. See
   #  hosted_cluster_metallb_pools.)
   # (The haproxy VIPs moved the same way - c1dlb .48 -> .148 and so on - which
-  #  frees .19, .38, .39, .48, .49, .58, .59, .79, .89 and .99 as well.)
+  #  frees .19, .38, .39, .48, .49, .58, .59, .79, .89 and .99 as well, and
+  #  the compact clusters' keepalived VIPs free .6, .7, .17 and .18.)
   c1dworker1: 44
   c1dworker2: 45
   c1dworker3: 46
@@ -538,9 +539,9 @@ ip_list:
   udnnsclient: 88
 
   ## The three-node compact cluster (compact-cluster/setup_compact_cluster.yaml). Five
-  ## addresses, all two digits for the MAC scheme and all clear of
-  ## hosted_cluster_metallb_pools - these were five of the last six free
-  ## two-digit octets (.63 is left alone, as noted above):
+  ## addresses, all clear of hosted_cluster_metallb_pools. The nodes are two
+  ## digits for the MAC scheme; the two VIPs build no MAC, so like the haproxy
+  ## VIPs they sit in .100-.199, at their old .17/.18 plus 100:
   ##
   ##   compact_master1..3  the nodes, contiguous. Each node's primary NIC is
   ##                       52:54:00:e2:54:<octet> and its second bond port
@@ -549,12 +550,14 @@ ip_list:
   ##   compact_ingress     *.apps VIP, held by keepalived on a master
   ##
   ## The VIPs belong to no VM. They are here anyway so nothing else is ever
-  ## given them, exactly as hublb and the c*lb ingress addresses are.
+  ## given them, exactly as hublb and the c*lb ingress addresses are. They are
+  ## fixed at install time (install-config apiVIPs/ingressVIPs), so a cluster
+  ## built on the old .17/.18 keeps them until it is reinstalled.
   compact_master1: 64
   compact_master2: 65
   compact_master3: 66
-  compact_api: 17
-  compact_ingress: 18
+  compact_api: 117
+  compact_ingress: 118
 
   ## The DISCONNECTED three-node compact cluster
   ## (compact-cluster/setup_compact_cluster_disconnected.yaml). Its own five addresses, so it
@@ -566,11 +569,13 @@ ip_list:
   ## roles/setup-compact-cluster both format it with '%02d'). Two-digit
   ## octets render exactly as before. Do not reuse .2-.9 elsewhere without
   ## the same padding - a raw '52:54:00:e2:54:3' is not a MAC that ABI accepts.
+  ## The two VIPs build no MAC and sit at .106/.107 (their old .6/.7 plus 100),
+  ## like compact's; a cluster built on .6/.7 keeps them until reinstalled.
   compactd_master1: 3
   compactd_master2: 4
   compactd_master3: 5
-  compactd_api: 6
-  compactd_ingress: 7
+  compactd_api: 106
+  compactd_ingress: 107
 
   ## The hosted cluster the compact cluster manages (hcp-compact1, see
   ## hosted_clusters): its two worker VMs. Two of the last free octets below
