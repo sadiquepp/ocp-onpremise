@@ -396,7 +396,10 @@ dig +short @localhost test.apps.compact.mylab.com      # 192.168.122.118
 
 **4b. The hypervisor's `/etc/hosts`** (back on the hypervisor). The hypervisor
 does not resolve through the helper, so put the names in `/etc/hosts`.
-`*.apps` cannot be a wildcard there, so list each route you need:
+`*.apps` cannot be a wildcard there, so list each route you need. Skip this if
+`setup_bm_host.yaml --tags dns` has run: its marked block already has these
+names, and lines added here sit outside it, so no later run updates or removes
+them when an address moves.
 
 ```bash
 cat >> /etc/hosts <<EOF
