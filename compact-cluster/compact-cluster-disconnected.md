@@ -911,7 +911,7 @@ and everything `oc mirror` put on it, so the next disconnected build needs
 only `virsh start registry`. To remove it and its mirrored content for good:
 
 ```bash
-ansible-playbook -i inventory/hosts cleanup-mirror-registry.yaml
+ansible-playbook -i inventory/hosts cleanup.yaml --tags registry-destroy
 ```
 
 ---

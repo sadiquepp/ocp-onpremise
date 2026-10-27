@@ -484,7 +484,7 @@ Rebuilding gets the same evidence on one bare-metal host without standing
 up a second 80G Ceph cluster.
 
 ```bash
-ansible-playbook -i inventory/hosts cleanup-ceph.yaml
+ansible-playbook -i inventory/hosts cleanup.yaml --tags ceph
 
 # a partial teardown leaves stale OSD disks the rebuilt cluster cannot
 # claim - you get a cluster with no OSDs. Check before rebuilding:

@@ -1236,7 +1236,7 @@ Take the backup first, and confirm the `DataUpload`s completed, before
 running this - after it there is no going back to hub1's storage.
 
 ```bash
-ansible-playbook -i inventory/hosts cleanup-ceph.yaml
+ansible-playbook -i inventory/hosts cleanup.yaml --tags ceph
 ```
 
 Verify it actually removed everything - a partial teardown leaves stale
@@ -1305,7 +1305,7 @@ frontends exist.
 > [MetalLB Address Pools for Hosted Clusters](#metallb-address-pools-for-hosted-clusters).
 > `hub2d` is deliberately not a hub name in `hosted_cluster_metallb_pools`.
 
-Tear it down with `cleanup-hub2-disconnected.yaml`, which touches nothing but
+Tear it down with `cleanup.yaml --tags hub2d`, which touches nothing but
 `hub2d`.
 
 > **The OADP playbooks do not know about `hub2d` yet.** `setup_oadp.yaml`,
@@ -2162,16 +2162,11 @@ delegates.
 | `backup_hosted_cluster.yaml`  | Backup a hosted cluster control plane         |
 | `restore_hosted_cluster.yaml` | Restore a hosted cluster control plane        |
 | `shutdown_hub_cluster.yaml`   | Gracefully stop hub1 VMs (preserves disks)    |
-| `cleanup-hub.yaml`            | Destroy hub1 VMs and delete disks             |
-| `cleanup-hub-disconnected.yaml` | Destroy the disconnected hub's VMs and disks (hubd only) |
-| `cleanup-hub2-disconnected.yaml` | Destroy the disconnected DR hub's VMs and disks (hub2d only) |
-| `cleanup.yaml`                | Destroy all VMs (hub + helper). The mirror registry is only shut down, so its mirrored content survives |
-| `cleanup-mirror-registry.yaml` | Really remove the mirror registry: VM, disks, and this host's CA trust and podman login for it |
+| `cleanup.yaml`                | Destroy all VMs, or one piece with `--tags hub\|hub2\|hubd\|hub2d\|hosted\|helper\|minio\|ceph\|sno\|compact\|...` (see [Cleanup](#cleanup)). The mirror registry is only shut down; `--tags registry-destroy` really removes it |
 | `setup_hosted_cluster_vm.yaml` | Create a hosted cluster's worker VMs; builds the disconnected set when `disconnected_install: true` |
 | `create_hosted_cluster.yaml`  | Render the HostedCluster/NodePool bundle; renders the disconnected clusters when `disconnected_install: true` |
 | `setup_ceph.yaml`             | Build the standalone Ceph 9 cluster (ceph1-3 + cephadmin) |
 | `setup_ceph_odf.yaml`         | Install ODF and attach that Ceph cluster to a hub in external mode |
-| `cleanup-ceph.yaml`           | Destroy the Ceph VMs and their OSD disks - also the DR demo's deliberate storage-loss step |
 | `udn-bgp-evpn/setup_udn_bgp_lab.yaml` | Build the containerlab BGP/EVPN provider fabric and wire a cluster into it. Phase-tagged: `--tags fabric\|preflight\|default\|shared\|vrflite\|evpn` |
 
 
@@ -2226,16 +2221,36 @@ For the full IAM policy, smoke-test manifests, and per-hub setup details, see `[
 
 ## Cleanup
 
-Remove hub1 VMs and disks (does not affect hub2 or S3 backups):
-
-```bash
-ansible-playbook -i inventory/hosts cleanup-hub.yaml
-```
-
-Remove everything (all VMs including helper):
+Everything is torn down by one playbook, `cleanup.yaml`. With no tags it
+removes every VM of the lab - hub1, hub2, the disconnected hubs hubd and
+hub2d, the hosted cluster workers, the helper, MinIO, Ceph, the SNOs, the
+compact clusters and the UDN lab:
 
 ```bash
 ansible-playbook -i inventory/hosts cleanup.yaml
+```
+
+Name one or more pieces with `--tags` to remove only those. Each leaves the
+others alone - none of them touches S3 backups:
+
+| Tag | Removes |
+|-----|---------|
+| `hub` | hub1: VMs, VM folder, install folder |
+| `hub2` | the DR hub, the same way |
+| `hubd` | the disconnected hub, plus its staged oc-mirror manifests and egress-blocking iptables rules |
+| `hub2d` | the disconnected DR hub, the same way |
+| `hosted` | the hosted clusters' worker VMs (`c1_worker*`, `c1-d-worker*`) |
+| `helper` | the helper VM |
+| `registry` | shuts the mirror registry down (it is kept - see below) |
+| `minio` | the MinIO VM |
+| `ceph` | the Ceph VMs and their OSD disks |
+| `sno`, `sno2` | the single-node clusters |
+| `compact`, `compacthcp`, `compactd` | the compact clusters (see the header of `cleanup.yaml`) |
+| `udnlab` | the UDN/BGP/EVPN lab |
+
+```bash
+ansible-playbook -i inventory/hosts cleanup.yaml --tags hub
+ansible-playbook -i inventory/hosts cleanup.yaml --tags hubd,hub2d
 ```
 
 The **mirror registry is the exception**: that run only shuts it down. Its VM,
@@ -2245,19 +2260,20 @@ of gigabytes again. This host's CA trust and podman login for it are left in
 place too, and still match. To remove it for good:
 
 ```bash
-ansible-playbook -i inventory/hosts cleanup-mirror-registry.yaml
+ansible-playbook -i inventory/hosts cleanup.yaml --tags registry-destroy
 ```
 
 That destroys and undefines the VM, deletes both disks, and removes the CA and
 the podman login - a rebuilt registry gets a new CA, and a stale one makes a
 disconnected run fail on TLS instead of stopping with a clear message. Keep
-them with `-e mirror_registry_remove_local_trust=false`.
+them with `-e mirror_registry_remove_local_trust=false`. `registry-destroy` is
+tagged `never`, so neither a plain run nor `--tags all` reaches it.
 
 Remove the Ceph cluster (VMs + OSD disks; leaves the hubs alone). ODF on the
 hub is not touched - delete the `StorageCluster` there first if you are tearing
 the whole thing down:
 
 ```bash
-ansible-playbook -i inventory/hosts cleanup-ceph.yaml
+ansible-playbook -i inventory/hosts cleanup.yaml --tags ceph
 ```
 

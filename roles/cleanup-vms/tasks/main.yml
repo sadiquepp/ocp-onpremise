@@ -1,0 +1,39 @@
+---
+# tasks file for cleanup-vms
+#
+# Tear down one set of lab VMs. Called from cleanup.yaml once per cluster,
+# with import_role so the caller's tags reach these tasks.
+#
+# Destroy first, then undefine, and tolerate both failing. A `virsh undefine`
+# on a RUNNING domain succeeds by converting it to a transient domain - it does
+# not stop it - while `virsh destroy` on a domain that is already off fails.
+# This is the only sequence that works whatever state the domain is in, and a
+# domain that does not exist at all is not an error.
+- name: "{{ cleanup_vms_name }}: destroy and undefine the VMs"
+  shell: |
+    for d in {{ cleanup_vms_domains | join(' ') }}; do
+      virsh destroy  "$d" >/dev/null 2>&1 || true
+      virsh undefine "$d" >/dev/null 2>&1 || true
+    done
+  when: cleanup_vms_domains | length > 0
+
+- name: "{{ cleanup_vms_name }}: remove their disks and folders"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ cleanup_vms_paths }}"
+
+## Only this cluster's rules: they carry the comment "<label> disconnected: ..."
+## (block-node-nat.yml). Every other cluster's, and the LAB_NO_NAT /
+## LAB_NO_EGRESS chains and their jumps, stay for whoever else uses them.
+- name: "{{ cleanup_vms_name }}: remove its egress-blocking rules"
+  shell: |
+    for t in "nat LAB_NO_NAT" "filter LAB_NO_EGRESS"; do
+      set -- $t
+      iptables -t $1 -S $2 2>/dev/null \
+        | grep -- '--comment "{{ cleanup_vms_nat_label }} disconnected:' \
+        | sed 's/^-A /-D /' \
+        | while read -r rule; do eval iptables -t $1 $rule; done
+    done
+    true
+  when: cleanup_vms_nat_label | length > 0
