@@ -426,9 +426,7 @@ ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-
   --tags destroy -e kubevirt_mgmt=sno3          # hcp-kv3, if built
 
 cd ..
-ansible-playbook -i inventory/hosts cleanup-hub.yaml
-ansible-playbook -i inventory/hosts cleanup-ceph.yaml
-ansible-playbook -i inventory/hosts cleanup.yaml
+ansible-playbook -i inventory/hosts cleanup.yaml      # hub1, Ceph, the SNOs and the rest
 ```
 
 `--tags destroy` removes hcp-kv2 as well while the SNO is up, its SNO side

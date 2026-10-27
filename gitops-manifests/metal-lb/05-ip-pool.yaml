@@ -9,7 +9,7 @@
 # api/api-int records already point at.
 #
 # The DR hub (metallb_hub: hub2) gets these same pool names holding
-# .90/.91/.92 instead, because it sits on its own network segment where these
+# .190/.191/.192 instead, because it sits on its own network segment where these
 # addresses are not routable. Pool names stay identical so a restored
 # HostedCluster's metallb.io/address-pool annotation still refers to the right
 # pool; DNS is re-rendered with -e target_hub=hub2 at cutover.
@@ -21,7 +21,7 @@ metadata:
   name: hcp-cluster1-api-pool
 spec:
   addresses:
-  - 192.168.122.60-192.168.122.60
+  - 192.168.122.160-192.168.122.160
   autoAssign: true
   avoidBuggyIPs: true
   serviceAllocation:
@@ -36,7 +36,7 @@ metadata:
   name: hcp-cluster2-api-pool
 spec:
   addresses:
-  - 192.168.122.61-192.168.122.61
+  - 192.168.122.161-192.168.122.161
   autoAssign: true
   avoidBuggyIPs: true
   serviceAllocation:
@@ -51,7 +51,7 @@ metadata:
   name: hcp-cluster3-api-pool
 spec:
   addresses:
-  - 192.168.122.62-192.168.122.62
+  - 192.168.122.162-192.168.122.162
   autoAssign: true
   avoidBuggyIPs: true
   serviceAllocation:

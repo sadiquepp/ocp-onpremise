@@ -53,7 +53,7 @@ ansible-playbook -i ../inventory/hosts setup_compact_cluster_disconnected.yaml \
 
 To remove a cluster, run `cleanup.yaml --tags compact` or `--tags compactd`
 from the repository root. The Ceph cluster is not part of either. Remove it
-with `cleanup-ceph.yaml`, and only if no hub uses it.
+with `cleanup.yaml --tags ceph`, and only if no hub uses it.
 
 The roles stay in the shared `../roles/`: `setup-compact-cluster` (reused by
 both playbooks, and sharing the disconnected hub's egress-block tasks),

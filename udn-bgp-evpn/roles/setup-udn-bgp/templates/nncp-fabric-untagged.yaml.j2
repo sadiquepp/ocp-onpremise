@@ -23,7 +23,7 @@ spec:
   nodeSelector:
     kubernetes.io/hostname: {{ udn_bgp_node_names[node_entry.ip_key] }}
   capture:
-    fabric-nic: interfaces.mac-address=="{{ clab_fabric_mac_prefix | upper }}:{{ ip_list[node_entry.ip_key] }}"
+    fabric-nic: interfaces.mac-address=="{{ clab_fabric_mac_prefix | upper }}:{{ '%02d' | format(ip_list[node_entry.ip_key] | int) }}"
   desiredState:
     interfaces:
       - name: "{{ '{{' }} capture.fabric-nic.interfaces.0.name {{ '}}' }}"

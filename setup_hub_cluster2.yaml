@@ -126,7 +126,7 @@
   # Same pool names as hub1, different addresses: this hub is on its own
   # network segment where hub1's MetalLB addresses are not routable, so
   # metallb_hub=hub2 selects the hub2 address for each hosted cluster
-  # (.90/.91/.92 connected, .93/.94/.95 for the '-d' clusters). Keeping the pool
+  # (.190/.191/.192 connected, .193/.194/.195 for the '-d' clusters). Keeping the pool
   # names identical is what lets a HostedCluster's metallb.io/address-pool
   # annotation survive the OADP restore onto this hub unchanged. After restoring
   # the hosted clusters, re-render DNS so api/api-int follow them here:

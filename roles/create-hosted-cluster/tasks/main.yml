@@ -242,7 +242,7 @@
 
 # Which hub each cluster's APIServer VIP comes from. Pool names are identical
 # on every hub; the addresses are not, so this is what decides whether
-# hcp-cluster1 means .60 (hub), .90 (hub2) or .64 (hubd). A disconnected
+# hcp-cluster1 means .160 (hub) or .190 (hub2), and hcp-cluster1-d .167 (hubd). A disconnected
 # cluster runs on the disconnected hub, so it resolves to 'hubd' even when
 # target_hub still says 'hub'.
 - name: Work out which hub each cluster's APIServer VIP comes from

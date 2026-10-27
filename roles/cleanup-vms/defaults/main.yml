@@ -1,0 +1,18 @@
+---
+# defaults file for cleanup-vms
+
+## What is being removed, for the task names in the run's output.
+cleanup_vms_name: VMs
+
+## libvirt domains to destroy and undefine.
+cleanup_vms_domains: []
+
+## Files and folders to remove once the domains are gone: their disks, VM
+## folder, install folder, staged manifests.
+cleanup_vms_paths: []
+
+## The disconnected_nat_label the cluster was built with (see
+## roles/setup-hub-cluster-disconnected/tasks/block-node-nat.yml). When set,
+## the iptables rules carrying "<label> disconnected:" are deleted too. Empty
+## for a connected cluster, which has none.
+cleanup_vms_nat_label: ""

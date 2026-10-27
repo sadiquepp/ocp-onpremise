@@ -397,8 +397,14 @@ ceph_storage_vcpus: 16
 ## ===========================================================================
 
 # List of IP Addresses to be used on the KVM Lab.
-# Last octets below are combined with lab_network_prefix (e.g. .21 -> 192.168.122.21). Must be two digits (10-99) as last octet is used
-# to define mac addresses
+# Last octets below are combined with lab_network_prefix (e.g. .21 -> 192.168.122.21).
+# A VM's octet must be .2-.99, because it is also the last byte of the VM's MAC
+# (52:54:00:e2:54:<octet>, zero-padded) and a three-digit octet is not a valid
+# MAC. The helper haproxy's VIPs (every *lb key below) are not VMs and have no
+# MAC, so they live at .100-.199 with the MetalLB pools, each one its old
+# two-digit address plus 100. roles/setup-bm-host's DHCP reservations skip
+# them, and setup-hub-acm refuses a MetalLB pool that lands on one.
+# See ip-allocation.md for the whole map.
 ip_list:
   helper_server: 21 
   bootstrap: 30
@@ -408,31 +414,38 @@ ip_list:
   worker1: 34
   worker2: 35
   worker3: 36
-  hublb: 39
+  hublb: 139
   ## The single-node cluster (setup-sno). Two constraints, both load-bearing:
-  ## clear of every hosted_cluster_metallb_pools band below (60-62, 67-69,
-  ## 90-95), because an address MetalLB may hand out is one the SNO would lose
+  ## clear of every hosted_cluster_metallb_pools address below (all in
+  ## .100-.199), because an address MetalLB may hand out is one the SNO would lose
   ## an ARP fight for intermittently, long after the install looked fine; and
   ## TWO DIGITS, because this lab's MAC scheme appends the octet verbatim
   ## (52:54:00:e2:54:<octet>) and a three-digit octet is not a valid MAC.
   sno: 20
-  ## A second single-node cluster, for the 'separate MCE cluster' layout
+  ## A further single-node cluster, for the 'separate MCE cluster' layout
   ## (kubevirt/setup_sno3_mce.yaml): MCE hosts hcp-kv3's control plane here,
-  ## the workers run on the SNO above. .63 - the last free two-digit octet;
-  ## see the note on the disconnected clusters below.
+  ## the workers run on the SNO above. .63 - free since the MetalLB pools
+  ## moved to .1xx; see the note on the disconnected clusters below.
   sno3: 63
+  ## A second single-node cluster, on its own fabric segment (rack2). Only used
+  ## when sno2_enabled is true. .2 because no two-digit octet was free when it
+  ## was added. Like compactd's .3-.5 it is
+  ## zero-padded wherever a MAC is built from it: 52:54:00:e2:54:02 on virbr0,
+  ## 52:54:00:e2:56:02 on rack2 - setup-sno, node-nics.yml and the NNCPs all
+  ## format it with '%02d'.
+  sno2: 2
   c1worker1: 41
   c1worker2: 42
   c1worker3: 43
-  c1lb: 49
+  c1lb: 149
   c2worker1: 51
   c2worker2: 52
   c2worker3: 53
-  c2lb: 59
+  c2lb: 159
   c3worker1: 54
   c3worker2: 55
   c3worker3: 56
-  c3lb: 58
+  c3lb: 158
   c2vbmc: 71
 
   # Disconnected hosted clusters (hosted_clusters_disconnected) - worker VMs
@@ -455,24 +468,31 @@ ip_list:
   #  which is why setup-compact-cluster's pre-flight refuses to build if a
   #  pool ever claims one. .63 was the last free two-digit octet, and is
   #  now sno3's.)
+  # (The MetalLB pools have since moved to .1xx - each old address plus 100 -
+  #  which frees .60-.63, .67-.69 and .90-.95 for VMs. See
+  #  hosted_cluster_metallb_pools.)
+  # (The haproxy VIPs moved the same way - c1dlb .48 -> .148 and so on - which
+  #  frees .19, .38, .39, .48, .49, .58, .59, .79, .89 and .99 as well, and
+  #  the compact clusters' keepalived VIPs free .6, .7, .17 and .18.)
   c1dworker1: 44
   c1dworker2: 45
   c1dworker3: 46
-  c1dlb: 48
+  c1dlb: 148
   c2dworker1: 28
   c2dworker2: 29
   c2dworker3: 37
-  c2dlb: 38
+  c2dlb: 138
   c3dworker1: 96
   c3dworker2: 97
   c3dworker3: 98
-  c3dlb: 99
+  c3dlb: 199
 
   # Hub2 - replacement management/hub cluster used for the OADP
   # backup/restore-to-new-hub DR flow. Kept on its own IP block so it
   # can be built (and its DNS resolved) while hub1 still exists.
-  # NOTE: last octet is used raw in the MAC scheme 52:54:00:e2:54:{{ value }},
-  # so it must stay a two digit hex-safe value (10-99) - do not use 100+.
+  # NOTE: a VM's last octet is used raw in the MAC scheme
+  # 52:54:00:e2:54:{{ value }}, so the VMs must stay two digit (10-99) - do not
+  # use 100+. hub2lb is the haproxy VIP, not a VM, so it is .189.
   hub2_bootstrap: 80
   hub2_master1: 81
   hub2_master2: 82
@@ -480,7 +500,7 @@ ip_list:
   hub2_worker1: 84
   hub2_worker2: 85
   hub2_worker3: 86
-  hub2lb: 89
+  hub2lb: 189
 
   # Hub-disconnected - a third, fully independent hub cluster installed
   # entirely from the local mirror registry (setup_hub_cluster.yaml with
@@ -488,7 +508,8 @@ ip_list:
   # subdomain (hub_disconnected_domain) and its own
   # install/VM directories so it can be built and run *alongside* hub1
   # and hub2 rather than replacing either.
-  # NOTE: same MAC scheme constraint as above - two digit values (10-99).
+  # NOTE: same MAC scheme constraint as above - two digit values (10-99) for
+  # the VMs; hubdlb is the haproxy VIP and sits at .179.
   hubd_bootstrap: 72
   hubd_master1: 73
   hubd_master2: 74
@@ -496,7 +517,7 @@ ip_list:
   hubd_worker1: 76
   hubd_worker2: 77
   hubd_worker3: 78
-  hubdlb: 79
+  hubdlb: 179
 
   # Hub2-disconnected - the DR hub built from the local mirror registry
   # (setup_hub_cluster2.yaml with disconnected_install set). Same relationship
@@ -505,10 +526,11 @@ ip_list:
   # separate cluster rather than a differently-built hub2, and all four hubs
   # can be up at once.
   #
-  # .10-.19 rather than another slice of the 70s/80s: those are contiguous and
+  # .10-.16 rather than another slice of the 70s/80s: those are contiguous and
   # free, and they sit below both DHCP pools (dhcpd .100-.200 on the helper,
   # libvirt .201-.249), so nothing dynamic can ever be handed one of them.
-  # NOTE: same MAC scheme constraint as above - two digit values (10-99).
+  # NOTE: same MAC scheme constraint as above - two digit values (10-99) for
+  # the VMs; hub2dlb is the haproxy VIP and sits at .119.
   hub2d_bootstrap: 10
   hub2d_master1: 11
   hub2d_master2: 12
@@ -516,7 +538,7 @@ ip_list:
   hub2d_worker1: 14
   hub2d_worker2: 15
   hub2d_worker3: 16
-  hub2dlb: 19
+  hub2dlb: 119
 
   # Mirror registry - shared connected infrastructure for disconnected-install
   # simulation (see setup_mirror_registry.yaml). Stays reachable/connected
@@ -539,10 +561,9 @@ ip_list:
   # for ssh/management; the fabric itself lives on virbr1 and this VM's
   # second NIC gets clab_fabric_prefix.40 there, same last octet.
   clab: 40
-  ## UDN-over-BGP lab clients. Kept OUT of 60-69 and 90-99 entirely: those are
-  ## the hosted clusters' MetalLB pool bands (hosted_cluster_metallb_pools),
-  ## and .60/.61/.62 in particular are the hcp-cluster1/2/3 API addresses on
-  ## hub1. MetalLB L2 mode ARPs for its pool addresses itself, so a VM holding
+  ## UDN-over-BGP lab clients. Kept clear of the hosted clusters' MetalLB
+  ## addresses (hosted_cluster_metallb_pools - .60-.62, .67-.69 and .90-.95
+  ## when this was written, all in .100-.199 now). MetalLB L2 mode ARPs for its pool addresses itself, so a VM holding
   ## one does not fail cleanly - it fights the API VIP for the address and
   ## whichever answers first wins, intermittently. An earlier version of this
   ## file put udnclient on .60 and the tenant clients on .61-.63, straight
@@ -558,9 +579,9 @@ ip_list:
   udnnsclient: 88
 
   ## The three-node compact cluster (compact-cluster/setup_compact_cluster.yaml). Five
-  ## addresses, all two digits for the MAC scheme and all clear of
-  ## hosted_cluster_metallb_pools - these were five of the last six free
-  ## two-digit octets (.63 is left alone, as noted above):
+  ## addresses, all clear of hosted_cluster_metallb_pools. The nodes are two
+  ## digits for the MAC scheme; the two VIPs build no MAC, so like the haproxy
+  ## VIPs they sit in .100-.199, at their old .17/.18 plus 100:
   ##
   ##   compact_master1..3  the nodes, contiguous. Each node's primary NIC is
   ##                       52:54:00:e2:54:<octet> and its second bond port
@@ -569,12 +590,14 @@ ip_list:
   ##   compact_ingress     *.apps VIP, held by keepalived on a master
   ##
   ## The VIPs belong to no VM. They are here anyway so nothing else is ever
-  ## given them, exactly as hublb and the c*lb ingress addresses are.
+  ## given them, exactly as hublb and the c*lb ingress addresses are. They are
+  ## fixed at install time (install-config apiVIPs/ingressVIPs), so a cluster
+  ## built on the old .17/.18 keeps them until it is reinstalled.
   compact_master1: 64
   compact_master2: 65
   compact_master3: 66
-  compact_api: 17
-  compact_ingress: 18
+  compact_api: 117
+  compact_ingress: 118
 
   ## The DISCONNECTED three-node compact cluster
   ## (compact-cluster/setup_compact_cluster_disconnected.yaml). Its own five addresses, so it
@@ -586,11 +609,13 @@ ip_list:
   ## roles/setup-compact-cluster both format it with '%02d'). Two-digit
   ## octets render exactly as before. Do not reuse .2-.9 elsewhere without
   ## the same padding - a raw '52:54:00:e2:54:3' is not a MAC that ABI accepts.
+  ## The two VIPs build no MAC and sit at .106/.107 (their old .6/.7 plus 100),
+  ## like compact's; a cluster built on .6/.7 keeps them until reinstalled.
   compactd_master1: 3
   compactd_master2: 4
   compactd_master3: 5
-  compactd_api: 6
-  compactd_ingress: 7
+  compactd_api: 106
+  compactd_ingress: 107
 
   ## The hosted cluster the compact cluster manages (hcp-compact1, see
   ## hosted_clusters): its two worker VMs. Two of the last free octets below
@@ -842,6 +867,32 @@ sno_extra_clusters:
 sno_fabric_nic: false
 
 ## ---------------------------------------------------------------------------
+## A second SNO in a second rack (setup_sno2.yaml) - optional
+## ---------------------------------------------------------------------------
+## Off unless sno2_enabled is true. With it on, sno2 joins the EVPN lab on its
+## own fabric segment: its fabric NIC is on virbr2 (clab_fabric_segments.rack2
+## below), it peers with leaf3, and leaf3 reaches leaf1 only through the
+## spine. The VXLAN between sno2 and the hub or sno is then ROUTED by three
+## routers, where the hub and sno share one segment. udn-bgp-evpn/rack2.md is
+## the runbook.
+##
+## Turning it on changes nothing that is already running: hub, sno, leaf1,
+## leaf2 and the spine's existing sessions are left alone, and the rack is
+## added beside them with --tags rack. Off, every play renders exactly what it
+## did before sno2 existed. Set it true on the lab host (here, or
+## -e sno2_enabled=true on every command, or in ../vars-metal.yaml, which
+## build-lab.sh passes).
+sno2_enabled: false
+
+## The same knobs as the SNO's above, kept apart so a sno2 run can never pick
+## up the SNO's install folder - that folder holds the SNO's only kubeconfig.
+sno2_install_folder: "{{ download_dir }}/sno2_install"
+sno2_vm_folder: "{{ download_dir }}/sno2"
+sno2_memory: 32768
+sno2_vcpus: 12
+sno2_disk_gb: 200
+
+## ---------------------------------------------------------------------------
 ## Three-node compact OpenShift (compact-cluster/setup_compact_cluster.yaml, --tags compact)
 ## ---------------------------------------------------------------------------
 ## Three schedulable masters, no workers, built from one agent ISO, connected -
@@ -1007,23 +1058,34 @@ compact_hosted_cluster_memory: 16384
 ## (hosted_cluster_metallb_network_prefixes below, defaulting to
 ## lab_network_prefix). It must stay clear of every ip_list octet on that hub's
 ## segment and of the .201-.249 libvirt DHCP range, since MetalLB L2 mode ARPs
-## for these addresses itself and nothing else may own them.
+## for these addresses itself and nothing else may own them. roles/setup-hub-acm
+## checks all three before it renders a pool.
+##
+## All of them are in .100-.199, a VIP being the one kind of address that does
+## not need the two-digit MAC every VM's octet becomes (52:54:00:e2:54:<octet>).
+## That leaves .2-.99 to the VMs, which is where they are short of room. Each
+## is its old address plus 100 - hub .160-.162, hubd .167-.169, hub2
+## .190-.195 - so the old notes and backups still read across. Nothing hands
+## out .100-.199 dynamically: libvirt's DHCP range is .201-.249, and the
+## helper dhcpd that would serve .100-.200 (roles/setup-dhcp) is deployed by
+## no playbook. The helper haproxy's VIPs (ip_list.*lb) share the band, moved
+## the same way (.39 -> .139 and so on); the check above keeps the two apart.
 hosted_cluster_metallb_pools:
   hcp-cluster1:
     pool: hcp-cluster1-api-pool
     ip:
-      hub: 60
-      hub2: 90
+      hub: 160
+      hub2: 190
   hcp-cluster2:
     pool: hcp-cluster2-api-pool
     ip:
-      hub: 61
-      hub2: 91
+      hub: 161
+      hub2: 191
   hcp-cluster3:
     pool: hcp-cluster3-api-pool
     ip:
-      hub: 62
-      hub2: 92
+      hub: 162
+      hub2: 192
 
   ## Disconnected hosted clusters. Separate clusters from hcp-cluster1/2/3 -
   ## their own names, namespaces, pools and DNS zones - so a connected and a
@@ -1047,18 +1109,18 @@ hosted_cluster_metallb_pools:
   hcp-cluster1-d:
     pool: hcp-cluster1-d-api-pool
     ip:
-      hub2: 93
-      hubd: 67
+      hub2: 193
+      hubd: 167
   hcp-cluster2-d:
     pool: hcp-cluster2-d-api-pool
     ip:
-      hub2: 94
-      hubd: 68
+      hub2: 194
+      hubd: 168
   hcp-cluster3-d:
     pool: hcp-cluster3-d-api-pool
     ip:
-      hub2: 95
-      hubd: 69
+      hub2: 195
+      hubd: 169
 
   ## Managed by the compact cluster: its only address is under 'compact', the
   ## metallb_hub value compact-cluster/setup_compact_cluster.yaml --tags acm
@@ -1135,7 +1197,7 @@ hosted_cluster2_vm_folder: "{{ download_dir }}/hosted_cluster2"
 ##
 ## It deliberately mirrors hcp-cluster1 rather than replacing it:
 ##   - its own worker VMs      (hosted_cluster_disconnected_workers, .44-.46)
-##   - its own ingress VIP     (ip_list.c1dlb, .48) and haproxy frontends
+##   - its own ingress VIP     (ip_list.c1dlb, .148) and haproxy frontends
 ##   - its own DNS zone        (<name>.<base_domain>) so api/api-int and
 ##                              *.apps are distinct from hcp-cluster1's
 ##   - its own MetalLB pool    (hosted_cluster_metallb_pools['hcp-cluster1-d'])
@@ -1403,7 +1465,7 @@ bminfra_ignition_extra_files: []
 ## plus per-cluster overrides), and the same hosted_cluster_* defaults apply.
 ##
 ## These are their own clusters, not hcp-cluster1/2/3 rendered differently:
-## their own namespace, MetalLB pool (hubd 67-69 above), DNS zone and worker
+## their own namespace, MetalLB pool (hubd .167-.169 above), DNS zone and worker
 ## VMs. The role refuses to run if a name appears in both lists, since it would
 ## collide on all three. The '-d' suffix is just the convention - what matters
 ## is that the sets are disjoint and each name here has a pool entry with a
@@ -1675,7 +1737,7 @@ minio_data_dir: /data/minio
 # 1) Four new entries in the existing `ip_list:` map (pick any free
 #    two-digit last-octets - these four are free as of this repo's
 #    current vars.yaml: 21,22,23 are used by helper/mirror_registry/
-#    minio, 60-62 are the per-hosted-cluster MetalLB pools
+#    minio; the per-hosted-cluster MetalLB pools are in .100-.199
 #    (hosted_cluster_metallb_pools), everything else in 24-27 is open):
 # -----------------------------------------------------------------------
 #   ceph1: 24
@@ -1891,6 +1953,50 @@ clab_cluster_asn: 64512
 clab_leaf1_asn: 64513
 clab_leaf2_asn: 64514
 clab_spine_asn: 65000
+
+## Further fabric segments - one per "rack" beyond the one above. A cluster
+## opts in with `fabric_segment: <name>` in clab_clusters; a cluster without
+## one is on the segment above (virbr1, leaf1) exactly as before. A segment is
+## only built once a cluster that uses it is in clab_fabric_clusters, and it
+## is added with --tags rack, EVPN topology only.
+##
+## Each segment gets its own libvirt network and bridge, its own subnet, its
+## own leaf and its own VTEP /24, which that leaf originates the way leaf1
+## originates udn_bgp_vtep_prefix.0/24. The leaf is a separate containerlab
+## lab, <clab_lab_name>-<segment>, joined to the spine by a veth - so adding
+## it never redeploys leaf1, leaf2 or the spine.
+##
+##   network, bridge  the libvirt network and the bridge it creates
+##   guest_bridge     the bridge inside the containerlab VM the leaf joins
+##   prefix ...       the segment's subnet. The leaf takes .router_octet and
+##                    a node its ip_list octet, as on the first segment
+##   mac_prefix       fabric NIC MACs here are <mac_prefix>:<octet>. Not
+##                    clab_fabric_mac_prefix: the containerlab VM has a NIC on
+##                    every segment with the same octet, and they must differ
+##   vtep_prefix      node VTEPs here are <vtep_prefix>.<octet>
+##   leaf ...         the leaf's name, ASN and loopback
+##   spine_link       the /30 between the spine and this leaf, and the spine
+##                    interface it lands on (eth1 and eth2 are leaf1 and leaf2)
+##   mgmt_subnet      the leaf lab's containerlab management network
+clab_fabric_segments:
+  rack2:
+    network: fabric2
+    bridge: virbr2
+    guest_bridge: br-fabric2
+    prefix: "192.168.160"
+    netmask_bits: 24
+    router_octet: 1
+    mac_prefix: "52:54:00:e2:56"
+    vtep_prefix: "100.64.1"
+    leaf: leaf3
+    leaf_asn: 64518
+    leaf_loopback: "10.0.0.3"
+    spine_link:
+      spine_if: eth3
+      spine_ip: "10.1.0.9"
+      leaf_ip: "10.1.0.10"
+      prefix_len: 30
+    mgmt_subnet: "172.30.31.0/24"
 
 ## Container images for the fabric. FRR is what OVN-Kubernetes itself is
 ## built and tested against, and a node costs ~50MB of RAM. Swap in
@@ -2269,6 +2375,35 @@ clab_clusters:
       - domain: "{{ sno_name }}"
         ip_key: sno
 
+  ## The second SNO, in the second rack (setup_sno2.yaml, sno2_enabled). Only
+  ## on the fabric when sno2_enabled is true - see clab_fabric_clusters below.
+  ##
+  ## fabric_segment puts its fabric NIC on rack2 rather than virbr1, so it
+  ## peers with leaf3 and its VTEP is 100.64.1.<octet>. EVPN only: rack2 has
+  ## no VRF-Lite VLANs and nothing leaks a default VRF across it, so the
+  ## role refuses the shared, vrflite and default phases here.
+  ##
+  ## green and purple only - the stretched Layer2 pair, which is the point of
+  ## putting a cluster behind a routed underlay. Its slice of each one's
+  ## addresses is in their evpn_l2_excludes.
+  sno2:
+    install_folder: "{{ sno2_install_folder }}"
+    asn: 64517
+    advertise_default: false
+    fabric_segment: rack2
+    tenants:
+      - green
+      - purple
+    tenants_evpn:
+      - green
+      - purple
+    tenants_web:
+      - green
+      - purple
+    nodes:
+      - domain: sno2
+        ip_key: sno2
+
 ## Which of the clusters above are actually wired into the fabric. This is
 ## what builds clab_fabric_nodes, so it decides which VMs get a NIC on virbr1
 ## and which neighbours leaf1 is configured with.
@@ -2279,9 +2414,12 @@ clab_clusters:
 ##
 ## Order matters only for readability - leaf1's neighbour statements come out
 ## in this order.
-clab_fabric_clusters:
-  - hub
-  - sno
+##
+## sno2 is appended only when sno2_enabled is true. A cluster with a
+## fabric_segment is not one of leaf1's: it gets its own segment's NIC and
+## leaf instead, built by --tags rack, and leaf1's configuration is the same
+## with it as without it.
+clab_fabric_clusters: "{{ ['hub', 'sno'] + (['sno2'] if (sno2_enabled | bool) else []) }}"
 
 ## The fabric NIC's MAC follows the lab's existing scheme with a bumped
 ## fifth octet, so a fabric NIC is recognisable at a glance and can never
@@ -2500,6 +2638,40 @@ udn_bgp_tenants:
         - "10.204.32.0/19"
         - "10.204.64.0/18"
         - "10.204.255.0/24"
+      ## sno2 allocates from 10.204.254.0/24 alone: everything else in the /16
+      ## is reserved, bar the same .1 gateway and .2 management port as the
+      ## SNO's hole above (one node, so .3 is where the reservation starts).
+      ##
+      ## That /24 sits inside the SNO's half. A clean three-way split would
+      ## mean shrinking the SNO's half, which changes a CUDN that is already
+      ## running there - so the SNO is left alone and sno2 takes the top of its
+      ## half. The SNO hands out its lowest free address first, from
+      ## 10.204.128.0, and a lab never gets near .254.
+      ##
+      ## sno2 also brings a third copy of .1 and .2 into the one broadcast
+      ## domain. That is the problem described above, not a new one.
+      sno2:
+        - "10.204.0.3/32"
+        - "10.204.0.4/30"
+        - "10.204.0.8/29"
+        - "10.204.0.16/28"
+        - "10.204.0.32/27"
+        - "10.204.0.64/26"
+        - "10.204.0.128/25"
+        - "10.204.1.0/24"
+        - "10.204.2.0/23"
+        - "10.204.4.0/22"
+        - "10.204.8.0/21"
+        - "10.204.16.0/20"
+        - "10.204.32.0/19"
+        - "10.204.64.0/18"
+        - "10.204.128.0/18"
+        - "10.204.192.0/19"
+        - "10.204.224.0/20"
+        - "10.204.240.0/21"
+        - "10.204.248.0/22"
+        - "10.204.252.0/23"
+        - "10.204.255.0/24"
     evpn_ip_vni: 401
 
   ## The collision tenant. Layer2, and deliberately carrying the SAME
@@ -2602,6 +2774,29 @@ udn_bgp_tenants:
         - "10.204.16.0/20"
         - "10.204.32.0/19"
         - "10.204.64.0/18"
+        - "10.204.255.0/24"
+      ## sno2: the same slice as green's, for the same reasons - see there.
+      sno2:
+        - "10.204.0.3/32"
+        - "10.204.0.4/30"
+        - "10.204.0.8/29"
+        - "10.204.0.16/28"
+        - "10.204.0.32/27"
+        - "10.204.0.64/26"
+        - "10.204.0.128/25"
+        - "10.204.1.0/24"
+        - "10.204.2.0/23"
+        - "10.204.4.0/22"
+        - "10.204.8.0/21"
+        - "10.204.16.0/20"
+        - "10.204.32.0/19"
+        - "10.204.64.0/18"
+        - "10.204.128.0/18"
+        - "10.204.192.0/19"
+        - "10.204.224.0/20"
+        - "10.204.240.0/21"
+        - "10.204.248.0/22"
+        - "10.204.252.0/23"
         - "10.204.255.0/24"
     evpn_ip_vni: 501
 
@@ -3057,9 +3252,14 @@ udn_proxy_phase: "{{ 'evpn' if clab_topology | default('bgp') == 'evpn' else 'vr
 ## Only the backend address differs.
 ##
 ## Set to [hub] to go back to a single-cluster ingress.
-udn_proxy_clusters:
-  - hub
-  - sno
+##
+## sno2 joins when sno2_enabled is true and the lab is EVPN - it is on rack2,
+## which is EVPN only. green-sno2 and purple-sno2 are served out of the same
+## green and purple namespaces: the stretched L2VNI reaches sno2's pods through
+## leaf2, the spine and leaf3, so it too needs no new plumbing.
+udn_proxy_clusters: >-
+  {{ ['hub', 'sno']
+     + (['sno2'] if ((sno2_enabled | bool) and udn_proxy_phase == 'evpn') else []) }}
 
 ## Every hostname the ingress answers to, as a space-separated string.
 ##

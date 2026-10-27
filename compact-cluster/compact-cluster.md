@@ -53,7 +53,7 @@ step that failed. Each section names the role task file that automates it.
                    │   .64     │     │   .65     │   │   .66     │
                    └───────────┘     └───────────┘   └───────────┘
                      rendezvous
-              API VIP .17 (api, api-int)  and  ingress VIP .18 (*.apps)
+              API VIP .117 (api, api-int) and ingress VIP .118 (*.apps)
               float between the three masters (keepalived)
 ```
 
@@ -63,8 +63,8 @@ step that failed. Each section names the role task file that automates it.
 | master1 (rendezvous host) | `192.168.122.64` | `ip_list.compact_master1` |
 | master2 | `192.168.122.65` | `ip_list.compact_master2` |
 | master3 | `192.168.122.66` | `ip_list.compact_master3` |
-| API VIP: `api`, `api-int` | `192.168.122.17` | `ip_list.compact_api` |
-| Ingress VIP: `*.apps` | `192.168.122.18` | `ip_list.compact_ingress` |
+| API VIP: `api`, `api-int` | `192.168.122.117` | `ip_list.compact_api` |
+| Ingress VIP: `*.apps` | `192.168.122.118` | `ip_list.compact_ingress` |
 | Bond | `bond0`, `active-backup`, `miimon=100`, `primary=enp1s0` | `compact_bond_*` in role defaults |
 | Bond port 1 (primary) | `enp1s0`, MAC `52:54:00:e2:54:<octet>` | `compact_primary_mac_prefix` |
 | Bond port 2 (backup) | `enp2s0`, MAC `52:54:00:e2:56:<octet>` | `compact_secondary_mac_prefix` |
@@ -72,12 +72,17 @@ step that failed. Each section names the role task file that automates it.
 | Storage disk per node | LVM Storage: 500 GB, empty (`vdb`). Ceph: none | `compact_storage_disk_gb`, `compact_lvm_storage` |
 | Default StorageClass | LVM Storage: `lvms-vg1` (thin-provisioned XFS). Ceph: `ocs-external-storagecluster-ceph-rbd` | `use_lvm_storage` in `vars.yaml`, see [Choose the storage](#choose-the-storage-lvm-storage-or-ceph) |
 
-**Why these addresses.** They were five of the last six free two-digit octets
-on the lab network. They are clear of every hosted-cluster MetalLB pool
-(`hosted_cluster_metallb_pools`: .60-.62, .67-.69, .90-.95) and of both DHCP
-ranges (dhcpd .100-.200, libvirt .201-.249). They are two digits because this
-lab builds MACs by appending the octet: `52:54:00:e2:54:100` is not a MAC.
-`.63` is the only free two-digit octet left.
+**Why these addresses.** The nodes are two digits because this lab builds
+MACs by appending the octet: `52:54:00:e2:54:100` is not a MAC. The VIPs
+build no MAC, so they sit in `.100`-`.199` with the lab's other VIPs, at their
+old `.17`/`.18` plus 100. All five are clear of every hosted-cluster MetalLB
+address (`hosted_cluster_metallb_pools`) and of libvirt's DHCP pool
+(`.201`-`.249`). See [ip-allocation.md](../ip-allocation.md).
+
+The VIPs are fixed at install time (`apiVIPs`/`ingressVIPs` in
+`install-config.yaml`), so a cluster built on `.17`/`.18` keeps them until it
+is reinstalled. Re-rendering DNS before then points `api` and `*.apps` at the
+new addresses, which the old cluster does not answer on.
 
 **Why `e2:56` for the second NIC.** `52:54:00:e2:54:<octet>` is the lab-wide
 scheme, and `52:54:00:e2:55:<octet>` is already taken by the containerlab
@@ -303,8 +308,8 @@ export OCP=4.22.10                           # ocp_major_version.ocp_minor_versi
 export WORK=/var/lib/libvirt/images/compact_install
 export VMDIR=/var/lib/libvirt/images/compact
 
-export API_VIP=$LAB.17
-export INGRESS_VIP=$LAB.18
+export API_VIP=$LAB.117
+export INGRESS_VIP=$LAB.118
 export NODES="master1:64 master2:65 master3:66"   # hostname:octet, rendezvous host first
 export RENDEZVOUS=$LAB.64
 
@@ -361,9 +366,9 @@ $TTL 1D
 master1        A	192.168.122.64
 master2        A	192.168.122.65
 master3        A	192.168.122.66
-api		A	192.168.122.17
-api-int		A	192.168.122.17
-*.apps		A	192.168.122.18
+api		A	192.168.122.117
+api-int		A	192.168.122.117
+*.apps		A	192.168.122.118
 EOF
 
 cat >> /etc/named.rfc1912.zones <<'EOF'
@@ -385,13 +390,16 @@ chown root:named /var/named/compact.mylab.com.db
 named-checkzone compact.mylab.com /var/named/compact.mylab.com.db
 named-checkconf && systemctl restart named
 
-dig +short @localhost api.compact.mylab.com            # 192.168.122.17
-dig +short @localhost test.apps.compact.mylab.com      # 192.168.122.18
+dig +short @localhost api.compact.mylab.com            # 192.168.122.117
+dig +short @localhost test.apps.compact.mylab.com      # 192.168.122.118
 ```
 
 **4b. The hypervisor's `/etc/hosts`** (back on the hypervisor). The hypervisor
 does not resolve through the helper, so put the names in `/etc/hosts`.
-`*.apps` cannot be a wildcard there, so list each route you need:
+`*.apps` cannot be a wildcard there, so list each route you need. Skip this if
+`setup_bm_host.yaml --tags dns` has run: its marked block already has these
+names, and lines added here sit outside it, so no later run updates or removes
+them when an address moves.
 
 ```bash
 cat >> /etc/hosts <<EOF
@@ -1055,7 +1063,7 @@ harmless: the cluster from the earlier run already holds its copy as a Secret.
 
 A Ceph cluster shared with a hub also shares the hub's lifecycle. The DR
 walkthrough in [steps.md](../steps.md) destroys and rebuilds Ceph with
-`cleanup-ceph.yaml`. Doing that takes the compact cluster's volumes with it,
+`cleanup.yaml --tags ceph`. Doing that takes the compact cluster's volumes with it,
 etcd included.
 
 ##### Switching a cluster that already has LVM Storage
@@ -1132,7 +1140,7 @@ The RBD images the cluster left behind stay in the pool. To remove the Ceph
 cluster too, and only if no hub still uses it, run from the repository root:
 
 ```bash
-ansible-playbook -i inventory/hosts cleanup-ceph.yaml
+ansible-playbook -i inventory/hosts cleanup.yaml --tags ceph
 virsh list --all | grep -E 'ceph[123]|cephadmin'     # nothing
 ```
 
@@ -1147,8 +1155,8 @@ virsh list --all | grep -E 'ceph[123]|cephadmin'     # nothing
 | The bond is up, but only one port is enslaved | The second NIC got a different name, for example after you added a device before it | `ssh core@<ip> ip -br link`. Set `compact_bond_secondary_nic` to the name the node uses. The MAC mapping in `interfaces` handles most of these cases. |
 | master2/master3 never appear in the rendezvous host's list | They cannot reach `.64`, or a stale disk booted an old RHCOS instead of the ISO | `virsh console compact_master2`. Check for an old login prompt instead of the agent. |
 | The agent's pre-flight reports `SERVFAIL` for quay.io | The node's DNS server points at the helper instead of `.1` | `compact_dns_server`. See Step 7. |
-| `wait-for` cannot connect to the API | `api.compact.mylab.com` does not resolve to `.17` on the hypervisor | `getent hosts api.compact.mylab.com`. Run `setup_bm_host.yaml --tags dns` again. |
-| Ingress and console operators are degraded | `*.apps` does not resolve to the ingress VIP, or the VIP is held by something else | `dig @192.168.122.21 x.apps.compact.mylab.com` and `ping 192.168.122.18` with the cluster down |
+| `wait-for` cannot connect to the API | `api.compact.mylab.com` does not resolve to `.117` on the hypervisor | `getent hosts api.compact.mylab.com`. Run `setup_bm_host.yaml --tags dns` again. |
+| Ingress and console operators are degraded | `*.apps` does not resolve to the ingress VIP, or the VIP is held by something else | `dig @192.168.122.21 x.apps.compact.mylab.com` and `ping 192.168.122.118` with the cluster down |
 | Pings drop during failover and do not recover | `miimon` is 0, so the bond is not monitoring link state | `grep 'MII Polling' /proc/net/bonding/bond0`. It must not be 0. |
 | The bond comes up with a different MAC on each reboot | `mac-address` is missing on `bond0` | Pin it to the primary NIC's MAC, as in Step 7 |
 | LVMCluster stays `Progressing` or `Failed`, or `lvms-vg1` never appears | A node has no empty disk: `vdb` is missing, or it already holds partitions, a filesystem or an old volume group | `lsblk /dev/vdb` on each node (Step 12). `oc -n openshift-storage logs ds/vg-manager` names every device it skipped and why. Attach a fresh disk as in Step 12. |

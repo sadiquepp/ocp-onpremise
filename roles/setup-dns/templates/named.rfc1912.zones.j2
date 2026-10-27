@@ -75,13 +75,13 @@ zone "{{ hub2_disconnected_domain }}" IN {
    entry rather than on sno_name, because the zone file is only rendered when
    that entry exists - and a stanza naming a file that is not there stops named
    from starting at all, taking every other zone down with it. #}
-{% if (sno_name | default('')) and (ip_list[sno_name] is defined) %}
-zone "{{ sno_name }}.{{ base_domain }}" IN {
+{% for dns_sno in setup_dns_sno_names %}
+zone "{{ dns_sno }}.{{ base_domain }}" IN {
 	type master;
-	file "{{ sno_name }}.{{ base_domain }}.db";
+	file "{{ dns_sno }}.{{ base_domain }}.db";
 	allow-update { none; };
 };
-{% endif %}
+{% endfor %}
 {# Further single-node clusters, on the same condition tasks/main.yml renders
    their zone files on. #}
 {% for s in sno_extra_clusters | default([]) %}

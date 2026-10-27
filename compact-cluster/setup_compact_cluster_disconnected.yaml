@@ -17,7 +17,7 @@
 #      that playbook insists on; it changes nothing else in this run.
 #   2. roles/setup-compact-cluster with compact_disconnected=true, for the
 #      compactd cluster from vars.yaml (compactd_* - its own addresses,
-#      .3-.7, so it can run beside the connected compact cluster):
+#      .3-.5 and VIPs .106/.107, so it can run beside the connected compact cluster):
 #        - openshift-install extracted from the MIRRORED release with
 #          `oc adm release extract --idms-file`
 #        - install-config.yaml with imageDigestSources, the mirror CA and a

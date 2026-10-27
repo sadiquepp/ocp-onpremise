@@ -128,6 +128,48 @@
           | difference(metallb_hub_pools | list) | sort | join(', '))
          | default('none', true) }}
 
+# MetalLB L2 mode answers ARP for these addresses itself, so nothing else on
+# the segment may hold one - and the failure when something does is
+# intermittent rather than loud: the VM and the VIP take turns answering, and
+# the hosted cluster's API looks flaky. Checked over the WHOLE map, not just
+# this hub's pools: every hub on lab_network_prefix shares one /24, so a clash
+# between two hubs' addresses is a clash on this one. A hub on its own segment
+# (hosted_cluster_metallb_network_prefixes) is exempt from the ip_list and
+# libvirt checks, which describe virbr0.
+- name: Fail if a MetalLB address is not a free host address on its segment
+  vars:
+    metallb_check_octets: >-
+      {{ item.value.ip | dict2items
+         | rejectattr('key', 'in', hosted_cluster_metallb_network_prefixes | default({}))
+         | map(attribute='value') | map('int') | list }}
+    metallb_all_lab_octets: >-
+      {{ hosted_cluster_metallb_pools | default({}) | dict2items
+         | map(attribute='value.ip') | map('dict2items') | flatten
+         | rejectattr('key', 'in', hosted_cluster_metallb_network_prefixes | default({}))
+         | map(attribute='value') | map('int') | list }}
+    metallb_vm_octets: "{{ ip_list | default({}) | dict2items | map(attribute='value') | map('int') | list }}"
+  ansible.builtin.assert:
+    that:
+      - item.value.ip.values() | map('int') | select('lt', 2) | list | length == 0
+      - item.value.ip.values() | map('int') | select('gt', 254) | list | length == 0
+      - metallb_check_octets | intersect(metallb_vm_octets) | length == 0
+      - metallb_check_octets | select('ge', 201) | select('le', 249) | list | length == 0
+      - metallb_all_lab_octets | length == metallb_all_lab_octets | unique | length
+    fail_msg: >-
+      hosted_cluster_metallb_pools.{{ item.key }} in vars.yaml is
+      {{ item.value.ip }}. Each value is the last octet of an address MetalLB
+      answers ARP for, so it must be 2-254, must not be an ip_list octet (VMs
+      on it: {{ metallb_check_octets | intersect(metallb_vm_octets) | default('none', true) }}),
+      must be outside libvirt's DHCP range .201-.249, and no two clusters may
+      share one on the segment (all of them: {{ metallb_all_lab_octets | sort }}).
+      The room left for VIPs is .100-.199.
+    success_msg: >-
+      {{ item.key }}: {{ item.value.ip }} - clear of every VM, of libvirt DHCP
+      and of every other pool.
+  loop: "{{ hosted_cluster_metallb_pools | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
 - name: Render MetalLB IPAddressPools (one single-address pool per hosted cluster)
   template:
     src: metal-lb/05-ip-pool.yaml.j2
