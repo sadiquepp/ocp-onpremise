@@ -123,14 +123,16 @@
     success_msg: "Every address is clear of every MetalLB pool."
 
 # The MAC scheme uses the octet's decimal digits as the MAC's last byte,
-# zero-padded ('%02d'), so it has to fit in two digits - for the VIPs too,
-# because setup-bm-host renders a DHCP reservation for every ip_list key and
-# 52:54:00:e2:54:100 would break the whole network definition. .1 is the
-# gateway. Single digits (the disconnected cluster's .3-.7) pad to 03..09,
+# zero-padded ('%02d'), so a node's octet has to fit in two digits. .1 is the
+# gateway. Single digits (the disconnected cluster's .3-.5) pad to 03..09,
 # which no two-digit octet can produce, so the MACs stay unique.
+#
+# Nodes only: the two VIPs build no MAC (setup-bm-host gives VIP keys no DHCP
+# reservation), so they may sit in .100-.199 with the lab's other VIPs. They
+# still have to be a host address outside libvirt's DHCP pool.
 - name: Fail if an octet cannot form a valid MAC
   vars:
-    compact_octets: "{{ compact_required_keys | map('extract', ip_list) | map('int') | list }}"
+    compact_octets: "{{ compact_nodes | map(attribute='ip_key') | map('extract', ip_list) | map('int') | list }}"
     compact_bad_octets: >-
       {{ (compact_octets | select('lt', 2) | list) + (compact_octets | select('gt', 99) | list) }}
   ansible.builtin.assert:
@@ -139,8 +141,22 @@
       {{ compact_bad_octets | join(', ') }} cannot form a MAC. This lab builds
       MACs as {{ compact_primary_mac_prefix }}:<octet, zero-padded> (and
       {{ compact_secondary_mac_prefix }}:<octet> for the bond's second port),
-      so every octet has to be between 2 and 99.
-    success_msg: "Every octet forms a well-formed MAC."
+      so every node's octet has to be between 2 and 99.
+    success_msg: "Every node's octet forms a well-formed MAC."
+
+- name: Fail if a VIP is not a usable static address
+  vars:
+    compact_vip_octets: "{{ [compact_api_vip_key, compact_ingress_vip_key] | map('extract', ip_list) | map('int') | list }}"
+  ansible.builtin.assert:
+    that:
+      - compact_vip_octets | select('lt', 2) | list | length == 0
+      - compact_vip_octets | select('gt', 254) | list | length == 0
+      - compact_vip_octets | select('ge', 201) | select('le', 249) | list | length == 0
+    fail_msg: >-
+      The VIPs are {{ compact_vip_octets | join(', ') }}. Each must be a host
+      address (2-254) outside libvirt's DHCP pool .201-.249, which would hand
+      it to some other VM.
+    success_msg: "Both VIPs are usable static addresses."
 
 - name: Read the lab ssh public key
   ansible.builtin.shell:

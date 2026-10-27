@@ -225,6 +225,7 @@ add the access key from the last command to `vault.yaml` as below.
 Review and adjust lab-specific values:
 
 - Review the variables in `vars.yaml` and adjust them to your needs. Each section has a description of the variables and their purpose.
+- [ip-allocation.md](ip-allocation.md) lists every address on the lab network in order, with the free ones, and the rules for picking a new one.
 
 ### vault.yaml (encrypted)
 - Configure the vault.yaml file. All the values are mandatory unless marked optional below
@@ -285,7 +286,7 @@ the commands and their order do not change - the same flow builds either lab:
 | Hub pulls images from | quay.io / registry.redhat.io | the mirror registry, only |
 | Hosted clusters rendered | `hosted_clusters` | `hosted_clusters_disconnected` |
 | Hosted cluster workers | `.41-.43`, internet reachable | `.44-.46`, egress cut |
-| MetalLB addresses used | `hub` (.60-.62) | `hubd` (.67-.69) |
+| MetalLB addresses used | `hub` (.160-.162) | `hubd` (.167-.169) |
 
 Prefer editing `vars.yaml` over passing `-e disconnected_install=...` on a
 single command. The flag decides which hub a step installs, which kubeconfig the
@@ -864,8 +865,8 @@ What the disconnected run adds to each bundle:
   them.
 - An APIServer `loadBalancer.hostname` that has to resolve to this cluster's
   MetalLB address **on the hub it is running on**. Pool *names* are identical on
-  every hub; the *addresses* are not (connected clusters: `hub` 60-62, `hub2`
-  90-92; `-d` clusters: `hub2` 93-95, `hubd` 67-69),
+  every hub; the *addresses* are not (connected clusters: `hub` 160-162, `hub2`
+  190-192; `-d` clusters: `hub2` 193-195, `hubd` 167-169),
   so a cluster rendered disconnected publishes a name that must resolve to its
   `hubd` address, not its `hub` one. The role resolves the hub per cluster
   (`hosted_cluster_metallb_hub`, defaulting to `target_hub`, but `hubd` for any
@@ -941,7 +942,7 @@ hosted_clusters_disconnected:
 ```
 
 A `-d` cluster is a cluster in its own right: its own namespace, its own
-MetalLB pool (`hubd` .67-.69), its own DNS zone and its own worker VMs. It is
+MetalLB pool (`hubd` .167-.169), its own DNS zone and its own worker VMs. It is
 not `hcp-cluster1` rendered differently, and the role refuses to run if a name
 appears in both lists, since the two would collide on all three. Note the
 connected clusters carry **no `hubd` address** - they never run on the
@@ -986,10 +987,10 @@ ingress path before simply because that list was maintained by hand:
 
 | cluster | `*.apps` VIP | worker backends |
 |---|---|---|
-| hcp-cluster1 / 2 / 3 | .49 / .59 / .58 | .41-.43 / .51-.53 / .54-.56 |
-| hcp-cluster1-d | .48 | .44-.46 |
-| hcp-cluster2-d | .38 | .28, .29, .37 |
-| hcp-cluster3-d | .99 | .96-.98 |
+| hcp-cluster1 / 2 / 3 | .149 / .159 / .158 | .41-.43 / .51-.53 / .54-.56 |
+| hcp-cluster1-d | .148 | .44-.46 |
+| hcp-cluster2-d | .138 | .28, .29, .37 |
+| hcp-cluster3-d | .199 | .96-.98 |
 
 Worker, PTR, DHCP and `*.apps` records are all rendered only for `ip_list` keys
 that exist, so a cluster whose VMs have not been built yet still gets a valid
@@ -1285,7 +1286,7 @@ flow calls for:
 - **`true`** - installs `roles/setup-hub-cluster2-disconnected` into
   `hub2_disconnected_install_folder`. This is **`hub2d`**, a separate cluster
   standing in the same relation to hub2 that `hubd` does to hub1: its own IP
-  block (`ip_list.hub2d_*`, `.10-.16` + `.19`), its own subdomain
+  block (`ip_list.hub2d_*`, `.10-.16`, haproxy VIP `.119`), its own subdomain
   (`hub2_disconnected_domain`, `hub2d.mylab.com`) and its own VM/install
   directories, wired to pull every image from the mirror registry with its
   nodes cut off from the real internet before anything boots. All four hubs -
@@ -1298,8 +1299,8 @@ frontends exist.
 
 > **MetalLB is the one thing the flag does not switch here.** Both modes pass
 > `metallb_hub=hub2`, because a disconnected DR hub is still the DR hub: a
-> hosted cluster restored onto it comes up on hub2's addresses (`.90-.92` for
-> the connected clusters, `.93-.95` for the `-d` ones). What
+> hosted cluster restored onto it comes up on hub2's addresses (`.190-.192` for
+> the connected clusters, `.193-.195` for the `-d` ones). What
 > `disconnected_install` decides is *which* clusters get pools - see
 > [MetalLB Address Pools for Hosted Clusters](#metallb-address-pools-for-hosted-clusters).
 > `hub2d` is deliberately not a hub name in `hosted_cluster_metallb_pools`.
@@ -1391,7 +1392,7 @@ oc get datadownloads.velero.io -n openshift-adp -w
 ### Point DNS at the DR hub
 
 The DR hub is on its own network segment, so the restored hosted clusters come
-up on its MetalLB addresses (`.90`/`.91`/`.92`) rather than hub1's - the pool
+up on its MetalLB addresses (`.190`/`.191`/`.192`) rather than hub1's - the pool
 names are the same, the addresses are not. Re-render the zone files so
 `api`/`api-int` follow them:
 
@@ -1465,7 +1466,7 @@ What is distinct about it:
 | Internet access from workers | yes | **cut** (no NAT, egress rejected) |
 | DNS zone | `hcp-cluster1.mylab.com` | `hcp-cluster1-d.mylab.com` |
 | `api` / `api-int` | MetalLB `hcp-cluster1-api-pool` | MetalLB `hcp-cluster1-d-api-pool` |
-| `*.apps` VIP (haproxy) | `.49` (`c1lb`) | `.48` (`c1dlb`) |
+| `*.apps` VIP (haproxy) | `.149` (`c1lb`) | `.148` (`c1dlb`) |
 | VM folder | `/var/lib/libvirt/images/hosted_cluster` | `/var/lib/libvirt/images/hosted_cluster_disconnected` |
 
 The `api`/`api-int` split is what makes the two clusters independent: each
@@ -1576,8 +1577,8 @@ ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns --ask-vault-pa
 Verify:
 
 ```bash
-dig +short api.hcp-cluster1-d.mylab.com @192.168.122.21     # -> 192.168.122.67 on hubd
-dig +short console-openshift-console.apps.hcp-cluster1-d.mylab.com @192.168.122.21  # -> 192.168.122.48
+dig +short api.hcp-cluster1-d.mylab.com @192.168.122.21     # -> 192.168.122.167 on hubd
+dig +short console-openshift-console.apps.hcp-cluster1-d.mylab.com @192.168.122.21  # -> 192.168.122.148
 sudo iptables -t nat -nL LIBVIRT_PRT --line-numbers | grep hcp-cluster1-d
 ```
 
@@ -1600,12 +1601,12 @@ routable, so each cluster carries one address per hub:
 
 | Hosted cluster   | Pool                      | hub (primary)    | hub2 (DR)        | hubd (disconnected) |
 | ---------------- | ------------------------- | ---------------- | ---------------- | ------------------- |
-| `hcp-cluster1`   | `hcp-cluster1-api-pool`   | `192.168.122.60` | `192.168.122.90` | -                   |
-| `hcp-cluster2`   | `hcp-cluster2-api-pool`   | `192.168.122.61` | `192.168.122.91` | -                   |
-| `hcp-cluster3`   | `hcp-cluster3-api-pool`   | `192.168.122.62` | `192.168.122.92` | -                   |
-| `hcp-cluster1-d` | `hcp-cluster1-d-api-pool` | -                | `192.168.122.93` | `192.168.122.67`    |
-| `hcp-cluster2-d` | `hcp-cluster2-d-api-pool` | -                | `192.168.122.94` | `192.168.122.68`    |
-| `hcp-cluster3-d` | `hcp-cluster3-d-api-pool` | -                | `192.168.122.95` | `192.168.122.69`    |
+| `hcp-cluster1`   | `hcp-cluster1-api-pool`   | `192.168.122.160` | `192.168.122.190` | -                   |
+| `hcp-cluster2`   | `hcp-cluster2-api-pool`   | `192.168.122.161` | `192.168.122.191` | -                   |
+| `hcp-cluster3`   | `hcp-cluster3-api-pool`   | `192.168.122.162` | `192.168.122.192` | -                   |
+| `hcp-cluster1-d` | `hcp-cluster1-d-api-pool` | -                | `192.168.122.193` | `192.168.122.167`    |
+| `hcp-cluster2-d` | `hcp-cluster2-d-api-pool` | -                | `192.168.122.194` | `192.168.122.168`    |
+| `hcp-cluster3-d` | `hcp-cluster3-d-api-pool` | -                | `192.168.122.195` | `192.168.122.169`    |
 
 A `-` is a deliberate reservation, not an omission. The connected three never
 run on the disconnected hub and the `-d` clusters never run on hub1, so those
@@ -1666,10 +1667,10 @@ holding addresses for both sets:
 
 | Run                        | `disconnected_install` | Pools rendered                            |
 | -------------------------- | ---------------------- | ----------------------------------------- |
-| `setup_hub_cluster.yaml`   | `false`                | `hcp-cluster1/2/3-api-pool` (.60-.62)     |
-| `setup_hub_cluster.yaml`   | `true`                 | `hcp-cluster{1,2,3}-d-api-pool` (.67-.69) |
-| `setup_hub_cluster2.yaml`  | `false`                | `hcp-cluster1/2/3-api-pool` (.90-.92)     |
-| `setup_hub_cluster2.yaml`  | `true`                 | `hcp-cluster{1,2,3}-d-api-pool` (.93-.95) |
+| `setup_hub_cluster.yaml`   | `false`                | `hcp-cluster1/2/3-api-pool` (.160-.162)     |
+| `setup_hub_cluster.yaml`   | `true`                 | `hcp-cluster{1,2,3}-d-api-pool` (.167-.169) |
+| `setup_hub_cluster2.yaml`  | `false`                | `hcp-cluster1/2/3-api-pool` (.190-.192)     |
+| `setup_hub_cluster2.yaml`  | `true`                 | `hcp-cluster{1,2,3}-d-api-pool` (.193-.195) |
 
 So `oc get IPAddressPool -n metallb-system` on a connected hub2 shows **three**
 pools, not six. The `-d` clusters' hub2 addresses stay reserved in the map; the
@@ -1704,7 +1705,7 @@ Three things are generated from the map:
 
 1. `roles/setup-hub-acm` renders one `IPAddressPool` per cluster of this run's
    install mode that holds a `metallb_hub` address (a single address, e.g.
-   `192.168.122.60-192.168.122.60`) and one `L2Advertisement` per pool, so each
+   `192.168.122.160-192.168.122.160`) and one `L2Advertisement` per pool, so each
    address is advertised independently.
 2. `roles/setup-dns` points that cluster's `api` and `api-int` A records at
    `target_hub`'s address for it.
@@ -1734,7 +1735,7 @@ ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns \
 ```
 
 `api`/`api-int` for every hosted cluster now resolve to the hub2 addresses
-(`.90`/`.91`/`.92`), which is where their restored kube-apiservers actually
+(`.190`/`.191`/`.192`), which is where their restored kube-apiservers actually
 came up. Set `target_hub: hub2` in `vars.yaml` to make the cutover permanent.
 
 ### What actually pins the address
@@ -1766,11 +1767,27 @@ oc -n hcp-cluster1-hcp-cluster1 annotate svc/kube-apiserver \
 
 - This replaces the old shared `hcp-ip-pool` (hub `60-63`, hubd `64-67`,
   hub2 `90-93`), which let any hosted cluster take any free address in the
-  range. `.63` is now free; `.67` and `.93` were taken back by the `-d`
+  range. `.63` was left free, and `.67` and `.93` went to the `-d`
   clusters' own pools. `roles/setup-hub-acm` deletes the
   old pool and its `l2advertisement` before applying the new ones, since
   MetalLB rejects overlapping pools - set
-  `metallb_remove_legacy_shared_pool: false` to skip that.
+  `metallb_remove_legacy_shared_pool: false` to skip that. Every pool has
+  since moved to `.100`-`.199` (each old address plus 100), so the VMs have
+  `.60`-`.63`, `.67`-`.69` and `.90`-`.95` back.
+- **Moving the addresses on a hub that is already up.** The pool names do not
+  change, only the address each one holds, so re-running the hub's `acm` tag
+  re-applies them in place, and the DNS run publishes the new addresses:
+  ```bash
+  ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass --tags acm
+  ansible-playbook -i inventory/hosts setup_bm_host.yaml --ask-vault-pass --tags dns
+  ```
+  Then run [Verifying](#verifying) for each hosted cluster: the Service's
+  address and DNS must agree, now on `.1xx`. The zones have a 60s TTL, so
+  clients follow within a minute. Not yet run on a hub with hosted clusters
+  up: if a `kube-apiserver` Service keeps its old address, delete it
+  (`oc delete svc kube-apiserver -n <hcp namespace>`) - HyperShift recreates
+  it and MetalLB gives it the pool's new address. Simplest is to move them
+  while no hosted cluster is running.
 - All three hubs can carry the pools at once, since MetalLB only ARPs for an
   address once a Service is assigned it. Just don't run the same hosted
   cluster on two hubs at the same time.

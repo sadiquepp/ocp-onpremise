@@ -41,8 +41,8 @@ hosted_cluster_service_cidr: 172.31.0.0/16
 
 # Which hub each bundle is being rendered for. This is what selects the
 # cluster's address out of hosted_cluster_metallb_pools[<name>].ip - pool NAMES
-# are the same on every hub, the ADDRESSES are not (hub 60-62, hub2 90-92,
-# hubd 64-66). It has to agree with:
+# are the same on every hub, the ADDRESSES are not (hub 160-162, hub2 190-195,
+# hubd 167-169). It has to agree with:
 #
 #   - roles/setup-hub-acm's metallb_hub, which renders the single-address
 #     IPAddressPool the kube-apiserver Service actually draws from, and
@@ -61,7 +61,7 @@ hosted_cluster_metallb_hub: "{{ target_hub | default('hub') }}"
 # Disconnected clusters live on hubd, so they do NOT follow target_hub - it is
 # the connected flow's hub selector and a disconnected run would otherwise
 # publish hub1 addresses. To restore a disconnected hosted cluster onto the DR
-# hub (its hub2 address, 93-95), override this rather than target_hub:
+# hub (its hub2 address, 193-195), override this rather than target_hub:
 #   -e disconnected_install=true -e hosted_cluster_metallb_hub_disconnected=hub2
 # and re-render that cluster's DNS zone with -e target_hub=hub2 to match.
 hosted_cluster_metallb_hub_disconnected: hubd

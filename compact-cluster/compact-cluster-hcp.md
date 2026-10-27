@@ -123,7 +123,7 @@ keeps it off every hub.
   hypervisor:
 
   ```bash
-  dig +short @192.168.122.1 api.compact.mylab.com     # 192.168.122.17
+  dig +short @192.168.122.1 api.compact.mylab.com     # 192.168.122.117
   ```
 
   If this prints nothing, the running network predates the compact forwarder.
