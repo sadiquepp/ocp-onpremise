@@ -35,6 +35,15 @@
 {% if (sno_name | default('')) and (ip_list[sno_name] is defined) %}
     <forwarder domain='{{ sno_name }}.{{ base_domain }}' addr='{{ lab_network_prefix }}.{{ ip_list.helper_server }}'/>
 {% endif %}
+{# Further single-node clusters (sno_extra_clusters). One under hub_domain needs
+   nothing here - the hub_domain forwarder above covers it, which is why sno3
+   sits there. Any other domain gets its own forwarder, which only takes effect
+   when this network is rebuilt (--tags virtnet). #}
+{% for s in sno_extra_clusters | default([]) %}
+{% if (ip_list[s.name] is defined) and (s.domain != hub_domain) %}
+    <forwarder domain='{{ s.name }}.{{ s.domain }}' addr='{{ lab_network_prefix }}.{{ ip_list.helper_server }}'/>
+{% endif %}
+{% endfor %}
 {# The three-node compact clusters, on the same condition setup-dns serves their
    zones on. Their nodes resolve api-int and *.apps from their own on-node
    CoreDNS, so the installs do not depend on this - every OTHER VM on the
@@ -112,6 +121,9 @@ api.{{ hub2_disconnected_domain }}
 {%- elif key == 'sno2' -%}
 {#- sno2 likewise lives in its own zone, sno2.<base_domain>. -#}
 sno2.sno2.{{ base_domain }}
+{%- elif key in (sno_extra_clusters | default([]) | map(attribute='name') | list) -%}
+{#- A further single-node cluster: the same rule, in its own domain. -#}
+{{ key }}.{{ key }}.{{ (sno_extra_clusters | selectattr('name', 'eq', key) | first).domain }}
 {%- elif key in compact_dhcp_names -%}
 {{ compact_dhcp_names[key] }}
 {%- else -%}

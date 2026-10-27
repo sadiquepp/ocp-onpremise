@@ -96,7 +96,7 @@
     sno_ip: "{{ lab_network_prefix }}.{{ ip_list[sno_name] }}"
     sno_mgmt_mac: "{{ (sno_mgmt_mac_prefix ~ ':' ~ ('%02d' | format(ip_list[sno_name] | int))) | lower }}"
     sno_ssh_key: "{{ sno_ssh_out.stdout }}"
-    sno_cluster_domain: "{{ sno_name }}.{{ base_domain }}"
+    sno_cluster_domain: "{{ sno_name }}.{{ sno_base_domain }}"
 
 # One install folder per cluster. The folder holds auth/kubeconfig, the only
 # copy of a cluster's admin credentials, and `agent create image` writes a new

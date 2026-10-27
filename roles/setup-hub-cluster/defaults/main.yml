@@ -1,2 +1,6 @@
 ---
 # defaults file for setup-hub-cluster
+
+## virt-install's cache= for every hub1 disk: none, or unsafe with
+## hub_disk_cache_unsafe (vars.yaml).
+hub_disk_cache: "{{ 'unsafe' if (hub_disk_cache_unsafe | default(false) | bool) else 'none' }}"

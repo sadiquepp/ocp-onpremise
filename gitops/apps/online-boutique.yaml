@@ -1,0 +1,56 @@
+# Online Boutique, deployed by Argo CD from git.
+#
+# An Application says three things: where the desired state is (source),
+# where it goes (destination), and how to keep them in step (syncPolicy).
+#
+# Source: the same app kubevirt/steps.md step 10 applies by hand - from
+# sadiquepp/openshift, pinned to a commit so the desired state only changes
+# when this file does. 'base' rather than overlays/no-loadgenerator: the
+# overlay also creates the Namespace, a cluster-scoped object the app should
+# not own (online-boutique-namespace.yaml does). The load generator is removed
+# here instead, with the same patches that overlay uses.
+#
+#   oc apply -f gitops/apps/online-boutique.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: online-boutique
+  namespace: openshift-gitops
+  # Deleting the Application deletes what it deployed. Without this finalizer,
+  # deleting it only stops Argo CD tracking the resources.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/sadiquepp/openshift
+    targetRevision: 2ae4f18ed03e719669cff4883650bd7a24bdb6a2
+    path: test-workloads/online-boutique/base
+    kustomize:
+      patches:
+        - target:
+            kind: Deployment
+            name: loadgenerator
+          patch: |
+            $patch: delete
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: loadgenerator
+        - target:
+            kind: ServiceAccount
+            name: loadgenerator
+          patch: |
+            $patch: delete
+            apiVersion: v1
+            kind: ServiceAccount
+            metadata:
+              name: loadgenerator
+  destination:
+    server: https://kubernetes.default.svc   # this cluster, hub1
+    namespace: online-boutique
+  # No 'automated' yet: Argo CD only reports drift, and you press Sync.
+  # gitops/README.md, exercise 3, turns on automated sync and self-heal.
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=false   # online-boutique-namespace.yaml owns it

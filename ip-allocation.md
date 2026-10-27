@@ -118,7 +118,8 @@ rebuild.
 | `.55` | VM | hcp-cluster3 worker2 | `ip_list.c3worker2` |  |
 | `.56` | VM | hcp-cluster3 worker3 | `ip_list.c3worker3` |  |
 | `.57` | VM | UDN lab tenant client VM: red | `ip_list.udnclient-red` |  |
-| `.58`–`.63` |  |  |  |  |
+| `.58`–`.62` |  |  |  |  |
+| `.63` | VM | sno3, single-node OpenShift running MCE (kubevirt/setup_sno3_mce.yaml): node, API and *.apps | `ip_list.sno3` | in `sno3.hub.mylab.com` (`sno_extra_clusters`) |
 | `.64` | VM | compact (three-node compact cluster) master1 | `ip_list.compact_master1` |  |
 | `.65` | VM | compact (three-node compact cluster) master2 | `ip_list.compact_master2` |  |
 | `.66` | VM | compact (three-node compact cluster) master3 | `ip_list.compact_master3` |  |
@@ -186,7 +187,11 @@ rebuild.
 | `.199` | VIP | hcp-cluster3-d *.apps VIP on the helper's haproxy | `ip_list.c3dlb` |  |
 | `.200` |  |  |  |  |
 | `.201`–`.249` | DHCP pool | libvirt DHCP pool (virbr0), handed out dynamically |  |  |
-| `.250`–`.254` |  |  |  |  |
+| `.250` | MetalLB VIP | hcp-kv1 API (kube-apiserver LoadBalancer) on hub (hub1) | `hosted_cluster_metallb_pools.hcp-kv1.ip.hub` | pool `hcp-kv1-api-pool` |
+| `.251` | MetalLB VIP | hcp-kv1 *.apps, only with `ingress: metallb` | `hosted_cluster_node_keys.hcp-kv1.apps_vip` |  |
+| `.252` | MetalLB VIP | hcp-kv2 API (kube-apiserver LoadBalancer) on hub (hub1) | `hosted_cluster_metallb_pools.hcp-kv2.ip.hub` | pool `hcp-kv2-api-pool` |
+| `.253` | MetalLB VIP | hcp-kv3 API (kube-apiserver LoadBalancer) on sno3 | `hosted_cluster_metallb_pools.hcp-kv3.ip.sno3` | pool `hcp-kv3-api-pool` |
+| `.254` |  |  |  |  |
 | `.255` | Broadcast | 192.168.122.255 |  |  |
 
 ## Other lab networks

@@ -1,0 +1,28 @@
+{# Kubernetes NMState Operator - the NodeNetworkConfigurationPolicy API the
+   localnet bridge mapping needs. Same manifests udn-bgp-evpn installs, so a
+   hub that ran that lab already has it and this is skipped. #}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openshift-nmstate
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-nmstate
+  namespace: openshift-nmstate
+spec:
+  targetNamespaces:
+    - openshift-nmstate
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: kubernetes-nmstate-operator
+  namespace: openshift-nmstate
+spec:
+  channel: {{ kubevirt_nmstate_channel }}
+  name: kubernetes-nmstate-operator
+  installPlanApproval: Automatic
+  source: {{ kubevirt_catalog_source }}
+  sourceNamespace: {{ kubevirt_catalog_source_namespace }}

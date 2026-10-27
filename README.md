@@ -61,6 +61,7 @@ In a hurry? [steps.md](steps.md) is the same end-to-end run as commands only.
   - [Verifying](#verifying-1)
   - [Notes and constraints](#notes-and-constraints-1)
 - [Three-node compact cluster](#three-node-compact-cluster)
+- [Hosted clusters on the KubeVirt platform](#hosted-clusters-on-the-kubevirt-platform)
 - [UDN over BGP, VRF-Lite and EVPN (containerlab fabric)](#udn-over-bgp-vrf-lite-and-evpn-containerlab-fabric)
   - [Can this be simulated on this lab? Yes - here is the honest shape of it](#can-this-be-simulated-on-this-lab-yes---here-is-the-honest-shape-of-it)
   - [The one idea to drop first: you do not move a UDN's default gateway](#the-one-idea-to-drop-first-you-do-not-move-a-udns-default-gateway)
@@ -633,6 +634,13 @@ To re-run just the ACM part against a hub that is already up:
 
 ```bash
 ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass --tags acm
+```
+
+Or only the hosted clusters' MetalLB API pools - all a hub that is already up
+needs after a hosted cluster is added to `hosted_cluster_metallb_pools`:
+
+```bash
+ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass --tags metallb
 ```
 
 What the disconnected run does on top of the connected one:
@@ -2100,6 +2108,50 @@ flows reads it. Run its playbooks from inside the directory:
 cd compact-cluster
 ansible-playbook -i ../inventory/hosts setup_compact_cluster.yaml --ask-vault-pass
 ```
+
+## Hosted clusters on the KubeVirt platform
+
+**Lives in [`kubevirt/`](kubevirt/).** A hosted cluster (`hcp-kv1`) whose
+workers are KubeVirt VMs that its NodePool creates on the hub's OpenShift
+Virtualization. On this lab they are nested VMs, so there's no ISO and no
+Agent to approve. Ingress goes through the hub's router by default, with
+MetalLB inside the hosted cluster as a per-cluster toggle. The host, Ceph and
+hub1 are built with the same playbooks as [steps.md](steps.md); the
+directory automates only the rest. Every command, start to finish, in
+[kubevirt/steps.md](kubevirt/steps.md); explanations in
+[kubevirt/README.md](kubevirt/README.md).
+
+![Hosted control planes on KubeVirt: one infra router serves every hosted cluster's *.apps by TLS SNI passthrough, and kubevirt-csi passes storage through to the worker VMs](kubevirt/images/hcp-kubevirt-ingress-passthrough.svg)
+
+*The default layout, ingress and storage both passed through the
+infrastructure cluster: hub1 in this lab, with `*.apps.hub.mylab.com` and
+hcp-kv1 as hosted cluster A.
+[kubevirt/README.md, Ingress](kubevirt/README.md#ingress-the-hubs-router-or-metallb)
+explains it.*
+
+hcp-kv1 is an ordinary `hosted_clusters` entry with `platform: kubevirt`, so
+`setup-dns` and `setup-hub-acm` give it its API name and pool.
+`create_hosted_cluster.yaml` skips it. `hcp-kv2` is the same with
+`infra: sno`: its control plane on the hub, its worker VMs on the single-node
+cluster ([kubevirt/README.md](kubevirt/README.md#workers-on-another-cluster-hcp-kv2-on-the-sno)).
+`hcp-kv3` adds a third cluster: its control plane on `sno3`, a second SNO that
+runs MCE alone, managed from hub1's ACM
+([kubevirt/README.md](kubevirt/README.md#three-clusters-acm-on-hub1-mce-on-sno3-vms-on-the-sno-hcp-kv3)).
+Run the playbook from inside the directory:
+
+```bash
+cd kubevirt
+ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml --ask-vault-pass
+```
+
+## GitOps with Argo CD on hub1
+
+**Lives in [`gitops/`](gitops/).** Red Hat OpenShift GitOps on hub1, learned
+step by step: the operator, then one application (Online Boutique) deployed by
+Argo CD from git, with exercises on drift, self-heal and prune. Manifests and
+`oc` only, no playbook. Each step notes what production does differently.
+The aim is to deploy the KubeVirt hosted clusters the same way later.
+Start at [gitops/README.md](gitops/README.md).
 
 ## UDN over BGP, VRF-Lite and EVPN (containerlab fabric)
 

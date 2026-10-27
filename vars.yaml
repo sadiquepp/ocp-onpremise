@@ -218,6 +218,40 @@ hosted_clusters:
   ## the compact cluster's zone (hosted_cluster_domains). Walkthrough:
   ## compact-cluster/compact-cluster-hcp.md.
   - hcp-compact1
+  ## KubeVirt platform: the NodePool creates its workers as VMs on the hub's
+  ## OpenShift Virtualization (nested, on this lab). Rendered and applied by
+  ## kubevirt/setup_hosted_cluster_kubevirt.yaml, NOT by create_hosted_cluster
+  ## - roles/create-hosted-cluster skips 'platform: kubevirt' entries. Listed
+  ## here so setup-dns and setup-hub-acm give it its api name and API pool like
+  ## any other hosted cluster. Ingress through the hub's router by default; add
+  ## 'ingress: metallb' for MetalLB inside it. kubevirt/README.md.
+  - name: hcp-kv1
+    platform: kubevirt
+  ## The same, but its worker VMs run on the SNO (setup_sno.yaml) instead of
+  ## the hub: the control plane stays on the hub, and the NodePool creates the
+  ## VMs on the SNO's OpenShift Virtualization through a kubeconfig for it
+  ## ('external infrastructure'). 'infra' names an entry in
+  ## kubevirt/vars.yaml's kubevirt_infras. Its apps are under the SNO's *.apps.
+  ## Smaller workers than hcp-kv1's, to fit beside the SNO's own workloads.
+  ## kubevirt/README.md, "Workers on another cluster".
+  - name: hcp-kv2
+    platform: kubevirt
+    infra: sno
+    memory: 12Gi
+  ## The three-cluster layout: its control plane on sno3, a second SNO that
+  ## runs MCE alone (kubevirt/setup_sno3_mce.yaml); its worker VMs on the SNO
+  ## like hcp-kv2's; hub1's ACM discovers it on sno3 and imports it. Its only
+  ## API address is keyed 'sno3', so hub runs leave it alone - build it with
+  ## kubevirt/setup_hosted_cluster_kubevirt.yaml -e kubevirt_mgmt=sno3.
+  ## SingleReplica: sno3 has one node - that is its control plane. Two
+  ## workers, on the SNO beside hcp-kv2's two: four 12 GiB VMs, which is why
+  ## the KubeVirt docs build the SNO at 96 GiB.
+  - name: hcp-kv3
+    platform: kubevirt
+    infra: sno
+    availability_policy: SingleReplica
+    nodepool_replicas: 2
+    memory: 12Gi
 hosted_clusters_disconnected:
   - hcp-cluster1-d
   - hcp-cluster2-d
@@ -388,6 +422,11 @@ ip_list:
   ## TWO DIGITS, because this lab's MAC scheme appends the octet verbatim
   ## (52:54:00:e2:54:<octet>) and a three-digit octet is not a valid MAC.
   sno: 20
+  ## A further single-node cluster, for the 'separate MCE cluster' layout
+  ## (kubevirt/setup_sno3_mce.yaml): MCE hosts hcp-kv3's control plane here,
+  ## the workers run on the SNO above. .63 - free since the MetalLB pools
+  ## moved to .1xx; see the note on the disconnected clusters below.
+  sno3: 63
   ## A second single-node cluster, on its own fabric segment (rack2). Only used
   ## when sno2_enabled is true. .2 because no two-digit octet was free when it
   ## was added. Like compactd's .3-.5 it is
@@ -427,7 +466,8 @@ ip_list:
   # (64-66, plus 17 and 18, are now the compact cluster, added below. 64-66
   #  sit between the hub MetalLB band at 60-62 and the hubd band at 67-69,
   #  which is why setup-compact-cluster's pre-flight refuses to build if a
-  #  pool ever claims one. .63 is the last free two-digit octet.)
+  #  pool ever claims one. .63 was the last free two-digit octet, and is
+  #  now sno3's.)
   # (The MetalLB pools have since moved to .1xx - each old address plus 100 -
   #  which frees .60-.63, .67-.69 and .90-.95 for VMs. See
   #  hosted_cluster_metallb_pools.)
@@ -716,6 +756,18 @@ hosted_domain_disconnected: "hcp-cluster1-d.{{ base_domain }}"
 hub_vm_folder: "{{ download_dir }}/hub"
 hub_install_folder: "{{ download_dir }}/hub_install"
 hub_name: hub
+
+## Disk cache mode of hub1's VMs: off (cache=none) by default; true builds them
+## with cache=unsafe. QEMU then ignores the guests' flushes, so etcd's fsyncs
+## stop waiting for the host's disks. On this host's spinning, write-through
+## RAID that is the difference between hub1's etcd logging ~200-2500 'took too
+## long' per 10 minutes and none - which is what the KubeVirt labs need, since
+## every hosted control plane's controllers hold leases on hub1's API.
+## The cost: a host crash or power loss (not a clean shutdown) can corrupt
+## hub1's disks. A lab rebuilt from playbooks can afford that; turn it on for
+## the KubeVirt builds. Only VMs created after it is set get it - for a running
+## hub1, kubevirt/README.md, "hub1's disks: cache=unsafe".
+hub_disk_cache_unsafe: false
 hub2_name: hub2
 
 ## Variables required by Setup-Hub-Cluster2 Role (the replacement hub
@@ -767,6 +819,11 @@ sno_install_folder: "{{ download_dir }}/sno_install"
 ## minimal - an SNO at exactly the minimum spends its life under memory
 ## pressure, and the first symptom is operators flapping, which reads as a
 ## broken install rather than a small one.
+##
+## hcp-kv2 and hcp-kv3 (kubevirt/, 'infra: sno') run their worker VMs here,
+## two 12 GiB each, which this size has no room for: the KubeVirt docs build
+## the SNO with -e sno_memory=98304 -e sno_vcpus=16 (96 GiB; kubevirt/steps.md,
+## "hcp-kv2"). This default stays small for the other labs that use the SNO.
 sno_memory: 32768
 sno_vcpus: 12
 sno_disk_gb: 200
@@ -776,8 +833,25 @@ sno_disk_gb: 200
 ## lvms-vg1 the default StorageClass. Follows use_lvm_storage; set
 ## sno_lvm_storage: false to keep the SNO without storage.
 ## Add it to a running SNO with: setup_sno.yaml --tags snostorage
+##
+## Thin on the host (qcow2, metadata preallocated only), so the file takes
+## space only as LVMS writes. 512: the worker VMs of hcp-kv2 and hcp-kv3 run
+## here, a 32Gi root disk each, and LVMS gives the thin pool 90% of this disk.
+## Only a new disk gets this size; kubevirt/README.md, "Grow the SNO's
+## storage disk", for one that exists.
 sno_lvm_storage: "{{ use_lvm_storage }}"
-sno_storage_disk_gb: 100
+sno_storage_disk_gb: 512
+
+## Further single-node clusters beside the one above, each with its own
+## ip_list entry. setup-dns serves a zone for each (<name>.<domain>, every name
+## on the node's address, as for the SNO above); the playbook that builds one
+## passes the same name and domain to roles/setup-sno.
+##   sno3 - kubevirt/setup_sno3_mce.yaml: MCE only, hosting hcp-kv3's control
+##          plane. Under hub_domain, which the libvirt network already
+##          forwards, so adding it needs no network rebuild.
+sno_extra_clusters:
+  - name: sno3
+    domain: "{{ hub_domain }}"
 
 ## A second, unconfigured NIC on the containerlab fabric, added at build time.
 ## Off by default: this builds a cluster and nothing about a cluster needs the
@@ -1057,6 +1131,28 @@ hosted_cluster_metallb_pools:
     pool: hcp-compact1-api-pool
     ip:
       compact: 100
+
+  ## The KubeVirt-platform cluster (kubevirt/). Its kube-apiserver is a
+  ## LoadBalancer on the hub like the Agent clusters'. .250 because no two-digit
+  ## octet is left: .250-.254 sit above libvirt's DHCP range (.201-.249) and
+  ## outside every other pool and ip_list entry. .251 is its *.apps address
+  ## when it runs with 'ingress: metallb' (hosted_cluster_node_keys below).
+  hcp-kv1:
+    pool: hcp-kv1-api-pool
+    ip:
+      hub: 250
+  ## hcp-kv2's control plane is on the hub too (only its VMs are on the SNO),
+  ## so its API is the next free address above the DHCP range.
+  hcp-kv2:
+    pool: hcp-kv2-api-pool
+    ip:
+      hub: 252
+  ## Control plane on sno3 (MetalLB there, kubevirt/setup_sno3_mce.yaml), so
+  ## its address is keyed 'sno3' and no hub renders a pool for it.
+  hcp-kv3:
+    pool: hcp-kv3-api-pool
+    ip:
+      sno3: 253
 
 ## Network the pool addresses sit on, per hub. Anything not listed here uses
 ## lab_network_prefix, which is why this is empty by default - in this lab all
@@ -1513,6 +1609,14 @@ hosted_cluster_node_keys:
   hcp-compact1:
     workers: [hcpc1worker1, hcpc1worker2]
     apps_vip: 101
+  ## No workers: its VMs are created by the NodePool and take whatever address
+  ## they are given - the hub's pod network with ingress: route, libvirt's DHCP
+  ## (.201-.249) with ingress: metallb. apps_vip is used only with
+  ## 'ingress: metallb' (MetalLB inside the hosted cluster, the same role as
+  ## hcp-compact1); with the default ingress its apps live under the hub's
+  ## *.apps instead, and this record is simply never asked for.
+  hcp-kv1:
+    apps_vip: 251
 
 ## The DNS domain each hosted cluster sits under, when it is not base_domain.
 ## The HostedCluster's dns.baseDomain, its zone (<name>.<this>), its
@@ -1526,6 +1630,13 @@ hosted_cluster_node_keys:
 ## compact cluster is on.
 hosted_cluster_domains:
   hcp-compact1: "{{ compact_name }}.{{ base_domain }}"
+  ## Under the hub's zone for the same reason: the libvirt network already
+  ## forwards hub.<base_domain> to the helper, so api.hcp-kv1.hub.mylab.com
+  ## resolves from every VM - the hub's nodes, and the worker VMs - with no
+  ## change to the running network.
+  hcp-kv1: "{{ hub_domain }}"
+  hcp-kv2: "{{ hub_domain }}"
+  hcp-kv3: "{{ hub_domain }}"
 
 ## LEGACY: hosted_domain / hosted_domain2 / hosted_domain3 above are the same
 ## information as hosted_clusters, written twice. Nothing renders from them any

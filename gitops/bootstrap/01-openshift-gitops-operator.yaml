@@ -1,0 +1,42 @@
+# Red Hat OpenShift GitOps (Argo CD) on hub1.
+#
+# The operator installs into openshift-gitops-operator and, by default, starts
+# one Argo CD instance in openshift-gitops - the "default cluster-scoped
+# instance", meant for the platform team's cluster configuration.
+#
+# Applied by hand, once: the operator that runs GitOps cannot itself come from
+# GitOps. Everything after this is in git.
+#
+#   oc apply -f gitops/bootstrap/01-openshift-gitops-operator.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openshift-gitops-operator
+  labels:
+    openshift.io/cluster-monitoring: "true"
+---
+# No targetNamespaces: the operator watches every namespace (AllNamespaces),
+# which is the only install mode it supports.
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-gitops-operator
+  namespace: openshift-gitops-operator
+spec:
+  upgradeStrategy: Default
+---
+# 'latest' follows the newest GitOps release. Production usually pins a
+# versioned channel (gitops-1.x) and approves upgrades (installPlanApproval:
+# Manual) so an operator update is a planned change, not a surprise.
+# A disconnected hub points source at its mirrored catalog.
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: openshift-gitops-operator
+  namespace: openshift-gitops-operator
+spec:
+  channel: latest
+  installPlanApproval: Automatic
+  name: openshift-gitops-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace

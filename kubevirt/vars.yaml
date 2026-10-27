@@ -1,0 +1,295 @@
+## ===========================================================================
+## kubevirt/vars.yaml - hosted clusters on the KubeVirt platform
+## ===========================================================================
+##
+## Hosted clusters whose worker nodes are VMs that the NodePool creates on the
+## management cluster's OpenShift Virtualization. In this lab the management
+## cluster is the hub, whose nodes are themselves libvirt VMs, so the workers
+## are NESTED VMs:
+##
+##   L0  the RHEL host (kvm nested=1, set by roles/setup-bm-host)
+##   L1  hub VMs (--cpu host-passthrough)  - OpenShift Virtualization, MCE
+##   L2  hosted-cluster workers            - KubeVirt VMs from the NodePool
+##
+## Every variable this use case owns lives here, prefixed kubevirt_. Loaded
+## AFTER ../vars.yaml by setup_hosted_cluster_kubevirt.yaml, so anything below
+## may refer to base variables (hub_install_folder, base_domain, ...).
+##
+## WHICH clusters are KubeVirt is NOT decided here. They are entries in the
+## root vars.yaml's hosted_clusters list with 'platform: kubevirt', because
+## that list is what the rest of the lab already keys off:
+##
+##   roles/setup-dns       renders api.<name>.<domain> (and *.apps for the
+##                         MetalLB toggle) from hosted_clusters +
+##                         hosted_cluster_metallb_pools
+##   roles/setup-hub-acm   renders the cluster's single-address API pool
+##   roles/create-hosted-cluster
+##                         SKIPS 'platform: kubevirt' entries - they are
+##                         rendered here instead
+##
+## Per-cluster keys on that entry override the kubevirt_* defaults below:
+##
+##   hosted_clusters:
+##     - name: hcp-kv1
+##       platform: kubevirt
+##       ingress: metallb          # kubevirt_ingress
+##       nodepool_replicas: 3      # kubevirt_nodepool_replicas
+##       cores: 8                  # kubevirt_worker_cores
+##       memory: 24Gi              # kubevirt_worker_memory
+##       root_volume_size: 64Gi    # kubevirt_root_volume_size
+##       root_volume_storage_class: ocs-external-storagecluster-ceph-rbd
+##       channel: stable-4.21      # hosted_cluster_channel (root vars.yaml)
+##       infra: sno                # VMs on another cluster - kubevirt_infras
+##
+## The fuller walkthrough is README.md in this directory.
+
+## ---------------------------------------------------------------------------
+## The management cluster
+## ---------------------------------------------------------------------------
+
+## Kubeconfig of the cluster that runs the control planes (and, without
+## 'infra', the worker VMs). The hub by default; with -e kubevirt_mgmt=sno3,
+## the MCE cluster's from kubevirt_mce_clusters below. Any other cluster with
+## MCE and MetalLB: set both kubevirt_mgmt and this.
+kubevirt_mgmt_kubeconfig: >-
+  {{ kubevirt_mce_clusters[kubevirt_mgmt].kubeconfig
+     if kubevirt_mgmt in kubevirt_mce_clusters
+     else hub_install_folder ~ '/auth/kubeconfig' }}
+
+## The key this management cluster has in hosted_cluster_metallb_pools[<name>].ip
+## - the same 'hub'/'hub2'/'compact' selector roles/setup-hub-acm calls
+## metallb_hub and roles/setup-dns calls target_hub. It picks the API address.
+kubevirt_mgmt: "{{ target_hub | default('hub') }}"
+
+## Which cluster names this run handles. Empty = every 'platform: kubevirt'
+## entry in hosted_clusters that has an address for kubevirt_mgmt. Narrow a run
+## to one with -e kubevirt_cluster=hcp-kv1.
+kubevirt_cluster: ""
+
+## ---------------------------------------------------------------------------
+## Control planes on a separate MCE cluster (sno3)
+## ---------------------------------------------------------------------------
+##
+## The three-cluster layout: hub1 runs ACM and stays the one place everything
+## is managed from; sno3 runs MCE alone and hosts the control planes of the
+## clusters whose hosted_cluster_metallb_pools entry has an 'sno3' address
+## (hcp-kv3); their worker VMs run on an infrastructure cluster ('infra: sno').
+## setup_sno3_mce.yaml builds sno3, installs MCE and MetalLB there, and imports
+## it into hub1's ACM, which then discovers sno3's hosted clusters and imports
+## them too. Build hcp-kv3 with -e kubevirt_mgmt=sno3.
+##
+## Its name, address and domain are the root vars.yaml's (ip_list.sno3,
+## sno_extra_clusters); this is what only this directory needs.
+kubevirt_mce_clusters:
+  sno3:
+    kubeconfig: "{{ download_dir }}/sno3_install/auth/kubeconfig"
+    ## SNO + MCE + MetalLB + LVM Storage + one SingleReplica control plane.
+    memory: 40960
+    vcpus: 12
+    disk_gb: 200
+    storage_disk_gb: 100
+
+## hub1 - the ACM hub the MCE clusters are imported into, and where their
+## hosted clusters show up as DiscoveredClusters.
+kubevirt_acm_hub_kubeconfig: "{{ hub_install_folder }}/auth/kubeconfig"
+
+## On an MCE cluster imported into ACM, ACM's add-on agents run in this
+## namespace, so they do not collide with the MCE cluster's own (local-cluster)
+## add-ons in open-cluster-management-agent-addon. Applied to the MCE
+## clusters' add-ons only - hub1's own and every other managed cluster's
+## stay where they are.
+kubevirt_mce_addon_namespace: open-cluster-management-agent-addon-discovery
+
+## A discovered hosted cluster is imported into ACM as
+## <kubevirt_mce_discovery_prefix>-<name> - sno3-hcp-kv3. Empty uses the MCE
+## cluster's name, which is the same thing here; Red Hat's docs warn against an
+## empty prefix where names could collide.
+kubevirt_mce_discovery_prefix: ""
+
+## ---------------------------------------------------------------------------
+## Workers on another cluster ('external infrastructure')
+## ---------------------------------------------------------------------------
+##
+## By default a cluster's worker VMs run on the management cluster, next to its
+## control plane. 'infra: <key>' on its hosted_clusters entry puts them on the
+## cluster named here instead; the control plane, API address and ACM import
+## stay on the management cluster.
+##
+## On that cluster this playbook installs OpenShift Virtualization, lets its
+## router admit wildcard routes, and creates the VM namespace (by default the
+## same name as the control-plane namespace) with a ServiceAccount that has
+## only the Role HyperShift documents for it. A kubeconfig for that
+## ServiceAccount goes into a Secret beside the HostedCluster, which names it in
+## spec.platform.kubevirt.credentials. The VMs, their disks, the kubevirt-csi
+## volumes and the *.apps passthrough Route all live on that cluster, so a
+## cluster's apps are *.apps.<name>.<that cluster's apps domain>.
+##
+## Only 'ingress: route' is wired for these.
+kubevirt_infras:
+  sno:
+    kubeconfig: "{{ sno_install_folder }}/auth/kubeconfig"
+
+## The ServiceAccount on the infrastructure cluster, in each VM namespace.
+kubevirt_infra_service_account: hcp-infra
+
+## ---------------------------------------------------------------------------
+## Ingress for the hosted cluster's *.apps
+## ---------------------------------------------------------------------------
+##
+## route    (default) the management cluster's own router. HyperShift sets
+##          spec.platform.kubevirt.baseDomainPassthrough, so the hosted
+##          cluster's apps are *.apps.<name>.<mgmt apps domain> - already
+##          covered by the hub's wildcard DNS record - and it creates a
+##          wildcard passthrough Route in the control-plane namespace that the
+##          hub's router matches by SNI. Needs the hub's default
+##          IngressController to admit wildcard routes, which kubevirt-mgmt
+##          turns on. Workers keep the default pod network only.
+##
+## metallb  MetalLB INSIDE the hosted cluster hands its *.apps address
+##          (hosted_cluster_node_keys[<name>].apps_vip in the root vars.yaml)
+##          to a LoadBalancer Service in front of its routers - the same
+##          ../roles/setup-hcp-ingress-metallb hcp-compact1 uses. For the
+##          address to be reachable the workers must sit on the lab network,
+##          so they get ONE NIC, on an OVN-Kubernetes localnet secondary
+##          network bridged to the hub's br-ex (a Multus NAD), and none on the
+##          default pod network. libvirt's dnsmasq gives that NIC a DHCP lease
+##          on .201-.249. The cluster's domain is
+##          hosted_cluster_domains[<name>] (hub.<base_domain> for hcp-kv1), and
+##          *.apps.<name>.<that> must resolve to apps_vip: setup-dns does that.
+##
+## baseDomainPassthrough is immutable: to switch a cluster between the two,
+## destroy it (--tags destroy) and create it again.
+kubevirt_ingress: route
+
+## ---------------------------------------------------------------------------
+## Worker VMs (the NodePool)
+## ---------------------------------------------------------------------------
+
+## 4 vCPU / 16 GiB: two workers of 8.5 GiB fill up on the hosted cluster's own
+## operators alone (see compact_hosted_cluster_memory in the root vars.yaml).
+## The hub's three workers are 32 vCPU / 48 GiB, and also carry the hosted
+## control planes, so 2-6 of these fit.
+kubevirt_nodepool_replicas: 2
+kubevirt_worker_cores: 4
+kubevirt_worker_memory: 16Gi
+
+## Auto-repair (the NodePool's MachineHealthCheck) deletes and replaces a
+## worker whose node is NotReady for longer than kubevirt_mhc_timeout, or that
+## has not joined within kubevirt_mhc_node_startup_timeout of its VM starting.
+## HyperShift's defaults are 8m and 20m. A nested worker on a busy lab can sit
+## NotReady for 25 minutes while OVN-Kubernetes sets the node up, and with the
+## defaults auto-repair deletes it mid-way - the replacement then starts the
+## same wait, and the deletion's drain can hang with the node cordoned.
+## Per cluster: mhc_timeout / mhc_node_startup_timeout on its entry.
+kubevirt_mhc_timeout: 40m
+kubevirt_mhc_node_startup_timeout: 60m
+
+## The root disk, a PVC on the management cluster that CDI fills from the RHCOS
+## KubeVirt image in the release payload.
+##
+## Empty storage class = the management cluster's default StorageClass. On a
+## hub built the ../steps.md way (use_lvm_storage: false, Ceph attached with
+## setup_ceph_odf.yaml) that is ocs-external-storagecluster-ceph-rbd, and CDI
+## gives the root disks ReadWriteMany block, so the VMs live-migrate when a
+## hub node drains. On a hub built with use_lvm_storage it is lvms-vg1:
+## ReadWriteOnce, so draining a hub node stops the worker VMs on it instead.
+kubevirt_root_volume_size: 32Gi
+kubevirt_root_volume_storage_class: ""
+## Empty = let CDI's StorageProfile for that class choose.
+kubevirt_root_volume_access_mode: ""
+kubevirt_root_volume_mode: ""
+
+## ---------------------------------------------------------------------------
+## Storage inside the hosted cluster (kubevirt-csi passthrough)
+## ---------------------------------------------------------------------------
+##
+## A PVC in the hosted cluster becomes a DataVolume in its control-plane
+## namespace on the management cluster, hot-plugged into the worker VM.
+##
+## Default: the guest gets one StorageClass, backed by the management cluster's
+## default StorageClass. Set a mapping to choose the infra class (and the name
+## the guest sees) explicitly:
+##   kubevirt_csi_storage_class_mapping:
+##     - infra: ocs-external-storagecluster-ceph-rbd
+##       guest: kubevirt-csi-rbd
+kubevirt_csi_storage_class_mapping: []
+
+## ---------------------------------------------------------------------------
+## The localnet secondary network (ingress: metallb only)
+## ---------------------------------------------------------------------------
+
+## The OVN localnet name. It is the bridge mapping on every management-cluster
+## worker (an NMState NNCP) AND the 'name' in each NAD's CNI config - OVN joins
+## the two on that string, so they must match.
+kubevirt_localnet_name: kubevirt-lab
+
+## The OVS bridge the localnet maps onto. br-ex is OVN-Kubernetes' bridge on
+## the node's lab-network NIC, so the worker VMs land on 192.168.122.0/24 with
+## no extra NIC on the hub VMs.
+kubevirt_localnet_bridge: br-ex
+
+## Which management-cluster nodes get the bridge mapping - the ones that run
+## worker VMs.
+kubevirt_localnet_node_selector:
+  node-role.kubernetes.io/worker: ""
+
+## The NAD's name; one per hosted cluster, in its control-plane namespace.
+kubevirt_localnet_nad: "{{ kubevirt_localnet_name }}"
+
+## ---------------------------------------------------------------------------
+## Import into ACM
+## ---------------------------------------------------------------------------
+##
+## MCE's hypershift add-on imports every HostedCluster by itself once its
+## control plane is available: it creates the ManagedCluster (hosted on
+## local-cluster, klusterlet in Hosted mode) and, with ACM, the
+## KlusterletAddonConfig. So this playbook leaves it alone.
+##
+## true: render 04-acm-import.yaml and apply it after the NodePool - for a hub
+## with that auto-import turned off. It is the same objects, so on a hub that
+## does auto-import it only merges into what is already there.
+kubevirt_acm_import: false
+
+## ---------------------------------------------------------------------------
+## Operators on the management cluster
+## ---------------------------------------------------------------------------
+
+## Follows acm_catalog_source when the root vars.yaml sets one - which is how a
+## disconnected hub points every operator at its mirrored catalog.
+kubevirt_catalog_source: "{{ acm_catalog_source | default('redhat-operators', true) }}"
+kubevirt_catalog_source_namespace: "{{ acm_catalog_source_namespace | default('openshift-marketplace', true) }}"
+kubevirt_cnv_channel: stable
+
+## OpenShift Virtualization's built-in OS images (CentOS Stream, Fedora, RHEL
+## 8/9/10 - one 30Gi PVC each in openshift-virtualization-os-images) are for
+## VMs people create by hand; the NodePools' workers boot RHCOS and never use
+## them. On an LVMS cluster they fill the thin pool: on the SNO's 90 GB pool
+## they took ~60 GB, and the hcp-kv2 workers were paused with "not enough
+## space on volume: rhcos". Off on every cluster this playbook sets up for VMs;
+## true downloads them again.
+kubevirt_common_boot_images: false
+kubevirt_nmstate_channel: stable
+
+## ---------------------------------------------------------------------------
+## Run behaviour
+## ---------------------------------------------------------------------------
+
+## false: render the bundles under kubevirt/rendered/ and stop. Nothing is
+## applied to the management cluster.
+kubevirt_apply: true
+
+## Where the rendered bundles go, one file per cluster.
+kubevirt_render_dir: "{{ playbook_dir }}/rendered"
+
+## Where each hosted cluster's admin kubeconfig is written - the same path
+## ../roles/setup-hcp-ingress-metallb uses, so both find it.
+kubevirt_kubeconfig_dir: "{{ download_dir }}"
+
+## Waits. Nested workers are slow: CDI imports the RHCOS image, the VM boots
+## twice, and the hosted cluster's operators then roll out on it.
+kubevirt_hostedcluster_retries: 90
+kubevirt_hostedcluster_delay: 20
+kubevirt_nodepool_retries: 120
+kubevirt_nodepool_delay: 30
+kubevirt_operator_retries: 90
+kubevirt_operator_delay: 10

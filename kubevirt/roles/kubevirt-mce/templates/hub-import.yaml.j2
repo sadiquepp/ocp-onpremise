@@ -1,0 +1,111 @@
+{# Applied to hub1 (ACM): import the MCE cluster {{ kubevirt_mce_name }} so ACM
+   manages it, and have ACM discover the hosted clusters it hosts.
+
+   An MCE cluster already runs its own klusterlet and add-ons (for its
+   local-cluster). Red Hat's procedure for importing one into ACM keeps them
+   apart: a 'noOperator' KlusterletConfig puts ACM's klusterlet beside the
+   MCE one (postfix mce-import), and an AddOnDeploymentConfig moves ACM's
+   add-on agents into their own namespace.
+
+   That procedure applies the add-on settings hub-wide, by patching the
+   ClusterManagementAddOns and hypershift-addon-deploy-config. hub1 also hosts
+   its own hosted clusters, so here they are attached to {{ kubevirt_mce_name }}'s
+   ManagedClusterAddOns only (spec.configs) - hub1's own add-ons, and every
+   other managed cluster's, are untouched.
+
+   Holds {{ kubevirt_mce_name }}'s admin kubeconfig (the auto-import Secret), so it
+   is written 0600. #}
+---
+apiVersion: config.open-cluster-management.io/v1alpha1
+kind: KlusterletConfig
+metadata:
+  name: mce-import-klusterlet-config
+spec:
+  installMode:
+    type: noOperator
+    noOperator:
+      postfix: mce-import
+---
+apiVersion: addon.open-cluster-management.io/v1alpha1
+kind: AddOnDeploymentConfig
+metadata:
+  name: mce-addon-ns-config
+  namespace: multicluster-engine
+spec:
+  agentInstallNamespace: {{ kubevirt_mce_addon_namespace }}
+{# hypershift-addon on an MCE cluster: discover its hosted clusters and report
+   them to ACM as DiscoveredClusters, but leave its HyperShift operator to
+   its own MCE (disableHOManagement) and send no metrics. #}
+---
+apiVersion: addon.open-cluster-management.io/v1alpha1
+kind: AddOnDeploymentConfig
+metadata:
+  name: mce-hypershift-addon-config
+  namespace: multicluster-engine
+spec:
+  agentInstallNamespace: {{ kubevirt_mce_addon_namespace }}
+  customizedVariables:
+    - name: disableHOManagement
+      value: "true"
+    - name: disableMetrics
+      value: "true"
+{% if kubevirt_mce_discovery_prefix | length > 0 %}
+    - name: discoveryPrefix
+      value: "{{ kubevirt_mce_discovery_prefix }}"
+{% endif %}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ kubevirt_mce_name }}
+{% for addon in ['work-manager', 'managed-serviceaccount', 'cluster-proxy'] %}
+---
+apiVersion: addon.open-cluster-management.io/v1alpha1
+kind: ManagedClusterAddOn
+metadata:
+  name: {{ addon }}
+  namespace: {{ kubevirt_mce_name }}
+spec:
+  configs:
+    - group: addon.open-cluster-management.io
+      resource: addondeploymentconfigs
+      name: mce-addon-ns-config
+      namespace: multicluster-engine
+{% endfor %}
+---
+apiVersion: addon.open-cluster-management.io/v1alpha1
+kind: ManagedClusterAddOn
+metadata:
+  name: hypershift-addon
+  namespace: {{ kubevirt_mce_name }}
+spec:
+  configs:
+    - group: addon.open-cluster-management.io
+      resource: addondeploymentconfigs
+      name: mce-hypershift-addon-config
+      namespace: multicluster-engine
+---
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: {{ kubevirt_mce_name }}
+  annotations:
+    agent.open-cluster-management.io/klusterlet-config: mce-import-klusterlet-config
+  labels:
+    cloud: auto-detect
+    vendor: auto-detect
+    cluster.open-cluster-management.io/clusterset: {{ hosted_cluster_clusterset | default('default') }}
+spec:
+  hubAcceptsClient: true
+  leaseDurationSeconds: 60
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: auto-import-secret
+  namespace: {{ kubevirt_mce_name }}
+type: Opaque
+stringData:
+  autoImportRetry: "5"
+  kubeconfig: |
+    {{ lookup('ansible.builtin.file', kubevirt_mce.kubeconfig) | indent(4) }}

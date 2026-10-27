@@ -1,0 +1,239 @@
+---
+# Checks that change nothing. Every failure names the step that fixes it.
+
+- name: Check the management cluster's kubeconfig exists
+  ansible.builtin.stat:
+    path: "{{ kubevirt_mgmt_kubeconfig }}"
+  register: kubevirt_kubeconfig_stat
+
+- name: Fail if it does not
+  ansible.builtin.assert:
+    that:
+      - kubevirt_kubeconfig_stat.stat.exists
+    fail_msg: >-
+      {{ kubevirt_mgmt_kubeconfig }} not found. {{ (kubevirt_mgmt in kubevirt_mce_clusters)
+      | ternary('Build ' ~ kubevirt_mgmt ~ ' first: setup_sno3_mce.yaml in this directory.',
+                'Build the hub first (setup_hub_cluster.yaml), or point kubevirt_mgmt_kubeconfig at the management cluster you mean to use.') }}
+
+- name: Check the hosted-cluster and MetalLB APIs are there
+  ansible.builtin.command:
+    cmd: oc get crd {{ item }}
+  loop:
+    - hostedclusters.hypershift.openshift.io
+    - ipaddresspools.metallb.io
+  register: kubevirt_crds
+  changed_when: false
+  failed_when: false
+
+- name: Fail if MCE or MetalLB is missing
+  ansible.builtin.assert:
+    that:
+      - kubevirt_crds.results | selectattr('rc', 'ne', 0) | list | length == 0
+    fail_msg: >-
+      Missing on the management cluster:
+      {{ kubevirt_crds.results | selectattr('rc', 'ne', 0) | map(attribute='item') | join(', ') }}.
+      MCE (HyperShift) and MetalLB come from
+      {{ (kubevirt_mgmt in kubevirt_mce_clusters)
+      | ternary('`ansible-playbook -i ../inventory/hosts setup_sno3_mce.yaml --tags mce,metallb --ask-vault-pass` in this directory.',
+                '`ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --tags acm --ask-vault-pass` run from the repository root.') }}
+
+# The kube-apiserver's address comes from a single-address pool that
+# setup_hub_cluster.yaml (roles/setup-hub-acm) renders for every hosted
+# cluster in hosted_cluster_metallb_pools - step 6 of ../steps.md on a fresh
+# hub. Without it the HostedCluster waits forever on a <pending> Service.
+- name: Read each cluster's API pool on the management cluster
+  ansible.builtin.command:
+    cmd: >-
+      oc -n metallb-system get ipaddresspool {{ item.api_pool }}
+      -o jsonpath={.spec.addresses[0]}
+  loop: "{{ kubevirt_specs }}"
+  loop_control:
+    label: "{{ item.api_pool }}"
+  register: kubevirt_api_pools
+  changed_when: false
+  failed_when: false
+
+- name: Fail if a cluster's API pool is missing or holds another address
+  ansible.builtin.assert:
+    that:
+      - item.stdout == item.item.api_vip ~ '-' ~ item.item.api_vip
+    fail_msg: >-
+      IPAddressPool {{ item.item.api_pool }} holds
+      '{{ item.stdout | default('', true) | default('nothing - it does not exist', true) }}',
+      not {{ item.item.api_vip }}. {{ (kubevirt_mgmt in kubevirt_mce_clusters)
+      | ternary('setup_sno3_mce.yaml creates it from hosted_cluster_metallb_pools - re-run just that part, in this directory: ansible-playbook -i ../inventory/hosts setup_sno3_mce.yaml --tags metallb --ask-vault-pass',
+                'setup_hub_cluster.yaml creates it from hosted_cluster_metallb_pools; on a hub built before ' ~ item.item.name ~ ' was added to the root vars.yaml, re-run just that part, from the repository root: ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --tags metallb --ask-vault-pass') }}
+  loop: "{{ kubevirt_api_pools.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Check the pull secret is loaded
+  ansible.builtin.assert:
+    that:
+      - pull_secret is defined
+      - ssh_key is defined
+    fail_msg: pull_secret comes from ../vault.yaml - run with --ask-vault-pass.
+
+# The L1 hub VMs can only run L2 VMs if the host's KVM module allows nesting.
+# roles/setup-bm-host writes kvm-intel nested=1; it takes effect once the
+# module is reloaded (or the host rebooted). On a management cluster that is
+# real bare metal neither file matters and this is skipped.
+- name: Read the host's nested-virtualisation setting
+  ansible.builtin.slurp:
+    src: "/sys/module/{{ item }}/parameters/nested"
+  loop: [kvm_intel, kvm_amd]
+  register: kubevirt_nested
+  failed_when: false
+
+- name: Fail if KVM is loaded without nesting
+  ansible.builtin.assert:
+    that:
+      - (kubevirt_nested.results | selectattr('content', 'defined')
+         | map(attribute='content') | map('b64decode') | map('trim')
+         | select('in', ['Y', '1']) | list | length) > 0
+    fail_msg: >-
+      KVM on this host does not allow nested guests, so the hub's VMs cannot
+      run the hosted cluster's worker VMs. Set it and reload the module with
+      every VM stopped (or reboot):
+      echo 'options kvm-intel nested=1' > /etc/modprobe.d/kvm-nested.conf
+      (kvm-amd on AMD), then `modprobe -r kvm_intel && modprobe kvm_intel`.
+  when: kubevirt_nested.results | selectattr('content', 'defined') | list | length > 0
+
+# api.<name> has to resolve to the cluster's MetalLB address before the
+# HostedCluster is created: the workers find their API by that name. The
+# helper serves it; roles/setup-dns renders it from the same
+# hosted_cluster_metallb_pools entry this run reads.
+- name: Resolve each cluster's API name on the helper
+  ansible.builtin.command:
+    cmd: dig +short {{ item.api_hostname }} @{{ lab_network_prefix }}.{{ ip_list.helper_server }}
+  loop: "{{ kubevirt_specs }}"
+  loop_control:
+    label: "{{ item.api_hostname }}"
+  register: kubevirt_api_dns
+  changed_when: false
+  failed_when: false
+
+- name: Fail if an API name does not resolve to its address
+  ansible.builtin.assert:
+    that:
+      - item.item.api_vip in item.stdout_lines
+    fail_msg: >-
+      {{ item.item.api_hostname }} resolves to
+      '{{ item.stdout | default('', true) | trim | default('nothing', true) }}', not
+      {{ item.item.api_vip }}{{ ((item.rc | default(0)) != 0) | ternary(' (dig failed: ' ~ (item.stderr | default('') | trim) ~ ')', '') }}.
+      Render the zone from the repository root:
+      ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns
+      --ask-vault-pass -e target_hub={{ kubevirt_mgmt }}
+  loop: "{{ kubevirt_api_dns.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Resolve each MetalLB-ingress cluster's *.apps on the helper
+  ansible.builtin.command:
+    cmd: dig +short console-openshift-console.apps.{{ item.name }}.{{ item.domain }} @{{ lab_network_prefix }}.{{ ip_list.helper_server }}
+  loop: "{{ kubevirt_specs | selectattr('ingress', 'eq', 'metallb') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: kubevirt_apps_dns
+  changed_when: false
+  failed_when: false
+
+- name: Fail if *.apps does not resolve to the MetalLB address
+  ansible.builtin.assert:
+    that:
+      - item.item.apps_vip in item.stdout_lines
+    fail_msg: >-
+      *.apps.{{ item.item.name }}.{{ item.item.domain }} does not resolve to
+      {{ item.item.apps_vip }}. setup-dns publishes it from
+      hosted_cluster_node_keys['{{ item.item.name }}'].apps_vip:
+      ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns
+      --ask-vault-pass -e target_hub={{ kubevirt_mgmt }}
+  loop: "{{ kubevirt_apps_dns.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+# 'infra' clusters: their VMs go on another cluster (the SNO), reached with
+# its admin kubeconfig from this host. It has to exist and answer.
+- name: Check each infrastructure cluster's kubeconfig exists
+  ansible.builtin.stat:
+    path: "{{ item.kubeconfig }}"
+  loop: "{{ kubevirt_infra_targets | rejectattr('infra', 'eq', '') | list }}"
+  loop_control:
+    label: "{{ item.label }}"
+  register: kubevirt_infra_kubeconfig
+
+- name: Check each infrastructure cluster answers
+  ansible.builtin.command:
+    cmd: oc --kubeconfig {{ item.item.kubeconfig }} get nodes -o name
+  loop: "{{ kubevirt_infra_kubeconfig.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  register: kubevirt_infra_up
+  changed_when: false
+  failed_when: false
+  when: item.stat.exists
+
+- name: Fail if one is not built or does not answer
+  ansible.builtin.assert:
+    that:
+      - item.item.stat.exists
+      - item.rc | default(1) == 0
+    fail_msg: >-
+      {{ kv_t.label }} ({{ kv_t.kubeconfig }})
+      {{ item.item.stat.exists | ternary('does not answer: ' ~ (item.stderr | default('') | trim), 'does not exist - the cluster is not built yet.') }}
+      {{ (kv_t.infra == 'sno') | ternary(
+         'Build the SNO from the repository root - with storage, which the Ceph flow (use_lvm_storage: false) otherwise leaves it without: ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass -e sno_lvm_storage=true (kubevirt/README.md, "Workers on another cluster", for its size).',
+         'Point kubevirt_infras[' ~ kv_t.infra ~ '].kubeconfig in kubevirt/vars.yaml at a working kubeconfig.') }}
+  loop: "{{ kubevirt_infra_up.results }}"
+  loop_control:
+    label: "{{ item.item.item.label }}"
+  vars:
+    kv_t: "{{ item.item.item }}"
+
+# The worker root disks and kubevirt-csi both fall back to the default
+# StorageClass of the cluster the VMs run on. Name it, and say what LVM
+# Storage costs.
+- name: Read the default StorageClass of each cluster that runs worker VMs
+  ansible.builtin.shell:
+    cmd: >-
+      oc --kubeconfig {{ item.kubeconfig }} get sc
+      -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name} {.provisioner}{"\n"}{end}'
+  loop: "{{ kubevirt_infra_targets }}"
+  loop_control:
+    label: "{{ item.label }}"
+  register: kubevirt_default_sc
+  changed_when: false
+
+- name: Fail if a disk has no StorageClass to come from
+  ansible.builtin.assert:
+    that:
+      - item.stdout | trim | length > 0
+        or (kv_mine | selectattr('root_volume_storage_class', 'eq', '') | list | length == 0
+            and kv_mine | selectattr('csi_mapping', 'eq', []) | list | length == 0)
+    fail_msg: >-
+      {{ item.item.label }} has no default StorageClass, and a cluster whose
+      VMs run there relies on one (empty root_volume_storage_class or no
+      csi_storage_class_mapping).
+      {{ (item.item.infra == '') | ternary(
+         'Attach Ceph to the hub - steps 5 and 7 of ../steps.md (setup_ceph.yaml, setup_ceph_odf.yaml) - or name the classes in kubevirt/vars.yaml.',
+         (item.item.infra == 'sno') | ternary(
+           'Give the SNO LVM Storage from the repository root: ansible-playbook -i inventory/hosts setup_sno.yaml --tags snostorage --ask-vault-pass -e sno_lvm_storage=true',
+           'Give it a default StorageClass, or name the classes in kubevirt/vars.yaml.')) }}
+  loop: "{{ kubevirt_default_sc.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  vars:
+    kv_mine: "{{ kubevirt_specs | selectattr('infra', 'eq', item.item.infra) | list }}"
+
+- name: Say what the default StorageClass means for the worker VMs
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.label }}: default StorageClass {{ item.stdout | trim | default('none', true) }}.
+      {{ ('rbd.csi.ceph.com' in item.stdout)
+         | ternary('Ceph RBD from ../steps.md: CDI gives the root disks ReadWriteMany block, so the worker VMs live-migrate when a node drains.',
+           ('topolvm' in item.stdout)
+           | ternary('LVM Storage - ReadWriteOnce, so worker VMs cannot live-migrate and a node drain stops the workers on it. Fine on a single node; ../steps.md builds the hub on Ceph instead.',
+                     'Root disks and kubevirt-csi volumes come from it unless kubevirt/vars.yaml names another class.')) }}
+  loop: "{{ kubevirt_default_sc.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"

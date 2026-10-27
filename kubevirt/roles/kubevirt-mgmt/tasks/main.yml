@@ -1,0 +1,23 @@
+---
+# Prepare the management cluster (the hub, by default) to run hosted clusters
+# whose workers are KubeVirt VMs. Cluster-independent except for which ingress
+# modes the selected clusters use.
+#
+# Reads kubevirt_specs, kubevirt_any_route and kubevirt_any_metallb from
+# ../../tasks/select-clusters.yml, and every setting from ../../vars.yaml.
+# setup_hosted_cluster_kubevirt.yaml calls each file under its own tag; this
+# file runs them all, in order.
+
+- name: Preflight
+  ansible.builtin.include_tasks: preflight.yml
+
+- name: OpenShift Virtualization
+  ansible.builtin.include_tasks: virtualization.yml
+
+- name: Wildcard routes for clusters with ingress route
+  ansible.builtin.include_tasks: route-ingress.yml
+  when: kubevirt_any_route | bool
+
+- name: Localnet secondary network for clusters with ingress metallb
+  ansible.builtin.include_tasks: localnet.yml
+  when: kubevirt_any_metallb | bool
