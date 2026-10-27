@@ -20,8 +20,11 @@ from these maps:
   so a three-digit octet cannot become a MAC. Single digits (`.2`-`.9`) are
   zero-padded to `:02`-`:09`.
 - **VIPs belong in `.100`-`.199`.** A VIP has no MAC, so it does not use up a
-  two-digit octet. `roles/setup-hub-acm` refuses a MetalLB address that is a
-  VM's, that is inside libvirt's DHCP pool, or that two clusters share.
+  two-digit octet. The helper haproxy's VIPs (`ip_list.*lb`) and the MetalLB
+  addresses live there, each at its old two-digit address plus 100.
+  `roles/setup-bm-host` gives no `ip_list` VIP a libvirt DHCP reservation, and
+  `roles/setup-hub-acm` refuses a MetalLB address that is any `ip_list`
+  entry's, that is inside libvirt's DHCP pool, or that two clusters share.
 - **`.100`-`.200` is also the helper dhcpd range** in `roles/setup-dhcp`. No
   playbook deploys that role, which is why the VIPs can live there. Deploying
   it would collide with them.
@@ -31,13 +34,32 @@ from these maps:
   the VTEP block (`100.64.0.<octet>`) by the UDN/BGP/EVPN lab, so a node keeps
   one number everywhere. See [Other lab networks](#other-lab-networks).
 
+## Moving the helper's VIPs on a lab that is up
+
+The haproxy VIPs (`ip_list.*lb`) moved from two digits to `.1xx` (`.39` to
+`.139` and so on). On a lab built before that, one run moves them:
+
+```bash
+ansible-playbook -i inventory/hosts setup_bm_host.yaml --ask-vault-pass --tags dns,lb
+```
+
+`dns` republishes the zones and the hypervisor's `/etc/hosts`. `lb` binds the
+new addresses on the helper, removes the old ones, and reloads haproxy. The
+zones and libvirt's dnsmasq cap TTLs at 60s, so clients may keep the old address
+for up to a minute. The clusters need no change: their certificates name
+`api.<cluster>`, not an address.
+
+`virtnet` is not needed. It only drops the VIPs' unused DHCP reservations, and
+it restarts the `default` network under every VM, so leave it for the next
+rebuild.
+
 ## 192.168.122.0/24
 
 | Address | Type | What | Defined by | Notes |
 | --- | --- | --- | --- | --- |
 | `.0` | Network | 192.168.122.0/24 network address |  |  |
 | `.1` | Gateway | libvirt `default` network (virbr0): gateway, NAT, dnsmasq DNS and DHCP |  |  |
-| `.2` |  |  |  |  |
+| `.2` | VM | sno2, second single-node OpenShift (rack2) | `ip_list.sno2` | only built when `sno2_enabled` is true |
 | `.3` | VM | compactd (disconnected three-node compact cluster) master1 | `ip_list.compactd_master1` |  |
 | `.4` | VM | compactd (disconnected three-node compact cluster) master2 | `ip_list.compactd_master2` |  |
 | `.5` | VM | compactd (disconnected three-node compact cluster) master3 | `ip_list.compactd_master3` |  |
@@ -54,7 +76,7 @@ from these maps:
 | `.16` | VM | hub2d (disconnected DR hub) worker3 | `ip_list.hub2d_worker3` |  |
 | `.17` | VIP | compact API VIP (keepalived on its masters) | `ip_list.compact_api` |  |
 | `.18` | VIP | compact *.apps ingress VIP (keepalived on its masters) | `ip_list.compact_ingress` |  |
-| `.19` | VIP | hub2d (disconnected DR hub) API (6443), machine-config (22623) and *.apps (80/443) VIP on the helper's haproxy | `ip_list.hub2dlb` |  |
+| `.19` |  |  |  |  |
 | `.20` | VM | sno, single-node OpenShift: node, API and *.apps | `ip_list.sno` |  |
 | `.21` | VM | helper VM: DNS (named), haproxy, PXE/HTTP | `ip_list.helper_server` |  |
 | `.22` | VM | mirror registry VM (registry.hub.mylab.com:8443) | `ip_list.registry` |  |
@@ -73,8 +95,7 @@ from these maps:
 | `.35` | VM | hub (hub1) worker2 | `ip_list.worker2` |  |
 | `.36` | VM | hub (hub1) worker3 | `ip_list.worker3` |  |
 | `.37` | VM | hcp-cluster2-d worker3 | `ip_list.c2dworker3` |  |
-| `.38` | VIP | hcp-cluster2-d *.apps VIP on the helper's haproxy | `ip_list.c2dlb` |  |
-| `.39` | VIP | hub (hub1) API (6443), machine-config (22623) and *.apps (80/443) VIP on the helper's haproxy | `ip_list.hublb` |  |
+| `.38`–`.39` |  |  |  |  |
 | `.40` | VM | containerlab VM (UDN/BGP/EVPN fabric: leaf1, spine, leaf2) | `ip_list.clab` |  |
 | `.41` | VM | hcp-cluster1 worker1 | `ip_list.c1worker1` |  |
 | `.42` | VM | hcp-cluster1 worker2 | `ip_list.c1worker2` |  |
@@ -83,8 +104,7 @@ from these maps:
 | `.45` | VM | hcp-cluster1-d worker2 | `ip_list.c1dworker2` |  |
 | `.46` | VM | hcp-cluster1-d worker3 | `ip_list.c1dworker3` |  |
 | `.47` | VM | UDN lab external client VM | `ip_list.udnclient` |  |
-| `.48` | VIP | hcp-cluster1-d *.apps VIP on the helper's haproxy | `ip_list.c1dlb` |  |
-| `.49` | VIP | hcp-cluster1 *.apps VIP on the helper's haproxy | `ip_list.c1lb` |  |
+| `.48`–`.49` |  |  |  |  |
 | `.50` | VM | UDN lab tenant client VM: blue | `ip_list.udnclient-blue` |  |
 | `.51` | VM | hcp-cluster2 worker1 | `ip_list.c2worker1` |  |
 | `.52` | VM | hcp-cluster2 worker2 | `ip_list.c2worker2` |  |
@@ -93,9 +113,7 @@ from these maps:
 | `.55` | VM | hcp-cluster3 worker2 | `ip_list.c3worker2` |  |
 | `.56` | VM | hcp-cluster3 worker3 | `ip_list.c3worker3` |  |
 | `.57` | VM | UDN lab tenant client VM: red | `ip_list.udnclient-red` |  |
-| `.58` | VIP | hcp-cluster3 *.apps VIP on the helper's haproxy | `ip_list.c3lb` |  |
-| `.59` | VIP | hcp-cluster2 *.apps VIP on the helper's haproxy | `ip_list.c2lb` |  |
-| `.60`–`.63` |  |  |  |  |
+| `.58`–`.63` |  |  |  |  |
 | `.64` | VM | compact (three-node compact cluster) master1 | `ip_list.compact_master1` |  |
 | `.65` | VM | compact (three-node compact cluster) master2 | `ip_list.compact_master2` |  |
 | `.66` | VM | compact (three-node compact cluster) master3 | `ip_list.compact_master3` |  |
@@ -109,7 +127,7 @@ from these maps:
 | `.76` | VM | hubd (disconnected hub) worker1 | `ip_list.hubd_worker1` |  |
 | `.77` | VM | hubd (disconnected hub) worker2 | `ip_list.hubd_worker2` |  |
 | `.78` | VM | hubd (disconnected hub) worker3 | `ip_list.hubd_worker3` |  |
-| `.79` | VIP | hubd (disconnected hub) API (6443), machine-config (22623) and *.apps (80/443) VIP on the helper's haproxy | `ip_list.hubdlb` |  |
+| `.79` |  |  |  |  |
 | `.80` | VM | hub2 (DR hub) bootstrap | `ip_list.hub2_bootstrap` |  |
 | `.81` | VM | hub2 (DR hub) master1 | `ip_list.hub2_master1` |  |
 | `.82` | VM | hub2 (DR hub) master2 | `ip_list.hub2_master2` |  |
@@ -119,15 +137,24 @@ from these maps:
 | `.86` | VM | hub2 (DR hub) worker3 | `ip_list.hub2_worker3` |  |
 | `.87` | VM | UDN lab tenant client VM: purple | `ip_list.udnclient-purple` |  |
 | `.88` | VM | UDN lab namespace client VM (one netns per tenant) | `ip_list.udnnsclient` |  |
-| `.89` | VIP | hub2 (DR hub) API (6443), machine-config (22623) and *.apps (80/443) VIP on the helper's haproxy | `ip_list.hub2lb` |  |
-| `.90`–`.95` |  |  |  |  |
+| `.89`–`.95` |  |  |  |  |
 | `.96` | VM | hcp-cluster3-d worker1 | `ip_list.c3dworker1` |  |
 | `.97` | VM | hcp-cluster3-d worker2 | `ip_list.c3dworker2` |  |
 | `.98` | VM | hcp-cluster3-d worker3 | `ip_list.c3dworker3` |  |
-| `.99` | VIP | hcp-cluster3-d *.apps VIP on the helper's haproxy | `ip_list.c3dlb` |  |
+| `.99` |  |  |  |  |
 | `.100` | MetalLB VIP | hcp-compact1 API (kube-apiserver LoadBalancer) on the compact cluster | `hosted_cluster_metallb_pools.hcp-compact1.ip.compact` | pool `hcp-compact1-api-pool` |
 | `.101` | MetalLB VIP | hcp-compact1 *.apps (MetalLB inside the hosted cluster, in front of its routers) | `hosted_cluster_node_keys.hcp-compact1.apps_vip` |  |
-| `.102`–`.159` |  |  |  |  |
+| `.102`–`.118` |  |  |  |  |
+| `.119` | VIP | hub2d (disconnected DR hub) API (6443), machine-config (22623) and *.apps (80/443) VIP on the helper's haproxy | `ip_list.hub2dlb` |  |
+| `.120`–`.137` |  |  |  |  |
+| `.138` | VIP | hcp-cluster2-d *.apps VIP on the helper's haproxy | `ip_list.c2dlb` |  |
+| `.139` | VIP | hub (hub1) API (6443), machine-config (22623) and *.apps (80/443) VIP on the helper's haproxy | `ip_list.hublb` |  |
+| `.140`–`.147` |  |  |  |  |
+| `.148` | VIP | hcp-cluster1-d *.apps VIP on the helper's haproxy | `ip_list.c1dlb` |  |
+| `.149` | VIP | hcp-cluster1 *.apps VIP on the helper's haproxy | `ip_list.c1lb` |  |
+| `.150`–`.157` |  |  |  |  |
+| `.158` | VIP | hcp-cluster3 *.apps VIP on the helper's haproxy | `ip_list.c3lb` |  |
+| `.159` | VIP | hcp-cluster2 *.apps VIP on the helper's haproxy | `ip_list.c2lb` |  |
 | `.160` | MetalLB VIP | hcp-cluster1 API (kube-apiserver LoadBalancer) on hub (hub1) | `hosted_cluster_metallb_pools.hcp-cluster1.ip.hub` | pool `hcp-cluster1-api-pool` |
 | `.161` | MetalLB VIP | hcp-cluster2 API (kube-apiserver LoadBalancer) on hub (hub1) | `hosted_cluster_metallb_pools.hcp-cluster2.ip.hub` | pool `hcp-cluster2-api-pool` |
 | `.162` | MetalLB VIP | hcp-cluster3 API (kube-apiserver LoadBalancer) on hub (hub1) | `hosted_cluster_metallb_pools.hcp-cluster3.ip.hub` | pool `hcp-cluster3-api-pool` |
@@ -135,14 +162,19 @@ from these maps:
 | `.167` | MetalLB VIP | hcp-cluster1-d API (kube-apiserver LoadBalancer) on hubd (disconnected hub) | `hosted_cluster_metallb_pools.hcp-cluster1-d.ip.hubd` | pool `hcp-cluster1-d-api-pool` |
 | `.168` | MetalLB VIP | hcp-cluster2-d API (kube-apiserver LoadBalancer) on hubd (disconnected hub) | `hosted_cluster_metallb_pools.hcp-cluster2-d.ip.hubd` | pool `hcp-cluster2-d-api-pool` |
 | `.169` | MetalLB VIP | hcp-cluster3-d API (kube-apiserver LoadBalancer) on hubd (disconnected hub) | `hosted_cluster_metallb_pools.hcp-cluster3-d.ip.hubd` | pool `hcp-cluster3-d-api-pool` |
-| `.170`–`.189` |  |  |  |  |
+| `.170`–`.178` |  |  |  |  |
+| `.179` | VIP | hubd (disconnected hub) API (6443), machine-config (22623) and *.apps (80/443) VIP on the helper's haproxy | `ip_list.hubdlb` |  |
+| `.180`–`.188` |  |  |  |  |
+| `.189` | VIP | hub2 (DR hub) API (6443), machine-config (22623) and *.apps (80/443) VIP on the helper's haproxy | `ip_list.hub2lb` |  |
 | `.190` | MetalLB VIP | hcp-cluster1 API (kube-apiserver LoadBalancer) on hub2 (DR hub) | `hosted_cluster_metallb_pools.hcp-cluster1.ip.hub2` | pool `hcp-cluster1-api-pool` |
 | `.191` | MetalLB VIP | hcp-cluster2 API (kube-apiserver LoadBalancer) on hub2 (DR hub) | `hosted_cluster_metallb_pools.hcp-cluster2.ip.hub2` | pool `hcp-cluster2-api-pool` |
 | `.192` | MetalLB VIP | hcp-cluster3 API (kube-apiserver LoadBalancer) on hub2 (DR hub) | `hosted_cluster_metallb_pools.hcp-cluster3.ip.hub2` | pool `hcp-cluster3-api-pool` |
 | `.193` | MetalLB VIP | hcp-cluster1-d API (kube-apiserver LoadBalancer) on hub2 (DR hub) | `hosted_cluster_metallb_pools.hcp-cluster1-d.ip.hub2` | pool `hcp-cluster1-d-api-pool` |
 | `.194` | MetalLB VIP | hcp-cluster2-d API (kube-apiserver LoadBalancer) on hub2 (DR hub) | `hosted_cluster_metallb_pools.hcp-cluster2-d.ip.hub2` | pool `hcp-cluster2-d-api-pool` |
 | `.195` | MetalLB VIP | hcp-cluster3-d API (kube-apiserver LoadBalancer) on hub2 (DR hub) | `hosted_cluster_metallb_pools.hcp-cluster3-d.ip.hub2` | pool `hcp-cluster3-d-api-pool` |
-| `.196`–`.200` |  |  |  |  |
+| `.196`–`.198` |  |  |  |  |
+| `.199` | VIP | hcp-cluster3-d *.apps VIP on the helper's haproxy | `ip_list.c3dlb` |  |
+| `.200` |  |  |  |  |
 | `.201`–`.249` | DHCP pool | libvirt DHCP pool (virbr0), handed out dynamically |  |  |
 | `.250`–`.254` |  |  |  |  |
 | `.255` | Broadcast | 192.168.122.255 |  |  |

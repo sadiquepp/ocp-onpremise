@@ -363,8 +363,14 @@ ceph_storage_vcpus: 16
 ## ===========================================================================
 
 # List of IP Addresses to be used on the KVM Lab.
-# Last octets below are combined with lab_network_prefix (e.g. .21 -> 192.168.122.21). Must be two digits (10-99) as last octet is used
-# to define mac addresses
+# Last octets below are combined with lab_network_prefix (e.g. .21 -> 192.168.122.21).
+# A VM's octet must be .2-.99, because it is also the last byte of the VM's MAC
+# (52:54:00:e2:54:<octet>, zero-padded) and a three-digit octet is not a valid
+# MAC. The helper haproxy's VIPs (every *lb key below) are not VMs and have no
+# MAC, so they live at .100-.199 with the MetalLB pools, each one its old
+# two-digit address plus 100. roles/setup-bm-host's DHCP reservations skip
+# them, and setup-hub-acm refuses a MetalLB pool that lands on one.
+# See ip-allocation.md for the whole map.
 ip_list:
   helper_server: 21 
   bootstrap: 30
@@ -374,7 +380,7 @@ ip_list:
   worker1: 34
   worker2: 35
   worker3: 36
-  hublb: 39
+  hublb: 139
   ## The single-node cluster (setup-sno). Two constraints, both load-bearing:
   ## clear of every hosted_cluster_metallb_pools address below (all in
   ## .100-.199), because an address MetalLB may hand out is one the SNO would lose
@@ -383,8 +389,8 @@ ip_list:
   ## (52:54:00:e2:54:<octet>) and a three-digit octet is not a valid MAC.
   sno: 20
   ## A second single-node cluster, on its own fabric segment (rack2). Only used
-  ## when sno2_enabled is true. .2 because no two-digit octet is left outside
-  ## the MetalLB bands (.63 is spoken for). Like compactd's .3-.7 it is
+  ## when sno2_enabled is true. .2 because no two-digit octet was free when it
+  ## was added. Like compactd's .3-.7 it is
   ## zero-padded wherever a MAC is built from it: 52:54:00:e2:54:02 on virbr0,
   ## 52:54:00:e2:56:02 on rack2 - setup-sno, node-nics.yml and the NNCPs all
   ## format it with '%02d'.
@@ -392,15 +398,15 @@ ip_list:
   c1worker1: 41
   c1worker2: 42
   c1worker3: 43
-  c1lb: 49
+  c1lb: 149
   c2worker1: 51
   c2worker2: 52
   c2worker3: 53
-  c2lb: 59
+  c2lb: 159
   c3worker1: 54
   c3worker2: 55
   c3worker3: 56
-  c3lb: 58
+  c3lb: 158
   c2vbmc: 71
 
   # Disconnected hosted clusters (hosted_clusters_disconnected) - worker VMs
@@ -425,24 +431,27 @@ ip_list:
   # (The MetalLB pools have since moved to .1xx - each old address plus 100 -
   #  which frees .60-.63, .67-.69 and .90-.95 for VMs. See
   #  hosted_cluster_metallb_pools.)
+  # (The haproxy VIPs moved the same way - c1dlb .48 -> .148 and so on - which
+  #  frees .19, .38, .39, .48, .49, .58, .59, .79, .89 and .99 as well.)
   c1dworker1: 44
   c1dworker2: 45
   c1dworker3: 46
-  c1dlb: 48
+  c1dlb: 148
   c2dworker1: 28
   c2dworker2: 29
   c2dworker3: 37
-  c2dlb: 38
+  c2dlb: 138
   c3dworker1: 96
   c3dworker2: 97
   c3dworker3: 98
-  c3dlb: 99
+  c3dlb: 199
 
   # Hub2 - replacement management/hub cluster used for the OADP
   # backup/restore-to-new-hub DR flow. Kept on its own IP block so it
   # can be built (and its DNS resolved) while hub1 still exists.
-  # NOTE: last octet is used raw in the MAC scheme 52:54:00:e2:54:{{ value }},
-  # so it must stay a two digit hex-safe value (10-99) - do not use 100+.
+  # NOTE: a VM's last octet is used raw in the MAC scheme
+  # 52:54:00:e2:54:{{ value }}, so the VMs must stay two digit (10-99) - do not
+  # use 100+. hub2lb is the haproxy VIP, not a VM, so it is .189.
   hub2_bootstrap: 80
   hub2_master1: 81
   hub2_master2: 82
@@ -450,7 +459,7 @@ ip_list:
   hub2_worker1: 84
   hub2_worker2: 85
   hub2_worker3: 86
-  hub2lb: 89
+  hub2lb: 189
 
   # Hub-disconnected - a third, fully independent hub cluster installed
   # entirely from the local mirror registry (setup_hub_cluster.yaml with
@@ -458,7 +467,8 @@ ip_list:
   # subdomain (hub_disconnected_domain) and its own
   # install/VM directories so it can be built and run *alongside* hub1
   # and hub2 rather than replacing either.
-  # NOTE: same MAC scheme constraint as above - two digit values (10-99).
+  # NOTE: same MAC scheme constraint as above - two digit values (10-99) for
+  # the VMs; hubdlb is the haproxy VIP and sits at .179.
   hubd_bootstrap: 72
   hubd_master1: 73
   hubd_master2: 74
@@ -466,7 +476,7 @@ ip_list:
   hubd_worker1: 76
   hubd_worker2: 77
   hubd_worker3: 78
-  hubdlb: 79
+  hubdlb: 179
 
   # Hub2-disconnected - the DR hub built from the local mirror registry
   # (setup_hub_cluster2.yaml with disconnected_install set). Same relationship
@@ -475,10 +485,11 @@ ip_list:
   # separate cluster rather than a differently-built hub2, and all four hubs
   # can be up at once.
   #
-  # .10-.19 rather than another slice of the 70s/80s: those are contiguous and
+  # .10-.16 rather than another slice of the 70s/80s: those are contiguous and
   # free, and they sit below both DHCP pools (dhcpd .100-.200 on the helper,
   # libvirt .201-.249), so nothing dynamic can ever be handed one of them.
-  # NOTE: same MAC scheme constraint as above - two digit values (10-99).
+  # NOTE: same MAC scheme constraint as above - two digit values (10-99) for
+  # the VMs; hub2dlb is the haproxy VIP and sits at .119.
   hub2d_bootstrap: 10
   hub2d_master1: 11
   hub2d_master2: 12
@@ -486,7 +497,7 @@ ip_list:
   hub2d_worker1: 14
   hub2d_worker2: 15
   hub2d_worker3: 16
-  hub2dlb: 19
+  hub2dlb: 119
 
   # Mirror registry - shared connected infrastructure for disconnected-install
   # simulation (see setup_mirror_registry.yaml). Stays reachable/connected
@@ -978,7 +989,8 @@ compact_hosted_cluster_memory: 16384
 ## .190-.195 - so the old notes and backups still read across. Nothing hands
 ## out .100-.199 dynamically: libvirt's DHCP range is .201-.249, and the
 ## helper dhcpd that would serve .100-.200 (roles/setup-dhcp) is deployed by
-## no playbook.
+## no playbook. The helper haproxy's VIPs (ip_list.*lb) share the band, moved
+## the same way (.39 -> .139 and so on); the check above keeps the two apart.
 hosted_cluster_metallb_pools:
   hcp-cluster1:
     pool: hcp-cluster1-api-pool
@@ -1084,7 +1096,7 @@ hosted_cluster2_vm_folder: "{{ download_dir }}/hosted_cluster2"
 ##
 ## It deliberately mirrors hcp-cluster1 rather than replacing it:
 ##   - its own worker VMs      (hosted_cluster_disconnected_workers, .44-.46)
-##   - its own ingress VIP     (ip_list.c1dlb, .48) and haproxy frontends
+##   - its own ingress VIP     (ip_list.c1dlb, .148) and haproxy frontends
 ##   - its own DNS zone        (<name>.<base_domain>) so api/api-int and
 ##                              *.apps are distinct from hcp-cluster1's
 ##   - its own MetalLB pool    (hosted_cluster_metallb_pools['hcp-cluster1-d'])

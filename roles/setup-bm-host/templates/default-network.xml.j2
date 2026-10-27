@@ -118,10 +118,21 @@ sno2.sno2.{{ base_domain }}
 {{ key }}.{{ hub_domain }}
 {%- endif -%}
 {%- endmacro %}
+{# VIPs get no reservation: no VM carries their MAC, and the helper haproxy's
+   sit at .100-.199, where '%02d' below would render a three-digit last byte
+   (52:54:00:e2:54:139) that libvirt rejects, failing the whole net-define.
+   The same set roles/setup-lb binds, plus the compact clusters' keepalived
+   VIPs. #}
+{% set vip_keys = ['hublb', 'hub2lb', 'hubdlb', 'hub2dlb']
+                  + ((hosted_cluster_node_keys | default({})).values() | list
+                     | selectattr('apps_lb', 'defined') | map(attribute='apps_lb') | list) %}
+{% for c in compact_clusters | default([]) %}
+{% set _ = vip_keys.extend([c.api_vip_key | default(''), c.ingress_vip_key | default('')]) %}
+{% endfor %}
 {# sno2 is optional: no reservation unless sno2_enabled. setup-sno adds its
    reservation live (virsh net-update) when it builds the VM, so this line only
    matters on the next full redefine of the network. #}
-     {% for key, value in ip_list.items() if key != 'sno2' or (sno2_enabled | default(false) | bool) %}
+     {% for key, value in ip_list.items() if key not in vip_keys and (key != 'sno2' or (sno2_enabled | default(false) | bool)) %}
 {# '%02d': the octet is used as the MAC's last byte verbatim, so a single-digit
    octet (the compactd cluster's .3-.7) is padded to 03 - otherwise the MAC
    here would be 52:54:00:e2:54:3, which nothing but libvirt accepts. Every

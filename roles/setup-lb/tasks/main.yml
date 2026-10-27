@@ -61,6 +61,21 @@
   loop_control:
     label: "{{ lab_network_prefix }}.{{ item }}/24"
 
+# The other half of the task above, so moving a VIP in ip_list moves it here
+# too instead of leaving the old address bound beside the new one. Only lab
+# subnet addresses are considered, and the helper's own address is always
+# kept, in case its profile carries it statically rather than from DHCP.
+- name: Remove lab addresses this role no longer binds (a VIP moved in ip_list)
+  shell: |
+    keep="{% for o in lb_vip_octets + [ip_list.helper_server] %} {{ lab_network_prefix }}.{{ o }}/24{% endfor %} "
+    for a in $(nmcli -g ipv4.addresses connection show "{{ primary_conn.stdout }}" | tr ',' ' '); do
+      case "$a" in {{ lab_network_prefix }}.*) ;; *) continue ;; esac
+      case "$keep" in *" $a "*) continue ;; esac
+      nmcli connection modify "{{ primary_conn.stdout }}" -ipv4.addresses "$a" && echo "removed $a"
+    done
+  register: lb_vip_pruned
+  changed_when: lb_vip_pruned.stdout | length > 0
+
 - name: Re-apply the primary connection to activate the new secondary addresses
   shell: nmcli connection up "{{ primary_conn.stdout }}"
 
@@ -73,9 +88,13 @@
     lab_pkg_what: helper load balancer
     lab_pkg_use_image: "{{ customized_lab_helper_ready | default(false) }}"
 
+# -a fails once a port is defined, which made every re-run of this role stop
+# here; -m is the same assignment for a port that already has one.
 - name: Allow Ports via SELinux
-  shell:
-    semanage port -a -p tcp -t http_port_t 6443 && semanage port -a -p tcp -t http_port_t 22623
+  shell: |
+    for p in 6443 22623; do
+      semanage port -a -p tcp -t http_port_t $p 2>/dev/null || semanage port -m -p tcp -t http_port_t $p
+    done
 
 - name: Deploy Config File
   template:

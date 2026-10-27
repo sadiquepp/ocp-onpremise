@@ -987,10 +987,10 @@ ingress path before simply because that list was maintained by hand:
 
 | cluster | `*.apps` VIP | worker backends |
 |---|---|---|
-| hcp-cluster1 / 2 / 3 | .49 / .59 / .58 | .41-.43 / .51-.53 / .54-.56 |
-| hcp-cluster1-d | .48 | .44-.46 |
-| hcp-cluster2-d | .38 | .28, .29, .37 |
-| hcp-cluster3-d | .99 | .96-.98 |
+| hcp-cluster1 / 2 / 3 | .149 / .159 / .158 | .41-.43 / .51-.53 / .54-.56 |
+| hcp-cluster1-d | .148 | .44-.46 |
+| hcp-cluster2-d | .138 | .28, .29, .37 |
+| hcp-cluster3-d | .199 | .96-.98 |
 
 Worker, PTR, DHCP and `*.apps` records are all rendered only for `ip_list` keys
 that exist, so a cluster whose VMs have not been built yet still gets a valid
@@ -1286,7 +1286,7 @@ flow calls for:
 - **`true`** - installs `roles/setup-hub-cluster2-disconnected` into
   `hub2_disconnected_install_folder`. This is **`hub2d`**, a separate cluster
   standing in the same relation to hub2 that `hubd` does to hub1: its own IP
-  block (`ip_list.hub2d_*`, `.10-.16` + `.19`), its own subdomain
+  block (`ip_list.hub2d_*`, `.10-.16`, haproxy VIP `.119`), its own subdomain
   (`hub2_disconnected_domain`, `hub2d.mylab.com`) and its own VM/install
   directories, wired to pull every image from the mirror registry with its
   nodes cut off from the real internet before anything boots. All four hubs -
@@ -1466,7 +1466,7 @@ What is distinct about it:
 | Internet access from workers | yes | **cut** (no NAT, egress rejected) |
 | DNS zone | `hcp-cluster1.mylab.com` | `hcp-cluster1-d.mylab.com` |
 | `api` / `api-int` | MetalLB `hcp-cluster1-api-pool` | MetalLB `hcp-cluster1-d-api-pool` |
-| `*.apps` VIP (haproxy) | `.49` (`c1lb`) | `.48` (`c1dlb`) |
+| `*.apps` VIP (haproxy) | `.149` (`c1lb`) | `.148` (`c1dlb`) |
 | VM folder | `/var/lib/libvirt/images/hosted_cluster` | `/var/lib/libvirt/images/hosted_cluster_disconnected` |
 
 The `api`/`api-int` split is what makes the two clusters independent: each
@@ -1578,7 +1578,7 @@ Verify:
 
 ```bash
 dig +short api.hcp-cluster1-d.mylab.com @192.168.122.21     # -> 192.168.122.167 on hubd
-dig +short console-openshift-console.apps.hcp-cluster1-d.mylab.com @192.168.122.21  # -> 192.168.122.48
+dig +short console-openshift-console.apps.hcp-cluster1-d.mylab.com @192.168.122.21  # -> 192.168.122.148
 sudo iptables -t nat -nL LIBVIRT_PRT --line-numbers | grep hcp-cluster1-d
 ```
 
