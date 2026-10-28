@@ -484,7 +484,7 @@ Rebuilding gets the same evidence on one bare-metal host without standing
 up a second 80G Ceph cluster.
 
 ```bash
-ansible-playbook -i inventory/hosts cleanup-ceph.yaml
+ansible-playbook -i inventory/hosts cleanup.yaml --tags ceph
 
 # a partial teardown leaves stale OSD disks the rebuilt cluster cannot
 # claim - you get a cluster with no OSDs. Check before rebuilding:
@@ -719,7 +719,7 @@ needed.
 ### Point DNS at the DR hub
 
 The DR hub is on its own network segment, so the restored hosted clusters come
-up on its MetalLB addresses (`.90`/`.91`/`.92`) rather than hub1's - the pool
+up on its MetalLB addresses (`.190`/`.191`/`.192`) rather than hub1's - the pool
 names are the same, the addresses are not. Re-render the zone files so
 `api`/`api-int` follow them:
 

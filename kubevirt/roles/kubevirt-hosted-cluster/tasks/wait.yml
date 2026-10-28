@@ -1,0 +1,75 @@
+---
+# Wait for one cluster's control plane, then its worker VMs, then its nodes.
+# Leaves the hosted cluster's admin kubeconfig at
+# {{ kubevirt_kubeconfig_dir }}/<name>/kubeconfig.
+
+- name: "{{ kv.name }} | Wait for the HostedCluster to report Available"
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ kv.name }} get hostedcluster {{ kv.name }}
+      -o jsonpath='{.status.conditions[?(@.type=="Available")].status}'
+  register: kubevirt_hc_available
+  retries: "{{ kubevirt_hostedcluster_retries }}"
+  delay: "{{ kubevirt_hostedcluster_delay }}"
+  until: kubevirt_hc_available.stdout == 'True'
+  changed_when: false
+
+- name: "{{ kv.name }} | Read the admin kubeconfig Secret's name"
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ kv.name }} get hostedcluster {{ kv.name }}
+      -o jsonpath={.status.kubeconfig.name}
+  register: kubevirt_kubeconfig_secret
+  retries: 30
+  delay: 10
+  until: kubevirt_kubeconfig_secret.stdout | length > 0
+  changed_when: false
+
+- name: "{{ kv.name }} | Make the kubeconfig directory"
+  ansible.builtin.file:
+    path: "{{ kubevirt_kubeconfig_dir }}/{{ kv.name }}"
+    state: directory
+    mode: '0700'
+
+- name: "{{ kv.name }} | Extract the admin kubeconfig"
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ kv.name }} extract secret/{{ kubevirt_kubeconfig_secret.stdout }}
+      --keys=kubeconfig --to={{ kubevirt_kubeconfig_dir }}/{{ kv.name }} --confirm
+  changed_when: false
+
+# The VMs show up within a minute or two of the NodePool; a long gap here is
+# the first sign of a scheduling problem (no kubevirt.io/schedulable node, a
+# PVC with no StorageClass, a NAD the VM cannot attach).
+- name: "{{ kv.name }} | Wait for the worker VMs to exist on {{ kv.infra | default(kubevirt_mgmt, true) }}"
+  ansible.builtin.command:
+    cmd: >-
+      oc --kubeconfig {{ kv.infra_kubeconfig }} -n {{ kv.vm_namespace }}
+      get virtualmachines -o name
+  register: kubevirt_vms
+  retries: 30
+  delay: 20
+  until: kubevirt_vms.stdout_lines | length >= (kv.replicas | int)
+  changed_when: false
+
+- name: "{{ kv.name }} | Wait for the NodePool to report every replica"
+  ansible.builtin.command:
+    cmd: >-
+      oc -n {{ kv.name }} get nodepool nodepool-{{ kv.name }}-1
+      -o jsonpath={.status.replicas}
+  register: kubevirt_np_replicas
+  retries: "{{ kubevirt_nodepool_retries }}"
+  delay: "{{ kubevirt_nodepool_delay }}"
+  until: (kubevirt_np_replicas.stdout | default('0', true) | int) >= (kv.replicas | int)
+  changed_when: false
+
+- name: "{{ kv.name }} | Wait for every node to be Ready"
+  ansible.builtin.shell:
+    cmd: >-
+      oc --kubeconfig {{ kubevirt_kubeconfig_dir }}/{{ kv.name }}/kubeconfig
+      get nodes --no-headers | awk '$2 == "Ready"' | wc -l
+  register: kubevirt_ready_nodes
+  retries: "{{ kubevirt_nodepool_retries }}"
+  delay: "{{ kubevirt_nodepool_delay }}"
+  until: (kubevirt_ready_nodes.stdout | int) >= (kv.replicas | int)
+  changed_when: false

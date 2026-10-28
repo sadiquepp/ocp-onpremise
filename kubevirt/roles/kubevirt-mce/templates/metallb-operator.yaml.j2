@@ -1,0 +1,24 @@
+{# The MetalLB operator, as roles/setup-hub-acm installs it on the hubs. The
+   MetalLB instance and the per-cluster pools come from setup-hub-acm's own
+   metallb.yml, run against this cluster with metallb_hub set to its name. #}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: metallb-system
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: metallb-operator
+  namespace: metallb-system
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: metallb-operator-sub
+  namespace: metallb-system
+spec:
+  channel: stable
+  name: metallb-operator
+  source: {{ kubevirt_catalog_source }}
+  sourceNamespace: {{ kubevirt_catalog_source_namespace }}

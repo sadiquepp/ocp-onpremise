@@ -1,0 +1,146 @@
+---
+## sno3: a second single-node cluster that runs MCE alone and hosts hosted
+## control planes, managed from hub1's ACM - the three-cluster layout:
+##
+##   hub1  ACM          manages everything: sno3, the SNO, and the hosted
+##                      clusters, which it discovers on sno3 and imports
+##   sno3  MCE only     hcp-kv3's control plane (SingleReplica - one node)
+##   sno   OpenShift Virtualization   hcp-kv3's worker VMs ('infra: sno')
+##
+##   cd kubevirt
+##   ansible-playbook -i ../inventory/hosts setup_sno3_mce.yaml --ask-vault-pass
+##
+## then hcp-kv3 itself with the KubeVirt playbook, against sno3:
+##
+##   ansible-playbook -i ../inventory/hosts setup_hosted_cluster_kubevirt.yaml \
+##     --ask-vault-pass -e kubevirt_mgmt=sno3
+##
+## Prerequisites, from the repository root: sno3's DNS zone and hcp-kv3's API
+## name (setup_bm_host.yaml --tags dns - sno3 sits under hub.mylab.com, which
+## the libvirt network already forwards, so no network rebuild), and the SNO
+## (setup_sno.yaml) for the import-infra phase and for hcp-kv3's VMs.
+##
+## Phases - a plain run does all of them, in this order:
+##   --tags sno           build sno3 (roles/setup-sno, with LVM Storage);
+##                        skipped once its kubeconfig exists
+##   --tags mce           MCE on sno3, with its own import of hosted clusters off
+##   --tags metallb       MetalLB on sno3 and the API pools of the hosted clusters
+##                        with an 'sno3' address in hosted_cluster_metallb_pools
+##   --tags import        import sno3 into hub1's ACM, with hosted-cluster
+##                        discovery (hypershift-addon scoped to sno3)
+##   --tags import-infra  import the SNO into hub1's ACM too, so ACM shows the
+##                        VMs it runs; skipped while the SNO is not built
+
+- name: sno3 - an MCE cluster under hub1's ACM
+  hosts: localhost
+  become: true
+  vars_files:
+    - ../vars.yaml
+    - vars.yaml
+    - ../vault.yaml
+  vars:
+    kubevirt_mce_name: sno3
+    kubevirt_mce: "{{ kubevirt_mce_clusters[kubevirt_mce_name] }}"
+    ## Its name and domain are the root vars.yaml's (ip_list, sno_extra_clusters),
+    ## which setup-dns serves its zone from.
+    kubevirt_mce_domain: >-
+      {{ (sno_extra_clusters | selectattr('name', 'eq', kubevirt_mce_name) | first).domain }}
+    ## The infrastructure cluster whose VMs ACM should see.
+    kubevirt_infra_import: sno
+
+  pre_tasks:
+    - name: Check whether sno3 is built
+      ansible.builtin.stat:
+        path: "{{ kubevirt_mce.kubeconfig }}"
+      register: kubevirt_mce_kubeconfig_stat
+      tags: always
+
+    - name: Check whether the infrastructure cluster is built
+      ansible.builtin.stat:
+        path: "{{ kubevirt_infras[kubevirt_infra_import].kubeconfig }}"
+      register: kubevirt_infra_kubeconfig_stat
+      tags: always
+
+    - name: Say what this run does with sno3
+      ansible.builtin.debug:
+        msg: >-
+          {{ kubevirt_mce_name }}.{{ kubevirt_mce_domain }} at
+          {{ lab_network_prefix }}.{{ ip_list[kubevirt_mce_name] }},
+          {{ kubevirt_mce.memory // 1024 }} GiB / {{ kubevirt_mce.vcpus }} vCPU:
+          {{ kubevirt_mce_kubeconfig_stat.stat.exists
+             | ternary('already built - its kubeconfig exists, so the build is skipped',
+                       'not built yet - building it') }}.
+      tags: always
+
+  tasks:
+    # The SNO role refuses to rebuild over an existing cluster (its kubeconfig
+    # is the only copy of the admin credentials), so a re-run skips the build
+    # rather than tripping that guard.
+    - name: Build sno3
+      ansible.builtin.import_role:
+        name: setup-sno
+      vars:
+        sno_name: "{{ kubevirt_mce_name }}"
+        sno_base_domain: "{{ kubevirt_mce_domain }}"
+        sno_install_folder: "{{ kubevirt_mce.kubeconfig | dirname | dirname }}"
+        sno_vm_folder: "{{ download_dir }}/{{ kubevirt_mce_name }}"
+        sno_memory: "{{ kubevirt_mce.memory }}"
+        sno_vcpus: "{{ kubevirt_mce.vcpus }}"
+        sno_disk_gb: "{{ kubevirt_mce.disk_gb }}"
+        ## LVM Storage whatever use_lvm_storage says: the hosted control
+        ## planes' etcd needs a default StorageClass, and local disk is the
+        ## fast one.
+        sno_lvm_storage: true
+        sno_storage_disk_gb: "{{ kubevirt_mce.storage_disk_gb }}"
+      when: not kubevirt_mce_kubeconfig_stat.stat.exists
+      tags: [sno]
+
+    - name: MCE on sno3
+      ansible.builtin.include_role:
+        name: kubevirt-mce
+        tasks_from: mce
+        apply:
+          tags: [mce]
+          environment:
+            KUBECONFIG: "{{ kubevirt_mce.kubeconfig }}"
+      tags: [mce]
+
+    - name: MetalLB on sno3, with its hosted clusters' API pools
+      ansible.builtin.include_role:
+        name: kubevirt-mce
+        tasks_from: metallb
+        apply:
+          tags: [metallb]
+          environment:
+            KUBECONFIG: "{{ kubevirt_mce.kubeconfig }}"
+      tags: [metallb]
+
+    - name: Import sno3 into hub1's ACM, with hosted-cluster discovery
+      ansible.builtin.include_role:
+        name: kubevirt-mce
+        tasks_from: import
+        apply:
+          tags: [import]
+          environment:
+            KUBECONFIG: "{{ kubevirt_acm_hub_kubeconfig }}"
+      tags: [import]
+
+    - name: Import the infrastructure cluster into hub1's ACM
+      ansible.builtin.include_role:
+        name: kubevirt-mce
+        tasks_from: infra-import
+        apply:
+          tags: [import-infra]
+          environment:
+            KUBECONFIG: "{{ kubevirt_acm_hub_kubeconfig }}"
+      when: kubevirt_infra_kubeconfig_stat.stat.exists
+      tags: [import-infra]
+
+    - name: Say the infrastructure cluster was not imported
+      ansible.builtin.debug:
+        msg: >-
+          {{ kubevirt_infras[kubevirt_infra_import].kubeconfig }} does not exist, so
+          {{ kubevirt_infra_import }} was not imported into hub1. Build it
+          (../setup_sno.yaml) and run --tags import-infra.
+      when: not kubevirt_infra_kubeconfig_stat.stat.exists
+      tags: [import-infra]

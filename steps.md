@@ -246,7 +246,7 @@ ansible-playbook -i inventory/hosts shutdown_hub_cluster.yaml --ask-vault-pass
 ## 15. Destroy Ceph
 
 ```bash
-ansible-playbook -i inventory/hosts cleanup-ceph.yaml
+ansible-playbook -i inventory/hosts cleanup.yaml --tags ceph
 virsh list --all | grep -E 'ceph[123]|cephadmin'
 ls /var/lib/libvirt/images/ | grep -E '^ceph|^cephadmin'
 ```
@@ -344,8 +344,6 @@ on hub2 with the step 10 commands, using hub2's kubeconfig.
 ## Cleanup
 
 ```bash
-ansible-playbook -i inventory/hosts cleanup-hub.yaml
-ansible-playbook -i inventory/hosts cleanup-ceph.yaml
 ansible-playbook -i inventory/hosts cleanup.yaml
 ```
 

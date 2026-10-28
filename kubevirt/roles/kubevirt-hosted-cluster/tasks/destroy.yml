@@ -1,0 +1,67 @@
+---
+# Remove one cluster: its ACM import, NodePool (which deletes the worker VMs
+# and their disks), HostedCluster (which deletes the control-plane namespace,
+# NAD included) and its own namespace.
+#
+# With 'infra' it also removes the VM namespace and ServiceAccount on the
+# infrastructure cluster.
+#
+# Left in place on purpose: the API pool (setup_hub_cluster.yaml owns it, and
+# it holds nothing once the Service is gone), and the management-cluster
+# prerequisites - OpenShift Virtualization, the wildcard route policy and the
+# localnet bridge mapping - which other clusters may use.
+
+# On hub1 for a cluster imported by discovery from an MCE cluster (as
+# <prefix>-<name>); on the management cluster itself otherwise.
+- name: "{{ kv.name }} | Remove the ACM import"
+  ansible.builtin.command:
+    cmd: >-
+      oc {{ ('--kubeconfig ' ~ kubevirt_acm_hub_kubeconfig) if kv.discovery else '' }}
+      delete managedcluster {{ kv.acm_name }} --ignore-not-found --wait --timeout=600s
+  changed_when: "'deleted' in kubevirt_del_mc.stdout"
+  register: kubevirt_del_mc
+  failed_when: false
+
+- name: "{{ kv.name }} | Delete the NodePool and wait for its VMs to go"
+  ansible.builtin.command:
+    cmd: oc -n {{ kv.name }} delete nodepool --all --wait --timeout=1800s
+  register: kubevirt_del_np
+  changed_when: "'deleted' in kubevirt_del_np.stdout"
+  failed_when: kubevirt_del_np.rc != 0 and 'NotFound' not in kubevirt_del_np.stderr and 'not found' not in kubevirt_del_np.stderr
+
+- name: "{{ kv.name }} | Delete the HostedCluster and wait for its control plane to go"
+  ansible.builtin.command:
+    cmd: oc -n {{ kv.name }} delete hostedcluster {{ kv.name }} --ignore-not-found --wait --timeout=1800s
+  register: kubevirt_del_hc
+  changed_when: "'deleted' in kubevirt_del_hc.stdout"
+
+- name: "{{ kv.name }} | Delete its namespace"
+  ansible.builtin.command:
+    cmd: oc delete namespace {{ kv.name }} --ignore-not-found --wait --timeout=600s
+  register: kubevirt_del_ns
+  changed_when: "'deleted' in kubevirt_del_ns.stdout"
+
+# With 'infra', what create made on the infrastructure cluster: the VM
+# namespace (its ServiceAccount, Role and token with it - the VMs are already
+# gone with the NodePool) and the cluster-wide network reader. OpenShift
+# Virtualization and the wildcard route policy stay, like on the hub.
+- name: "{{ kv.name }} | Remove its access to {{ kv.infra }}"
+  ansible.builtin.command:
+    cmd: >-
+      oc --kubeconfig {{ kv.infra_kubeconfig }} delete {{ item }}
+      --ignore-not-found --wait --timeout=600s
+  loop:
+    - namespace {{ kv.vm_namespace }}
+    - clusterrolebinding {{ kubevirt_infra_service_account }}-network-reader-{{ kv.name }}
+    - clusterrole {{ kubevirt_infra_service_account }}-network-reader-{{ kv.name }}
+  register: kubevirt_del_infra
+  changed_when: "'deleted' in kubevirt_del_infra.stdout"
+  when: kv.infra | length > 0
+
+- name: "{{ kv.name }} | Remove the rendered bundle and kubeconfig"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ kubevirt_render_dir }}/{{ kv.name }}"
+    - "{{ kubevirt_kubeconfig_dir }}/{{ kv.name }}/kubeconfig"

@@ -22,12 +22,21 @@
 # is already correct is cheap; rebuilding the ISO is not, and doing both when
 # only one was wrong is how a five-minute fix becomes half an hour.
 
+# Each include passes its tags on to the tasks inside it (apply:). A dynamic
+# include's own tags select the include, not its tasks - without apply,
+# --tags snoimage would run the include and skip everything in it.
 - name: Pre-flight
-  ansible.builtin.include_tasks: preflight.yml
+  ansible.builtin.include_tasks:
+    file: preflight.yml
+    apply:
+      tags: [sno, snopreflight, snoimage, snovm, snowait]
   tags: [sno, snopreflight, snoimage, snovm, snowait]
 
 - name: Build the agent ISO
-  ansible.builtin.include_tasks: image.yml
+  ansible.builtin.include_tasks:
+    file: image.yml
+    apply:
+      tags: [sno, snoimage]
   tags: [sno, snoimage]
 
 # Before the VM, so the name resolves from the first boot. Its own tag, so a
@@ -40,11 +49,17 @@
   tags: [sno, snovm, snodns]
 
 - name: Build the SNO VM
-  ansible.builtin.include_tasks: vm.yml
+  ansible.builtin.include_tasks:
+    file: vm.yml
+    apply:
+      tags: [sno, snovm]
   tags: [sno, snovm]
 
 - name: Wait for the cluster
-  ansible.builtin.include_tasks: wait.yml
+  ansible.builtin.include_tasks:
+    file: wait.yml
+    apply:
+      tags: [sno, snowait]
   when: sno_wait_for_install | bool
   tags: [sno, snowait]
 

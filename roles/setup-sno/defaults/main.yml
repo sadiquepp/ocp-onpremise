@@ -14,6 +14,14 @@
 ## resolve. setup-dns renders that zone from the same two values.
 sno_name: sno
 
+## The domain the cluster sits under - its zone is <sno_name>.<sno_base_domain>.
+## base_domain for the lab's SNO (sno.mylab.com). A second SNO goes under
+## hub_domain instead (kubevirt/setup_sno3_mce.yaml: sno3.hub.mylab.com),
+## because the libvirt network already forwards hub.<base_domain> to the
+## helper: a new top-level zone would need a forwarder, and adding one means
+## rebuilding the network every running VM is on.
+sno_base_domain: "{{ base_domain }}"
+
 ## Where the installer works. Wiped and rebuilt on a fresh install, because
 ## `agent create image` CONSUMES install-config.yaml and agent-config.yaml -
 ## they are gone after the ISO is built, and a second run with no manifests

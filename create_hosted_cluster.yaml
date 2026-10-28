@@ -36,7 +36,7 @@
 ## A disconnected run renders hosted_clusters_disconnected (hcp-cluster1-d,
 ## hcp-cluster2-d, hcp-cluster3-d), NOT hosted_clusters - those names are
 ## reserved for connected clusters. The two are separate clusters with their
-## own namespaces, MetalLB pools (hubd 67-69) and DNS zones, so both kinds can
+## own namespaces, MetalLB pools (hubd .167-.169) and DNS zones, so both kinds can
 ## be up on this lab at once. Pair it with -e target_hub=hubd so the run uses
 ## the disconnected hub's kubeconfig:
 ##   ansible-playbook -i inventory/hosts create_hosted_cluster.yaml --ask-vault-pass \

@@ -1,0 +1,27 @@
+{# The multicluster engine operator on its own - no ACM. No channel: OLM
+   follows the package's default channel, which tracks the MCE that matches
+   this cluster's OpenShift version. #}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: multicluster-engine
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: multicluster-engine
+  namespace: multicluster-engine
+spec:
+  targetNamespaces:
+    - multicluster-engine
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: multicluster-engine
+  namespace: multicluster-engine
+spec:
+  name: multicluster-engine
+  installPlanApproval: Automatic
+  source: {{ kubevirt_catalog_source }}
+  sourceNamespace: {{ kubevirt_catalog_source_namespace }}

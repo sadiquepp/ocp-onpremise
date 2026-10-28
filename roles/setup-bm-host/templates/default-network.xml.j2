@@ -35,6 +35,15 @@
 {% if (sno_name | default('')) and (ip_list[sno_name] is defined) %}
     <forwarder domain='{{ sno_name }}.{{ base_domain }}' addr='{{ lab_network_prefix }}.{{ ip_list.helper_server }}'/>
 {% endif %}
+{# Further single-node clusters (sno_extra_clusters). One under hub_domain needs
+   nothing here - the hub_domain forwarder above covers it, which is why sno3
+   sits there. Any other domain gets its own forwarder, which only takes effect
+   when this network is rebuilt (--tags virtnet). #}
+{% for s in sno_extra_clusters | default([]) %}
+{% if (ip_list[s.name] is defined) and (s.domain != hub_domain) %}
+    <forwarder domain='{{ s.name }}.{{ s.domain }}' addr='{{ lab_network_prefix }}.{{ ip_list.helper_server }}'/>
+{% endif %}
+{% endfor %}
 {# The three-node compact clusters, on the same condition setup-dns serves their
    zones on. Their nodes resolve api-int and *.apps from their own on-node
    CoreDNS, so the installs do not depend on this - every OTHER VM on the
@@ -109,15 +118,35 @@ api.{{ hub2_disconnected_domain }}
     invariant the comment at the top of this dhcp block states. 'sno.sno' reads
     oddly and is right: hostname 'sno' inside zone sno.<base_domain>. -#}
 {{ sno_name }}.{{ sno_name }}.{{ base_domain }}
+{%- elif key == 'sno2' -%}
+{#- sno2 likewise lives in its own zone, sno2.<base_domain>. -#}
+sno2.sno2.{{ base_domain }}
+{%- elif key in (sno_extra_clusters | default([]) | map(attribute='name') | list) -%}
+{#- A further single-node cluster: the same rule, in its own domain. -#}
+{{ key }}.{{ key }}.{{ (sno_extra_clusters | selectattr('name', 'eq', key) | first).domain }}
 {%- elif key in compact_dhcp_names -%}
 {{ compact_dhcp_names[key] }}
 {%- else -%}
 {{ key }}.{{ hub_domain }}
 {%- endif -%}
 {%- endmacro %}
-     {% for key, value in ip_list.items() %}
+{# VIPs get no reservation: no VM carries their MAC, and the helper haproxy's
+   sit at .100-.199, where '%02d' below would render a three-digit last byte
+   (52:54:00:e2:54:139) that libvirt rejects, failing the whole net-define.
+   The same set roles/setup-lb binds, plus the compact clusters' keepalived
+   VIPs. #}
+{% set vip_keys = ['hublb', 'hub2lb', 'hubdlb', 'hub2dlb']
+                  + ((hosted_cluster_node_keys | default({})).values() | list
+                     | selectattr('apps_lb', 'defined') | map(attribute='apps_lb') | list) %}
+{% for c in compact_clusters | default([]) %}
+{% set _ = vip_keys.extend([c.api_vip_key | default(''), c.ingress_vip_key | default('')]) %}
+{% endfor %}
+{# sno2 is optional: no reservation unless sno2_enabled. setup-sno adds its
+   reservation live (virsh net-update) when it builds the VM, so this line only
+   matters on the next full redefine of the network. #}
+     {% for key, value in ip_list.items() if key not in vip_keys and (key != 'sno2' or (sno2_enabled | default(false) | bool)) %}
 {# '%02d': the octet is used as the MAC's last byte verbatim, so a single-digit
-   octet (the compactd cluster's .3-.7) is padded to 03 - otherwise the MAC
+   octet (the compactd cluster's .3-.5) is padded to 03 - otherwise the MAC
    here would be 52:54:00:e2:54:3, which nothing but libvirt accepts. Every
    two-digit octet renders exactly as before. #}
      <host mac='52:54:00:e2:54:{{ '%02d' | format(value | int) }}' name='{{ dhcp_fqdn(key) }}' ip='{{ lab_network_prefix }}.{{ value }}'/>

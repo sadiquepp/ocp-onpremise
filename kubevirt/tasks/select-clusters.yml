@@ -1,0 +1,247 @@
+---
+# Which hosted clusters this run handles, resolved once into kubevirt_specs:
+# one dict per cluster with every per-cluster override already applied, so the
+# two roles read plain values instead of repeating the default chains.
+#
+# The clusters are the 'platform: kubevirt' entries in the root vars.yaml's
+# hosted_clusters - see the header of kubevirt/vars.yaml for why they live
+# there and not here.
+
+- name: Collect the KubeVirt entries from hosted_clusters
+  ansible.builtin.set_fact:
+    kubevirt_entries: >-
+      {{ hosted_clusters | default([]) | select('mapping')
+         | selectattr('platform', 'defined')
+         | selectattr('platform', 'eq', 'kubevirt') | list }}
+
+- name: Fail fast if hosted_clusters has no KubeVirt cluster
+  ansible.builtin.assert:
+    that:
+      - kubevirt_entries | length > 0
+    fail_msg: >-
+      No entry in hosted_clusters (root vars.yaml) has 'platform: kubevirt'.
+      Add one, e.g. "- {name: hcp-kv1, platform: kubevirt}", with a
+      hosted_cluster_metallb_pools entry giving it an API address for
+      '{{ kubevirt_mgmt }}' - kubevirt/README.md, "Add a cluster".
+
+# -e kubevirt_cluster=<name> narrows the run to one cluster. Without it, every
+# KubeVirt entry - and each of them must then have an API address on this
+# management cluster, checked below.
+- name: Narrow to the cluster named on the command line
+  ansible.builtin.set_fact:
+    kubevirt_entries: "{{ kubevirt_entries | selectattr('name', 'eq', kubevirt_cluster) | list }}"
+  when: kubevirt_cluster | length > 0
+
+- name: Fail if the named cluster is not a KubeVirt entry
+  ansible.builtin.assert:
+    that:
+      - kubevirt_entries | length > 0
+    fail_msg: >-
+      '{{ kubevirt_cluster }}' is not a 'platform: kubevirt' entry in
+      hosted_clusters (root vars.yaml).
+  when: kubevirt_cluster | length > 0
+
+- name: Work out which clusters have an API address on this management cluster
+  ansible.builtin.set_fact:
+    kubevirt_entries_here: >-
+      {{ kubevirt_entries | map(attribute='name')
+         | select('in', hosted_cluster_metallb_pools | default({}) | dict2items
+                        | selectattr('value.ip', 'contains', kubevirt_mgmt)
+                        | map(attribute='key') | list)
+         | list }}
+
+# A cluster whose API address is keyed by another management cluster - hcp-kv3,
+# whose control plane is on sno3 - belongs to that cluster's runs
+# (-e kubevirt_mgmt=sno3). A run over every cluster leaves it out and says
+# so; naming it with -e kubevirt_cluster still fails below, as does a cluster
+# with no address anywhere.
+- name: Say which clusters belong to another management cluster
+  ansible.builtin.debug:
+    msg: >-
+      Leaving out {{ item.name }}: its control plane runs on
+      {{ hosted_cluster_metallb_pools[item.name].ip | list | join(', ') }}, not on
+      {{ kubevirt_mgmt }}. Build it with -e kubevirt_mgmt={{ hosted_cluster_metallb_pools[item.name].ip | list | first }}.
+  loop: >-
+    {{ kubevirt_entries | rejectattr('name', 'in', kubevirt_entries_here)
+       | selectattr('name', 'in', hosted_cluster_metallb_pools | default({}) | list) | list }}
+  loop_control:
+    label: "{{ item.name }}"
+  when: kubevirt_cluster | length == 0
+
+- name: Leave them out of a run over every cluster
+  ansible.builtin.set_fact:
+    kubevirt_entries: >-
+      {{ kubevirt_entries | selectattr('name', 'in', kubevirt_entries_here) | list
+         + kubevirt_entries | rejectattr('name', 'in', hosted_cluster_metallb_pools | default({}) | list) | list }}
+  when: kubevirt_cluster | length == 0
+
+- name: Fail fast if a KubeVirt cluster has no API address here
+  ansible.builtin.assert:
+    that:
+      - item.name in kubevirt_entries_here
+    fail_msg: >-
+      '{{ item.name }}' has no '{{ kubevirt_mgmt }}' address in
+      hosted_cluster_metallb_pools (root vars.yaml). Its kube-apiserver is a
+      MetalLB LoadBalancer on the management cluster, and that map is where
+      its single address comes from - roles/setup-dns publishes the same
+      address as api.{{ item.name }}. Add
+      "{{ item.name }}: {pool: {{ item.name }}-api-pool, ip: {{ '{' }}{{ kubevirt_mgmt }}: <octet>{{ '}' }}}",
+      or narrow the run with -e kubevirt_cluster.
+  loop: "{{ kubevirt_entries }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# 'infra: <key>' puts a cluster's VMs on another cluster (kubevirt_infras in
+# kubevirt/vars.yaml). That cluster may not be built yet - the SNO is its own
+# playbook - so a run over every cluster leaves such a cluster out and says
+# so; naming it with -e kubevirt_cluster keeps it, and the preflight then
+# fails on the missing kubeconfig with the command that builds it.
+- name: Fail fast on an infrastructure cluster kubevirt/vars.yaml does not define
+  ansible.builtin.assert:
+    that:
+      - item.infra | default('', true) in kubevirt_infras
+    fail_msg: >-
+      '{{ item.name }}' has infra '{{ item.infra }}', which is not a key of
+      kubevirt_infras in kubevirt/vars.yaml ({{ kubevirt_infras | list | join(', ') }}).
+  loop: "{{ kubevirt_entries | selectattr('infra', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Check which infrastructure clusters' kubeconfigs exist
+  ansible.builtin.stat:
+    path: "{{ kubevirt_infras[item].kubeconfig }}"
+  loop: "{{ kubevirt_entries | selectattr('infra', 'defined') | map(attribute='infra') | unique | list }}"
+  register: kubevirt_infra_stat
+
+- name: Note the infrastructure clusters not built yet
+  ansible.builtin.set_fact:
+    kubevirt_infras_missing: >-
+      {{ kubevirt_infra_stat.results | rejectattr('stat.exists') | map(attribute='item') | list }}
+
+- name: Say which clusters wait for their infrastructure cluster
+  ansible.builtin.debug:
+    msg: >-
+      Leaving out {{ item.name }}: its worker VMs go on '{{ item.infra }}', and
+      {{ kubevirt_infras[item.infra].kubeconfig }} does not exist yet. Build that
+      cluster first ({{ (item.infra == 'sno') | ternary('setup_sno.yaml - kubevirt/README.md, "Workers on another cluster"', 'see kubevirt_infras') }}),
+      or name it with -e kubevirt_cluster={{ item.name }} to see the preflight.
+  loop: "{{ kubevirt_entries | selectattr('infra', 'defined') | selectattr('infra', 'in', kubevirt_infras_missing) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: kubevirt_cluster | length == 0
+
+- name: Leave them out of a run over every cluster
+  ansible.builtin.set_fact:
+    kubevirt_entries: >-
+      {{ kubevirt_entries | rejectattr('infra', 'defined') | list
+         + kubevirt_entries | selectattr('infra', 'defined')
+           | rejectattr('infra', 'in', kubevirt_infras_missing) | list }}
+  when: kubevirt_cluster | length == 0
+
+- name: Start with no clusters resolved
+  ansible.builtin.set_fact:
+    kubevirt_specs: []
+
+- name: Resolve each cluster's settings
+  ansible.builtin.set_fact:
+    kubevirt_specs: >-
+      {{ kubevirt_specs | default([]) + [{
+           'name': item.name,
+           'ingress': item.ingress | default(kubevirt_ingress),
+           'replicas': item.nodepool_replicas | default(kubevirt_nodepool_replicas),
+           'mhc_timeout': item.mhc_timeout | default(kubevirt_mhc_timeout),
+           'mhc_node_startup_timeout': item.mhc_node_startup_timeout | default(kubevirt_mhc_node_startup_timeout),
+           'cores': item.cores | default(kubevirt_worker_cores),
+           'memory': item.memory | default(kubevirt_worker_memory),
+           'root_volume_size': item.root_volume_size | default(kubevirt_root_volume_size),
+           'root_volume_storage_class': item.root_volume_storage_class | default(kubevirt_root_volume_storage_class),
+           'root_volume_access_mode': item.root_volume_access_mode | default(kubevirt_root_volume_access_mode),
+           'root_volume_mode': item.root_volume_mode | default(kubevirt_root_volume_mode),
+           'csi_mapping': item.csi_storage_class_mapping | default(kubevirt_csi_storage_class_mapping),
+           'release_image': item.release_image | default(hosted_cluster_release_image),
+           'channel': item.channel | default(hosted_cluster_channel),
+           'availability_policy': item.availability_policy | default(hosted_cluster_availability_policy | default('HighlyAvailable')),
+           'cluster_cidr': item.cluster_cidr | default(hosted_cluster_cluster_cidr | default('10.132.0.0/14')),
+           'service_cidr': item.service_cidr | default(hosted_cluster_service_cidr | default('172.31.0.0/16')),
+           'domain': kv_domain,
+           'api_hostname': item.api_hostname | default('api.' ~ item.name ~ '.' ~ kv_domain),
+           'api_vip': kv_prefix ~ '.' ~ kv_pool.ip[kubevirt_mgmt],
+           'api_pool': kv_pool.pool,
+           'cp_namespace': kv_cp_namespace,
+           'discovery': kubevirt_mgmt in kubevirt_mce_clusters,
+           'acm_name': ((kubevirt_mce_discovery_prefix | default('', true)) or kubevirt_mgmt) ~ '-' ~ item.name
+                       if kubevirt_mgmt in kubevirt_mce_clusters else item.name,
+           'infra': item.infra | default(''),
+           'infra_kubeconfig': kubevirt_infras[item.infra].kubeconfig if item.infra is defined else kubevirt_mgmt_kubeconfig,
+           'vm_namespace': item.infra_namespace | default(kv_cp_namespace) if item.infra is defined else kv_cp_namespace,
+           'apps_vip': (lab_network_prefix ~ '.' ~ (kv_node_keys.apps_vip | string)) if kv_node_keys.apps_vip is defined else ''
+         }] }}
+  loop: "{{ kubevirt_entries }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    kv_pool: "{{ hosted_cluster_metallb_pools[item.name] }}"
+    kv_domain: "{{ (hosted_cluster_domains | default({}))[item.name] | default(base_domain) }}"
+    kv_prefix: "{{ (hosted_cluster_metallb_network_prefixes | default({}))[kubevirt_mgmt] | default(lab_network_prefix) }}"
+    kv_node_keys: "{{ (hosted_cluster_node_keys | default({}))[item.name] | default({}) }}"
+    kv_cp_namespace: "{{ kv_pool.control_plane_namespace | default(item.name ~ '-' ~ item.name) }}"
+
+- name: Fail fast on an unknown ingress mode, or MetalLB ingress with no address
+  ansible.builtin.assert:
+    that:
+      - item.ingress in ['route', 'metallb']
+      - item.ingress != 'metallb' or item.apps_vip | length > 0
+      - item.ingress == 'route' or item.infra | length == 0
+    fail_msg: >-
+      '{{ item.name }}': ingress is '{{ item.ingress }}'. It must be 'route'
+      (the router of the cluster its VMs run on, the default) or 'metallb'
+      (MetalLB inside the hosted cluster), and 'metallb' needs
+      hosted_cluster_node_keys['{{ item.name }}'].apps_vip in the root
+      vars.yaml - the last octet of the *.apps address, which roles/setup-dns
+      also publishes. With 'infra' (VMs on another cluster) only 'route' is
+      wired.
+  loop: "{{ kubevirt_specs | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# The clusters the worker VMs run on, once each: the management cluster for
+# clusters without 'infra', and each infrastructure cluster in use. The
+# OpenShift Virtualization install, the wildcard-route setting and the
+# localnet mapping run against each of these rather than the management
+# cluster alone.
+- name: Start with no clusters that run worker VMs
+  ansible.builtin.set_fact:
+    kubevirt_infra_targets: []
+
+- name: Work out which clusters run worker VMs
+  ansible.builtin.set_fact:
+    kubevirt_infra_targets: >-
+      {{ kubevirt_infra_targets + [{
+           'infra': item,
+           'label': item if item else kubevirt_mgmt,
+           'kubeconfig': kv_mine[0].infra_kubeconfig,
+           'route': kv_mine | selectattr('ingress', 'eq', 'route') | list | length > 0,
+           'metallb': kv_mine | selectattr('ingress', 'eq', 'metallb') | list | length > 0
+         }] }}
+  loop: "{{ kubevirt_specs | map(attribute='infra') | unique | list }}"
+  loop_control:
+    label: "{{ item | default(kubevirt_mgmt, true) }}"
+  vars:
+    kv_mine: "{{ kubevirt_specs | selectattr('infra', 'eq', item) | list }}"
+
+- name: Note which ingress modes this run needs
+  ansible.builtin.set_fact:
+    kubevirt_any_route: "{{ kubevirt_specs | default([]) | selectattr('ingress', 'eq', 'route') | list | length > 0 }}"
+    kubevirt_any_metallb: "{{ kubevirt_specs | default([]) | selectattr('ingress', 'eq', 'metallb') | list | length > 0 }}"
+
+- name: Show what this run handles
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.name }}: ingress={{ item.ingress }}, API {{ item.api_hostname }} ->
+      {{ item.api_vip }} (pool {{ item.api_pool }}),
+      {{ item.replicas }} x {{ item.cores }} vCPU / {{ item.memory }} workers,
+      control plane in {{ item.cp_namespace }},
+      VMs on {{ item.infra | default(kubevirt_mgmt, true) }} in {{ item.vm_namespace }}{{ (item.ingress == 'metallb') | ternary(', *.apps.' ~ item.name ~ '.' ~ item.domain ~ ' -> ' ~ item.apps_vip, '') }}
+  loop: "{{ kubevirt_specs | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"

@@ -1,0 +1,108 @@
+{# Applied to the INFRASTRUCTURE cluster (kv.infra - the SNO), not the
+   management cluster: the namespace the worker VMs are created in, and a
+   ServiceAccount HyperShift acts as there. The HostedCluster reaches it
+   through a kubeconfig for this ServiceAccount (01-hosted-cluster.yaml).
+
+   The Role is the one HyperShift documents for external infrastructure
+   (docs/content/how-to/kubevirt/external-infrastructure.md in
+   openshift/hypershift): VMs, DataVolumes, the *.apps passthrough Service,
+   EndpointSlices and Route, the virt-launcher NetworkPolicy, and the
+   kubevirt-csi snapshots - all in this one namespace, nothing cluster-wide
+   but the read of networks.config.openshift.io below. #}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ kv.vm_namespace }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ kubevirt_infra_service_account }}
+  namespace: {{ kv.vm_namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ kubevirt_infra_service_account }}
+  namespace: {{ kv.vm_namespace }}
+rules:
+  - apiGroups: [kubevirt.io]
+    resources: [virtualmachines, virtualmachines/finalizers, virtualmachineinstances]
+    verbs: ['*']
+  - apiGroups: [cdi.kubevirt.io]
+    resources: [datavolumes]
+    verbs: ['*']
+  - apiGroups: ['']
+    resources: [services, secrets]
+    verbs: ['*']
+  - apiGroups: [route.openshift.io]
+    resources: [routes, routes/custom-host]
+    verbs: ['*']
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices, endpointslices/restricted]
+    verbs: ['*']
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: ['*']
+  - apiGroups: ['']
+    resources: [events]
+    verbs: [get, create, update]
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshots]
+    verbs: [get, create, delete]
+  - apiGroups: ['']
+    resources: [persistentvolumeclaims]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ kubevirt_infra_service_account }}
+  namespace: {{ kv.vm_namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ kubevirt_infra_service_account }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ kubevirt_infra_service_account }}
+    namespace: {{ kv.vm_namespace }}
+{# A long-lived token: the token controller fills .data.token in. Created
+   explicitly - OpenShift no longer makes one per ServiceAccount - and kept,
+   since only auto-generated token Secrets are cleaned up. #}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ kubevirt_infra_service_account }}-token
+  namespace: {{ kv.vm_namespace }}
+  annotations:
+    kubernetes.io/service-account.name: {{ kubevirt_infra_service_account }}
+type: kubernetes.io/service-account-token
+{# HyperShift reads the infrastructure cluster's pod and service networks to
+   build a NetworkPolicy that keeps the VMs out of them. Without this it still
+   creates the policy, minus that part, and sets
+   ValidKubeVirtInfraNetworkPolicyRBAC=False on the HostedCluster. #}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ kubevirt_infra_service_account }}-network-reader-{{ kv.name }}
+rules:
+  - apiGroups: [config.openshift.io]
+    resources: [networks]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ kubevirt_infra_service_account }}-network-reader-{{ kv.name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ kubevirt_infra_service_account }}-network-reader-{{ kv.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ kubevirt_infra_service_account }}
+    namespace: {{ kv.vm_namespace }}

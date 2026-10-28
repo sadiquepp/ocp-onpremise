@@ -65,9 +65,14 @@ $TTL    600
    Guarded on the ip_list entry like every other optional block here, so a lab
    without a single-node cluster renders a valid zone rather than a PTR to
    an address that belongs to nothing. #}
-{% if (sno_name | default('')) and (ip_list[sno_name] is defined) %}
-{{ ip_list[sno_name] }} 		IN PTR 		{{ sno_name }}.{{ sno_name }}.{{ base_domain }}.
+{% for dns_sno in setup_dns_sno_names %}
+{{ ip_list[dns_sno] }} 		IN PTR 		{{ dns_sno }}.{{ dns_sno }}.{{ base_domain }}.
+{% endfor %}
+{% for s in sno_extra_clusters | default([]) %}
+{% if ip_list[s.name] is defined %}
+{{ ip_list[s.name] }} 		IN PTR 		{{ s.name }}.{{ s.name }}.{{ s.domain }}.
 {% endif %}
+{% endfor %}
 {# The three-node compact clusters. Each node's PTR is <hostname>.<zone>, the A
    record compact_domain.j2 renders. The API VIP points back at api.<zone>;
    the ingress VIP at ingress.apps.<zone>, which the *.apps wildcard answers -

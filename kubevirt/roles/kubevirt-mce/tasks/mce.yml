@@ -1,0 +1,91 @@
+---
+# MCE - without ACM - on the MCE cluster (KUBECONFIG points at it). It hosts
+# hosted control planes here; ACM on hub1 manages it and its hosted clusters.
+
+- name: Check whether MCE is already installed
+  ansible.builtin.command:
+    cmd: oc get crd multiclusterengines.multicluster.openshift.io
+  register: kubevirt_mce_crd
+  changed_when: false
+  failed_when: false
+
+- name: Subscribe to the multicluster engine operator
+  ansible.builtin.command:
+    cmd: oc apply -f -
+    stdin: "{{ lookup('ansible.builtin.template', 'mce-operator.yaml.j2') }}"
+  when: kubevirt_mce_crd.rc != 0
+
+- name: Wait for the operator to install its CRD
+  ansible.builtin.command:
+    cmd: oc get crd multiclusterengines.multicluster.openshift.io
+  register: kubevirt_mce_crd_after
+  retries: "{{ kubevirt_operator_retries }}"
+  delay: "{{ kubevirt_operator_delay }}"
+  until: kubevirt_mce_crd_after.rc == 0
+  changed_when: false
+
+# HyperShift (hosted control planes) is on by default in a current MCE; it is
+# written out so the intent is in the object.
+- name: Create the MultiClusterEngine
+  ansible.builtin.command:
+    cmd: oc apply -f -
+    stdin: |
+      apiVersion: multicluster.openshift.io/v1
+      kind: MultiClusterEngine
+      metadata:
+        name: multiclusterengine
+      spec:
+        overrides:
+          components:
+            - name: hypershift
+              enabled: true
+  register: kubevirt_mce_apply
+  changed_when: "' unchanged' not in kubevirt_mce_apply.stdout"
+
+- name: Wait for MCE to report Available
+  ansible.builtin.command:
+    cmd: oc get multiclusterengine multiclusterengine -o jsonpath={.status.phase}
+  register: kubevirt_mce_phase
+  retries: 90
+  delay: 20
+  until: kubevirt_mce_phase.stdout == 'Available'
+  changed_when: false
+
+# MCE's own local-cluster hypershift-addon installs the HyperShift operator.
+- name: Wait for the HyperShift operator
+  ansible.builtin.command:
+    cmd: oc -n hypershift rollout status deployment/operator --timeout=60s
+  register: kubevirt_mce_ho
+  retries: 30
+  delay: 20
+  until: kubevirt_mce_ho.rc == 0
+  changed_when: false
+
+# Left on, MCE imports each hosted cluster it creates into ITSELF, and hub1's
+# ACM importing the same cluster would then fight it over the klusterlet.
+# Off, hub1 is the only one that imports them (it discovers them through the
+# hypershift-addon - import.yml).
+- name: Read MCE's hypershift-addon settings
+  ansible.builtin.command:
+    cmd: >-
+      oc -n multicluster-engine get addondeploymentconfig hypershift-addon-deploy-config
+      -o jsonpath={.spec.customizedVariables}
+  register: kubevirt_mce_addon_vars
+  retries: 30
+  delay: 10
+  until: kubevirt_mce_addon_vars.rc == 0
+  changed_when: false
+
+- name: Turn off MCE's own import of the hosted clusters it creates
+  ansible.builtin.command:
+    cmd: >-
+      oc -n multicluster-engine patch addondeploymentconfig hypershift-addon-deploy-config
+      --type=merge -p {{ {'spec': {'customizedVariables': kv_vars}} | to_json | quote }}
+  vars:
+    kv_current: "{{ kubevirt_mce_addon_vars.stdout | default('[]', true) | from_json }}"
+    kv_vars: >-
+      {{ kv_current | rejectattr('name', 'eq', 'autoImportDisabled') | list
+         + [{'name': 'autoImportDisabled', 'value': 'true'}] }}
+  when: >-
+    kv_current | selectattr('name', 'eq', 'autoImportDisabled')
+    | selectattr('value', 'eq', 'true') | list | length == 0

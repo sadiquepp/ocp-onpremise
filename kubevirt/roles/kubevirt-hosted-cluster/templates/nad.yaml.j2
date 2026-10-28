@@ -1,0 +1,26 @@
+{# 'ingress: metallb' only. The worker VMs' NIC on the lab network: an
+   OVN-Kubernetes localnet network whose 'name' is the localnet the
+   kubevirt-mgmt NNCP maps onto br-ex - OVN joins the two on that string.
+
+   No 'subnets': OVN then does no IPAM and no IP port security on these ports,
+   which is what lets a VM answer for the MetalLB *.apps address it was never
+   assigned. The address the NIC itself gets comes from libvirt's DHCP.
+
+   In the control-plane namespace, which HyperShift creates when the
+   HostedCluster is applied - the NodePool's VMs live there, and refer to it
+   as <namespace>/<name>. #}
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ kubevirt_localnet_nad }}
+  namespace: {{ kv.cp_namespace }}
+spec:
+  config: |-
+    {
+      "cniVersion": "0.4.0",
+      "name": "{{ kubevirt_localnet_name }}",
+      "type": "ovn-k8s-cni-overlay",
+      "topology": "localnet",
+      "netAttachDefName": "{{ kv.cp_namespace }}/{{ kubevirt_localnet_nad }}"
+    }

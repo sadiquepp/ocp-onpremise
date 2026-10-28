@@ -1,0 +1,17 @@
+{# Joins the OVN localnet '{{ kubevirt_localnet_name }}' to the OVS bridge
+   '{{ kubevirt_localnet_bridge }}' on every node that runs worker VMs. A NAD
+   whose CNI config has topology localnet and this same name then puts a VM's
+   NIC straight on that bridge's network - for br-ex, the lab network. #}
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: {{ kubevirt_localnet_name }}-bridge-mapping
+spec:
+  nodeSelector:
+    {{ kubevirt_localnet_node_selector | to_nice_yaml(indent=2) | indent(4) | trim }}
+  desiredState:
+    ovn:
+      bridge-mappings:
+        - localnet: {{ kubevirt_localnet_name }}
+          bridge: {{ kubevirt_localnet_bridge }}
+          state: present

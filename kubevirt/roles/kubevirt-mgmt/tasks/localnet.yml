@@ -1,0 +1,81 @@
+---
+# ingress: metallb. The worker VMs need a NIC on the lab network itself, so
+# that MetalLB inside the hosted cluster can answer ARP for its *.apps address
+# where clients can see it. On the default pod network a VM sits behind
+# virt-launcher's NAT and its ARP never leaves the hub node.
+#
+# An OVN-Kubernetes localnet network gives that NIC without touching the hub
+# VMs: a bridge mapping on each worker (NMState) joins the localnet name to
+# br-ex, which is already on the node's lab-network NIC. The per-cluster NAD
+# that refers to it is created by kubevirt-hosted-cluster, in the control-plane
+# namespace, once HyperShift has made that namespace.
+
+- name: Check whether the NodeNetworkConfigurationPolicy API is already present
+  ansible.builtin.command:
+    cmd: oc get crd nodenetworkconfigurationpolicies.nmstate.io
+  register: kubevirt_nncp_crd
+  changed_when: false
+  failed_when: false
+
+- name: Install and start NMState
+  when: kubevirt_nncp_crd.rc != 0
+  block:
+    - name: Create the namespace, OperatorGroup and Subscription
+      ansible.builtin.command:
+        cmd: oc apply -f -
+        stdin: "{{ lookup('ansible.builtin.template', 'nmstate-operator.yaml.j2') }}"
+
+    # The NMState kind exists only once the CSV has installed.
+    - name: Wait for the operator to install its CRDs
+      ansible.builtin.command:
+        cmd: oc get crd nmstates.nmstate.io
+      register: kubevirt_nmstate_crd
+      retries: "{{ kubevirt_operator_retries }}"
+      delay: "{{ kubevirt_operator_delay }}"
+      until: kubevirt_nmstate_crd.rc == 0
+      changed_when: false
+
+# The operator alone reconciles nothing: this CR is what deploys the handler
+# DaemonSet. Without it an NNCP is accepted and then sits with no status.
+- name: Create the NMState instance
+  ansible.builtin.command:
+    cmd: oc apply -f -
+    stdin: |
+      apiVersion: nmstate.io/v1
+      kind: NMState
+      metadata:
+        name: nmstate
+  register: kubevirt_nmstate_apply
+  changed_when: "' unchanged' not in kubevirt_nmstate_apply.stdout"
+
+- name: Wait for the NodeNetworkConfigurationPolicy API
+  ansible.builtin.command:
+    cmd: oc get crd nodenetworkconfigurationpolicies.nmstate.io
+  register: kubevirt_nncp_crd_after
+  retries: "{{ kubevirt_operator_retries }}"
+  delay: "{{ kubevirt_operator_delay }}"
+  until: kubevirt_nncp_crd_after.rc == 0
+  changed_when: false
+
+- name: Wait for the nmstate handler on every node
+  ansible.builtin.command:
+    cmd: oc -n openshift-nmstate rollout status daemonset/nmstate-handler --timeout=600s
+  register: kubevirt_nmstate_handler
+  retries: 5
+  delay: 20
+  until: kubevirt_nmstate_handler.rc == 0
+  changed_when: false
+
+- name: Map the localnet onto br-ex on the workers
+  ansible.builtin.command:
+    cmd: oc apply -f -
+    stdin: "{{ lookup('ansible.builtin.template', 'nncp-localnet.yaml.j2') }}"
+  register: kubevirt_nncp_apply
+  changed_when: "' unchanged' not in kubevirt_nncp_apply.stdout"
+
+- name: Wait for the bridge mapping to be applied on every selected node
+  ansible.builtin.command:
+    cmd: >-
+      oc wait nncp/{{ kubevirt_localnet_name }}-bridge-mapping
+      --for=condition=Available --timeout=600s
+  changed_when: false

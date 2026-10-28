@@ -1,0 +1,133 @@
+## hello-openshift with a PersistentVolumeClaim, for a KubeVirt hosted cluster
+## (hcp-kv1). Apply it with the HOSTED cluster's kubeconfig:
+##
+##   oc --kubeconfig /var/lib/libvirt/images/hcp-kv1/kubeconfig apply -f hello-openshift-pvc.yaml
+##
+## The PVC uses kubevirt-csi-infra-default, the StorageClass HyperShift puts in
+## every KubeVirt hosted cluster (storageDriver: Default). kubevirt-csi turns it
+## into a DataVolume in the control-plane namespace on the hub, on the hub's
+## DEFAULT StorageClass - Ceph RBD on the Ceph build, lvms-vg1 on LVM Storage -
+## and hotplugs that disk into the worker VM the pod lands on.
+##
+## The page is a file on that volume. Every time a pod starts, the init
+## container appends a line naming the pod and the node, so after a restart
+## or a move to the other worker the page lists both: the data came along.
+## kubevirt/steps.md, step 10, has the test.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hello-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hello-data
+  namespace: hello-pvc
+spec:
+  storageClassName: kubevirt-csi-infra-default
+  accessModes: [ReadWriteOnce]
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-openshift
+  namespace: hello-pvc
+spec:
+  replicas: 1
+  # ReadWriteOnce: the old pod must let go of the disk before the new one
+  # can have it, so no rolling overlap.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: hello-openshift
+  template:
+    metadata:
+      labels:
+        app: hello-openshift
+    spec:
+      initContainers:
+        - name: record-boot
+          image: registry.access.redhat.com/ubi9/ubi-minimal
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)  pod ${POD_NAME}  on node ${NODE_NAME}" >> /data/boots.log
+              {
+                echo '<html><body><pre>'
+                echo 'Hello OpenShift - served from a kubevirt-csi volume'
+                echo
+                echo 'Pod starts recorded on this volume:'
+                cat /data/boots.log
+                echo '</pre></body></html>'
+              } > /data/index.html
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+      containers:
+        - name: httpd
+          image: registry.access.redhat.com/ubi9/httpd-24
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: data
+              mountPath: /var/www/html
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: hello-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-openshift
+  namespace: hello-pvc
+spec:
+  selector:
+    app: hello-openshift
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: hello-openshift
+  namespace: hello-pvc
+spec:
+  to:
+    kind: Service
+    name: hello-openshift
+  port:
+    targetPort: 8080
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

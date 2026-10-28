@@ -1,0 +1,70 @@
+# One Application per cluster the Placement selects.
+#
+# The clusterDecisionResource generator reads the Placement's decisions
+# (through the acm-placement ConfigMap that GitOpsCluster created) and, for
+# each cluster, fills the template: {{name}} is the cluster's name in Argo CD,
+# {{server}} its API URL. A cluster joining the Placement gets an Application;
+# a cluster leaving it has its Application, and with the finalizer the app,
+# deleted.
+#
+# The source is the same as apps/online-boutique.yaml on the hub.
+#
+#   oc apply -f gitops/fleet/03-online-boutique-appset.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: online-boutique
+  namespace: openshift-gitops
+spec:
+  generators:
+    - clusterDecisionResource:
+        configMapRef: acm-placement
+        labelSelector:
+          matchLabels:
+            cluster.open-cluster-management.io/placement: online-boutique
+        requeueAfterSeconds: 180
+  template:
+    metadata:
+      name: 'online-boutique-{{name}}'
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/sadiquepp/openshift
+        targetRevision: 2ae4f18ed03e719669cff4883650bd7a24bdb6a2
+        path: test-workloads/online-boutique/base
+        kustomize:
+          patches:
+            - target:
+                kind: Deployment
+                name: loadgenerator
+              patch: |
+                $patch: delete
+                apiVersion: apps/v1
+                kind: Deployment
+                metadata:
+                  name: loadgenerator
+            - target:
+                kind: ServiceAccount
+                name: loadgenerator
+              patch: |
+                $patch: delete
+                apiVersion: v1
+                kind: ServiceAccount
+                metadata:
+                  name: loadgenerator
+      destination:
+        server: '{{server}}'
+        namespace: online-boutique
+      # Automated, with self-heal: what exercise 3 taught on the hub. A fleet
+      # is not synced by hand, cluster by cluster.
+      syncPolicy:
+        automated:
+          selfHeal: true
+          prune: true
+        syncOptions:
+          # Lab compromise: Argo CD creates the namespace on each cluster.
+          # Production has the platform team create it first (an ACM Policy or
+          # a cluster-configuration ApplicationSet), as on the hub.
+          - CreateNamespace=true

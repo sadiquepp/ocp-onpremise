@@ -1,0 +1,158 @@
+{# The HostedCluster for one KubeVirt-platform cluster, with its namespace and
+   the two Secrets it references. 'kv' is one entry of kubevirt_specs
+   (../../../tasks/select-clusters.yml): every per-cluster override is already
+   applied.
+
+   Same shape as ../../../../roles/create-hosted-cluster/templates/hosted-cluster.yaml.j2
+   (the Agent clusters) except spec.platform and spec.dns - kept close on
+   purpose so the two read side by side. The NodePool is its own file, applied
+   after the control-plane namespace exists. #}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ kv.name }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pullsecret-cluster-{{ kv.name }}
+  namespace: {{ kv.name }}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: {{ ((pull_secret is string) | ternary(pull_secret, pull_secret | to_json)) | trim | b64encode }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sshkey-cluster-{{ kv.name }}
+  namespace: {{ kv.name }}
+stringData:
+  id_rsa.pub: {{ ssh_key | trim | to_json }}
+{% if kv.infra | length > 0 %}
+{# The kubeconfig HyperShift uses to create the worker VMs on {{ kv.infra }}:
+   that cluster's API and CA, and the token of the ServiceAccount
+   00-infra-access.yaml creates there. Read from {{ kv.infra }} when this was
+   rendered, so it exists only once 00 has been applied there. #}
+{%   if kubevirt_infra_token | default('') | length > 0 %}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: infra-kubeconfig-{{ kv.name }}
+  namespace: {{ kv.name }}
+data:
+  kubeconfig: {{ {
+      'apiVersion': 'v1',
+      'kind': 'Config',
+      'clusters': [{'name': kv.infra, 'cluster': {'server': kubevirt_infra_server, 'certificate-authority-data': kubevirt_infra_ca}}],
+      'users': [{'name': kubevirt_infra_service_account, 'user': {'token': kubevirt_infra_token}}],
+      'contexts': [{'name': kv.infra, 'context': {'cluster': kv.infra, 'user': kubevirt_infra_service_account, 'namespace': kv.vm_namespace}}],
+      'current-context': kv.infra } | to_nice_yaml | b64encode }}
+{%   else %}
+# infra-kubeconfig-{{ kv.name }} is not here yet: apply 00-infra-access.yaml
+# to {{ kv.infra }} and render again.
+{%   endif %}
+{% endif %}
+---
+apiVersion: hypershift.openshift.io/v1beta1
+kind: HostedCluster
+metadata:
+  name: {{ kv.name }}
+  namespace: {{ kv.name }}
+{# A record of which MetalLB pool the kube-apiserver address comes from. What
+   actually binds it is the pool's serviceAllocation, which roles/setup-hub-acm
+   renders: see the same annotation in roles/create-hosted-cluster for why. #}
+  annotations:
+    metallb.io/address-pool: {{ kv.api_pool }}
+  labels:
+    cluster.open-cluster-management.io/clusterset: {{ hosted_cluster_clusterset | default('default') }}
+spec:
+  channel: "{{ kv.channel }}"
+  release:
+    image: {{ kv.release_image }}
+  pullSecret:
+    name: pullsecret-cluster-{{ kv.name }}
+  sshKey:
+    name: sshkey-cluster-{{ kv.name }}
+  infraID: {{ kv.name }}
+  networking:
+{# Internal to the hosted cluster's own OVN-Kubernetes. They must not overlap
+   the MANAGEMENT cluster's pod and service networks (10.128.0.0/14 and
+   172.30.0.0/16 on the hub): with 'ingress: route' the worker VMs sit on the
+   hub's pod network, and an overlap would make the hub's own addresses
+   unreachable from inside the guest. #}
+    clusterNetwork:
+      - cidr: {{ kv.cluster_cidr }}
+    serviceNetwork:
+      - cidr: {{ kv.service_cidr }}
+    networkType: OVNKubernetes
+  controllerAvailabilityPolicy: {{ kv.availability_policy }}
+  infrastructureAvailabilityPolicy: {{ kv.availability_policy }}
+  olmCatalogPlacement: {{ hosted_cluster_olm_catalog_placement | default('management') }}
+  dns:
+{% if kv.ingress == 'route' %}
+{# baseDomainPassthrough: the cluster's domain is the apps domain of the
+   cluster its VMs run on ({{ kv.infra | default(kubevirt_mgmt, true) }}), so its apps are
+   *.apps.{{ kv.name }}.{{ kubevirt_apps_domains[kv.infra] }} - under that
+   cluster's existing *.apps wildcard record, served by its router. HyperShift
+   would fill this in itself when it is empty; it is written out so the
+   rendered file says what the cluster's names will be. #}
+    baseDomain: {{ kubevirt_apps_domains[kv.infra] }}
+{% else %}
+{# Its own domain: hosted_cluster_domains[{{ kv.name }}] in the root vars.yaml.
+   setup-dns serves {{ kv.name }}.{{ kv.domain }} with *.apps on the MetalLB
+   address inside the hosted cluster. #}
+    baseDomain: {{ kv.domain }}
+{% endif %}
+  platform:
+    type: KubeVirt
+    kubevirt:
+      baseDomainPassthrough: {{ (kv.ingress == 'route') | lower }}
+{% if kv.infra | length > 0 %}
+{# External infrastructure: the VMs, their disks and the *.apps passthrough
+   Route go to {{ kv.infra }}, namespace {{ kv.vm_namespace }}. Both fields are
+   immutable - moving a cluster's VMs means recreating it. #}
+      credentials:
+        infraKubeConfigSecret:
+          name: infra-kubeconfig-{{ kv.name }}
+          key: kubeconfig
+        infraNamespace: {{ kv.vm_namespace }}
+{% endif %}
+{# kubevirt-csi: a PVC in the hosted cluster becomes a DataVolume in the
+   VM namespace ({{ kv.vm_namespace }} on {{ kv.infra | default(kubevirt_mgmt, true) }}),
+   hot-plugged into the worker VM. #}
+      storageDriver:
+{% if kv.csi_mapping | length > 0 %}
+        type: Manual
+        manual:
+          storageClassMapping:
+{% for m in kv.csi_mapping %}
+            - infraStorageClassName: {{ m.infra }}
+              guestStorageClassName: {{ m.guest }}
+{% endfor %}
+{% else %}
+        type: Default
+{% endif %}
+  services:
+{# The API is a LoadBalancer on the management cluster, from MetalLB - not a
+   Route - so it does not depend on the hub's router, and api.<name> is the
+   address roles/setup-dns publishes. The rest go through the hub's router as
+   Routes under its *.apps, exactly as for the Agent clusters. #}
+  - service: APIServer
+    servicePublishingStrategy:
+      type: LoadBalancer
+      loadBalancer:
+        hostname: {{ kv.api_hostname }}
+  - service: OAuthServer
+    servicePublishingStrategy:
+      type: Route
+  - service: OIDC
+    servicePublishingStrategy:
+      type: Route
+  - service: Konnectivity
+    servicePublishingStrategy:
+      type: Route
+  - service: Ignition
+    servicePublishingStrategy:
+      type: Route
