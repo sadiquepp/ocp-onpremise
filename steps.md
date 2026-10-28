@@ -106,7 +106,7 @@ ansible-playbook -i inventory/hosts setup_bm_host.yaml --ask-vault-pass
 ## 5. Ceph cluster
 
 ```bash
-ansible-playbook -i inventory/hosts setup_ceph.yaml --ask-vault-pass
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass)
 ssh root@192.168.122.27 ceph -s          # HEALTH_OK, 3 mons, 9 OSDs
 ```
 
@@ -120,7 +120,7 @@ ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass
 
 ```bash
 export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
-ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass)
 oc get storagecluster -n openshift-storage
 oc get sc                                 # ocs-external-storagecluster-ceph-rbd (default)
 ```
@@ -256,7 +256,7 @@ Both must return nothing.
 ## 16. Rebuild Ceph
 
 ```bash
-ansible-playbook -i inventory/hosts setup_ceph.yaml --ask-vault-pass
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass)
 ssh root@192.168.122.27 ceph -s
 ```
 
@@ -270,7 +270,7 @@ ansible-playbook -i inventory/hosts setup_hub_cluster2.yaml --ask-vault-pass
 
 ```bash
 export KUBECONFIG=/var/lib/libvirt/images/hub2_install/auth/kubeconfig
-ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass -e target_hub=hub2
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass -e target_hub=hub2)
 oc get sc                                 # ocs-external-storagecluster-ceph-rbd (default)
 ```
 

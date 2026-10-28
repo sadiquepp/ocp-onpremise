@@ -1,7 +1,7 @@
 ---
 # Tasks file for setup-ceph-cluster
 #
-# Delegated to ceph1 (see setup_ceph.yaml) - ceph1 is the node
+# Delegated to ceph1 (see ceph/setup_ceph.yaml) - ceph1 is the node
 # cephadm bootstrap runs from, and ends up hosting the first mon/mgr.
 # This role:
 #   1. Bootstraps the cluster on ceph1, pulling the RHCS9 image
@@ -26,7 +26,7 @@
 #
 # Steps 2-5 only run on a fresh bootstrap (gated on
 # ceph_bootstrap_status below) - this is a one-shot cluster-creation
-# role, not a full day-2 reconciler. Re-running setup_ceph.yaml
+# role, not a full day-2 reconciler. Re-running ceph/setup_ceph.yaml
 # against an existing cluster just re-checks/re-installs prereqs and
 # leaves the cluster itself alone.
 

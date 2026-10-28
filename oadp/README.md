@@ -137,14 +137,14 @@ the `fs` names are unchanged from before this option existed.
 
 Demonstrating `csi` is the reason the Ceph cluster exists in this lab:
 LVM Storage ships no VolumeSnapshotClass, so it can only ever do `fs`.
-See [Ceph 9 Storage for Hub PVs](../README.md#ceph-9-storage-for-hub-pvs-odf-external-mode)
-for building the cluster and attaching it with `setup_ceph_odf.yaml`.
+See [ceph/README.md](../ceph/README.md) for building the cluster and
+attaching it with `ceph/setup_ceph_odf.yaml`.
 
 ### What `csi` needs
 
 - The hub's PVs come from a CSI driver with snapshot support. On this
-  lab that means `use_lvm_storage: false` plus `setup_ceph.yaml` and
-  `setup_ceph_odf.yaml`, which leave the hub with
+  lab that means `use_lvm_storage: false` plus `ceph/setup_ceph.yaml` and
+  `ceph/setup_ceph_odf.yaml`, which leave the hub with
   `ocs-external-storagecluster-ceph-rbd` as the default StorageClass.
 - A `VolumeSnapshotClass` for that driver labelled
   `velero.io/csi-volumesnapshot-class=true`. Velero has no field for
@@ -499,7 +499,7 @@ A brand-new cluster on the same four VMs - no pool, no image and no CSI
 user survives from hub1's:
 
 ```bash
-ansible-playbook -i inventory/hosts setup_ceph.yaml --ask-vault-pass
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass)
 ssh root@192.168.122.27 ceph -s     # HEALTH_OK, 3 mons, 9 OSDs
 ```
 
@@ -521,7 +521,7 @@ the rebuilt Ceph cluster **now**, before the AgentServiceConfig below - this
 creates hub2's own ODF external StorageCluster and its own CSI credentials:
 
 ```bash
-ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass -e target_hub=hub2
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass -e target_hub=hub2)
 ```
 
 The AgentServiceConfig provisions three PVCs - `databaseStorage` (10Gi),

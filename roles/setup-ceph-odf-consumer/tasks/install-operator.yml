@@ -1,7 +1,7 @@
 ---
 # setup-ceph-odf-consumer : install-operator.yml
 #
-# The FIRST of the two consumer stages (see setup_ceph_odf.yaml).
+# The FIRST of the two consumer stages (see ceph/setup_ceph_odf.yaml).
 # Runs with KUBECONFIG pointed at the target OCP cluster. Installs
 # the ODF operator, then extracts the version-matched exporter script
 # from the operator's CSV so the export play (on cephadmin) runs the

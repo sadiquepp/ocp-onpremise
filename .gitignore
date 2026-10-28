@@ -4,6 +4,8 @@ vault.yaml
 vars-metal.yaml
 .DS_Store
 roles/.DS_Store
+# setup_ceph_odf.yaml writes the exporter script and connection JSON (live
+# cluster credentials) here - ceph/ceph-odf/, or ./ceph-odf/ from older runs
 ceph-odf/
 __pycache__/
 *.pyc

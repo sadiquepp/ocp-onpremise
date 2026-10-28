@@ -27,17 +27,24 @@
 ##   - point this at a different cluster's kubeconfig instead:
 ##       -e ceph_odf_target_kubeconfig=/path/to/some/other/kubeconfig
 ##
-## Usage:
-##   ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass
-##   ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass -e target_hub=hub2
-##   ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass -e ceph_odf_target_kubeconfig=/path/to/kubeconfig
+## The exporter script and the connection JSON land in ceph-odf/ next to
+## this playbook (ceph_odf_export_dir in ../vars.yaml) - git-ignored, it
+## holds live cluster credentials.
+##
+## Usage (from inside ceph/ - ansible.cfg is read from the working
+## directory, and the one here adds ../roles to roles_path; see
+## README.md in this directory):
+##   cd ceph
+##   ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass
+##   ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass -e target_hub=hub2
+##   ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass -e ceph_odf_target_kubeconfig=/path/to/kubeconfig
 
 - name: Install ODF and extract the version-matched exporter script
   hosts: localhost
   become: true
   vars_files:
-    - vars.yaml
-    - vault.yaml
+    - ../vars.yaml
+    - ../vault.yaml
   vars:
     ceph_odf_target_kubeconfig: >-
       {{ (target_hub == 'hub2') | ternary(hub2_install_folder, hub_install_folder) }}/auth/kubeconfig
@@ -54,8 +61,8 @@
   hosts: localhost
   become: true
   vars_files:
-    - vars.yaml
-    - vault.yaml
+    - ../vars.yaml
+    - ../vault.yaml
   tasks:
   - ansible.builtin.import_role:
       name: setup-ceph-odf-export
@@ -67,8 +74,8 @@
   hosts: localhost
   become: true
   vars_files:
-    - vars.yaml
-    - vault.yaml
+    - ../vars.yaml
+    - ../vault.yaml
   vars:
     ceph_odf_target_kubeconfig: >-
       {{ (target_hub == 'hub2') | ternary(hub2_install_folder, hub_install_folder) }}/auth/kubeconfig

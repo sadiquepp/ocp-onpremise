@@ -189,7 +189,7 @@ kubevirt_mhc_node_startup_timeout: 60m
 ##
 ## Empty storage class = the management cluster's default StorageClass. On a
 ## hub built the ../steps.md way (use_lvm_storage: false, Ceph attached with
-## setup_ceph_odf.yaml) that is ocs-external-storagecluster-ceph-rbd, and CDI
+## ceph/setup_ceph_odf.yaml) that is ocs-external-storagecluster-ceph-rbd, and CDI
 ## gives the root disks ReadWriteMany block, so the VMs live-migrate when a
 ## hub node drains. On a hub built with use_lvm_storage it is lvms-vg1:
 ## ReadWriteOnce, so draining a hub node stops the worker VMs on it instead.

@@ -42,9 +42,11 @@ cd compact-cluster
 ansible-playbook -i ../inventory/hosts setup_compact_cluster.yaml --ask-vault-pass
 
 # connected, with Ceph (use_lvm_storage: false): build Ceph before the cluster
-# and attach it after, both from the repository root (compact-cluster.md)
-#   ansible-playbook -i inventory/hosts setup_ceph.yaml --ask-vault-pass
-#   ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass \
+# and attach it after, both from inside ../ceph (compact-cluster.md,
+# ../ceph/README.md)
+#   cd ../ceph
+#   ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass
+#   ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass \
 #     -e ceph_odf_target_kubeconfig=/var/lib/libvirt/images/compact_install/auth/kubeconfig
 
 # disconnected (builds the mirror registry first)

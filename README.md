@@ -53,13 +53,6 @@ In a hurry? [steps.md](steps.md) is the same end-to-end run as commands only.
   - [Notes and constraints](#notes-and-constraints)
   - [Verifying](#verifying)
 - [Ceph 9 Storage for Hub PVs (ODF External Mode)](#ceph-9-storage-for-hub-pvs-odf-external-mode)
-  - [What gets built](#what-gets-built)
-  - [Requirements](#requirements)
-  - [Switching the hub off LVM Storage](#switching-the-hub-off-lvm-storage)
-  - [Build the Ceph cluster](#build-the-ceph-cluster)
-  - [Attach it to OpenShift](#attach-it-to-openshift)
-  - [Verifying](#verifying-1)
-  - [Notes and constraints](#notes-and-constraints-1)
 - [Three-node compact cluster](#three-node-compact-cluster)
 - [Hosted clusters on the KubeVirt platform](#hosted-clusters-on-the-kubevirt-platform)
 - [UDN over BGP, VRF-Lite and EVPN (containerlab fabric)](#udn-over-bgp-vrf-lite-and-evpn-containerlab-fabric)
@@ -102,7 +95,7 @@ In a hurry? [steps.md](steps.md) is the same end-to-end run as commands only.
 
 **Hub1** is the primary management cluster running ACM, OADP, LVM-Storage, and MetalLB. **Hub2** is a replacement hub used as the restore target during a DR cutover. Both hubs share the same S3 bucket so backups created by hub1 are visible to hub2's Velero instance.
 
-A hub's PVs come from LVM-Storage by default. They can instead come from a standalone Ceph 9 cluster running on the same bare-metal host, consumed through ODF external mode - see [Ceph 9 Storage for Hub PVs (ODF External Mode)](#ceph-9-storage-for-hub-pvs-odf-external-mode).
+A hub's PVs come from LVM-Storage by default. They can instead come from a standalone Ceph 9 cluster running on the same bare-metal host, consumed through ODF external mode - see [ceph/README.md](ceph/README.md).
 
 ## Prerequisites
 ### Setup Bare Metal Host
@@ -239,9 +232,10 @@ Review and adjust lab-specific values:
    The hub and SNO installs always use the lab key.
  - Get oadp_aws_access_key_id and oadp_aws_secret_access_key from the previous steps
  - `ceph_dashboard_password` is only needed if you run the Ceph flow
-   (`setup_ceph.yaml`) - it is the initial password `cephadm bootstrap` sets for
+   (`ceph/setup_ceph.yaml`) - it is the initial password `cephadm bootstrap` sets for
    the Ceph dashboard's admin user (`ceph_dashboard_user` in `vars.yaml`).
-   `setup_ceph.yaml` asserts it is present before it creates anything.
+   `ceph/setup_ceph.yaml` asserts it is present before it creates anything.
+   See [ceph/README.md](ceph/README.md#requirements).
  - `mirror_registry_password` is only needed for the disconnected flow
    (`disconnected_install: true`) - it is the password the Quay
    `mirror-registry` appliance is installed with, and the one every later
@@ -560,11 +554,10 @@ built, because the hub build acts on it:
   clusters and run workloads on them. The SNO (`setup_sno.yaml`) follows the
   same switch: it gets a second disk and LVM Storage after its install.
 - **Ceph 9 via ODF external mode** - set `use_lvm_storage: false`, then build
-  the Ceph cluster and attach it with the two `setup_ceph*.yaml` playbooks,
+  the Ceph cluster and attach it with the two playbooks in [`ceph/`](ceph/),
   before the AgentServiceConfig step - that step's PVCs need a default
-  StorageClass to exist already. See
-  [Ceph 9 Storage for Hub PVs (ODF External Mode)](#ceph-9-storage-for-hub-pvs-odf-external-mode)
-  for the whole flow, its OCP 4.22 requirement, and why the two should not both
+  StorageClass to exist already. See [ceph/README.md](ceph/README.md)
+  for the whole flow, its OCP 4.21+ requirement, and why the two should not both
   run on the same hub.
 
 > **For backup and restore, pick Ceph.** Restoring a hosted control plane
@@ -706,8 +699,9 @@ manually as below), plus `.rendered-06-registry-ca-configmap.yaml`,
   `storageClassName`, so they bind against the default class - without one
   they stay `Pending` and assisted-service never starts. On the LVM path
   that class is `lvms-vg1` and hub bring-up created it. On the Ceph path
-  (`use_lvm_storage: false`) run `setup_ceph.yaml` and `setup_ceph_odf.yaml`
-  **before** this step, so `ocs-external-storagecluster-ceph-rbd` exists and
+  (`use_lvm_storage: false`) run `ceph/setup_ceph.yaml` and
+  `ceph/setup_ceph_odf.yaml` ([ceph/README.md](ceph/README.md)) **before**
+  this step, so `ocs-external-storagecluster-ceph-rbd` exists and
   is the default (`ceph_odf_rbd_default_sc`). Confirm with `oc get sc`.
 
 ```bash
@@ -1076,7 +1070,7 @@ Velero captures it, and every command below takes it as an override:
   it to the same S3 bucket. Needs a CSI driver with snapshot support -
   which on this lab means the hub is on Ceph/ODF rather than LVM
   Storage, and is the reason
-  [the Ceph cluster](#ceph-9-storage-for-hub-pvs-odf-external-mode)
+  [the Ceph cluster](ceph/README.md)
   exists.
 
 Each method has its own Backup/Restore templates in `oadp/templates/`
@@ -1265,7 +1259,7 @@ A brand-new cluster on the same four VMs - no pool, no image, no CSI user
 survives from hub1's cluster:
 
 ```bash
-ansible-playbook -i inventory/hosts setup_ceph.yaml --ask-vault-pass
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass)
 ```
 
 Wait for `HEALTH_OK` with 3 mons and 9 OSDs before continuing
@@ -1334,7 +1328,7 @@ On the Ceph path, build hub2 with `use_lvm_storage: false` and attach it to
 the rebuilt Ceph cluster **now**, before the AgentServiceConfig below:
 
 ```bash
-ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass -e target_hub=hub2
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass -e target_hub=hub2)
 ```
 
 The AgentServiceConfig provisions three PVCs - `databaseStorage` (10Gi),
@@ -1821,277 +1815,27 @@ The last two must agree - that is the whole point of this layout.
 
 ## Ceph 9 Storage for Hub PVs (ODF External Mode)
 
-The hub's PVs come from **LVM Storage** by default - one `LVMCluster` over the
-hub nodes' own spare disks, installed by `roles/setup-hub-acm` as part of hub
-bring-up. The alternative documented here builds a **standalone Red Hat Ceph
-Storage 9 cluster** on the same bare-metal host and hands it to the hub through
-**OpenShift Data Foundation (ODF) in external mode**: ODF is installed on the
-hub, but no Ceph daemon runs there - ceph-csi simply talks to the external
-cluster's mons and provisions RBD (and CephFS) PVs out of it.
-
-It is a drop-in replacement for LVM Storage as the hub's PV provider - the
-backup/restore flow works either way - but it is what makes one thing possible
-that LVM Storage cannot do: **CSI snapshot backups of the hosted control
-plane's etcd volume**. LVM Storage ships no VolumeSnapshotClass, so on it OADP
-can only walk the filesystem with Kopia. On the Ceph/ODF StorageClass, Velero
-can take a point-in-time CSI snapshot and move it to S3 - see
+**Lives in [`ceph/`](ceph/).** A standalone Red Hat Ceph Storage 9 cluster -
+`ceph1`-`ceph3` (mon + mgr + osd) and `cephadmin` (`.24`-`.27`) - built on the
+same bare-metal host and handed to a hub through OpenShift Data Foundation in
+external mode. It replaces LVM Storage as the hub's PV provider
+(`use_lvm_storage: false`) and is what provides the CSI VolumeSnapshotClass the
+`csi` backup method needs - see
 [Choose how the control-plane volumes are captured](#choose-how-the-control-plane-volumes-are-captured).
-It also brings RWX volumes and storage that survives rebuilding the hub.
+Everything about building, attaching, verifying and tearing it down - sizing,
+the OCP 4.21+ requirement, the `ceph_dashboard_password` vault entry, and why it
+should not share `openshift-storage` with LVM Storage - is in
+[ceph/README.md](ceph/README.md).
 
-### What gets built
-
-`setup_ceph.yaml` creates four VMs on the same libvirt network as the rest of
-the lab, addressed from `ip_list` in `vars.yaml`:
-
-| VM          | Address          | Role                                                          |
-| ----------- | ---------------- | ------------------------------------------------------------- |
-| `ceph1`     | `192.168.122.24` | mon + mgr + osd ("all-in-one"); `cephadm bootstrap` runs here |
-| `ceph2`     | `192.168.122.25` | mon + mgr + osd                                               |
-| `ceph3`     | `192.168.122.26` | mon + mgr + osd                                               |
-| `cephadmin` | `192.168.122.27` | `_admin` label only - `ceph.conf` + admin keyring, no daemons |
-
-Each storage node gets `ceph_osd_disks_per_node` raw disks (3 x 100G by
-default, sparse qcow2) on top of a 60G OS disk, so a default run is 9 OSDs and
-roughly 1.1T of thin-provisioned image files. It is also 80G of RAM
-(`ceph_storage_memory` x 3 + `ceph_admin_memory`) and 52 vCPUs - size the
-bare-metal host accordingly, or trim those vars first.
-
-`cephadmin` is where `ceph` / `cephadm shell` commands run, and where the ODF
-exporter script runs later. It holds the admin keyring but never runs a daemon,
-so day-2 work never has to happen on a node that is also serving I/O.
-
-There is no Satellite anywhere in this flow. The nodes register directly with
-`subscription-manager` using the same `org_id` / `activation_key` every other VM
-in this lab uses, and cephadm pulls
-`registry.redhat.io/rhceph/rhceph-9-rhel9:latest` authenticated with the same
-`pull_secret`, which `setup-ceph-prereqs` installs as each node's podman
-authfile - no separate registry credentials. Without RHCS entitlements, point
-`ceph_container_registry` / `ceph_container_image` at the public upstream image
-instead; `vars.yaml` carries the values commented in place.
-
-### Requirements
-
-**OCP 4.21 or later on the cluster consuming the storage.** On **4.20**, the
-in-kernel RBD client could not attach to an RHCS 9
-(Tentacle) cluster: `rbd map` failed with `failed to add secret to kernel` and
-the CSI attach ended in error 524, so the PV bound but never mounted. This is a
-client-side kernel gap - the cluster health, the CSI user's caps and the image
-features all checked out, and the same image mapped by hand from a RHEL 9 node.
-It works on **4.21** (krbd mounts RHCS 9 images: `/dev/rbd0` under the NooBaa
-database, 2026-10-23) and on **4.22**. On any other version, run the RBD smoke
-test under [Verifying](#verifying-1) before building anything on the storage.
-`ocp_major_version` in `vars.yaml` drives both the hub's OCP version and the ODF
-channel the consumer role subscribes to (`stable-{{ ocp_major_version }}`), so
-changing it moves both together.
-
-On a version where the smoke test fails, take krbd out of the path and mount through
-rbd-nbd in userspace instead, by giving the RBD StorageClass
-`parameters.mounter: rbd-nbd`. StorageClass parameters are immutable, so this
-means exporting the generated class, renaming it, adding the parameter and
-applying that as a second class - not patching the one ODF created:
+Additive like the compact cluster below: it shares `vars.yaml`, `vault.yaml`,
+`inventory/hosts` and `roles/`, and no other playbook imports it. Run its
+playbooks from inside the directory:
 
 ```bash
-oc get sc ocs-external-storagecluster-ceph-rbd -o yaml > rbd-nbd-sc.yaml
-# edit: metadata.name -> ocs-external-storagecluster-ceph-rbd-nbd,
-#       drop metadata.uid/resourceVersion/creationTimestamp,
-#       add   parameters.mounter: rbd-nbd
-oc apply -f rbd-nbd-sc.yaml
+cd ceph
+ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass
+ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass
 ```
-
-Not needed on 4.22+, and not something this repo renders for you.
-
-**vault.yaml** reuses what the lab already requires - `org_id`,
-`activation_key` and `pull_secret` - and adds one new value,
-`ceph_dashboard_password`. `setup_ceph.yaml` asserts all of them up front
-rather than failing halfway through a bootstrap.
-
-**inventory/hosts** needs the `ceph`, `ceph_admin` and `ceph_nodes` groups that
-`setup_ceph.yaml`'s second play targets. They are rendered from
-`inventory/hosts.j2` by `setup_bm_host.yaml`, so an inventory generated before
-the Ceph groups existed has to be re-rendered:
-
-```bash
-ansible-playbook -i inventory/hosts setup_bm_host.yaml --ask-vault-pass
-```
-
-### Switching the hub off LVM Storage
-
-`use_lvm_storage` in `vars.yaml` gates `roles/setup-lvm-storage` - the LVM
-Storage operator Subscription and the `LVMCluster` CR - in every hub build and
-the SNO's storage step:
-
-```yaml
-use_lvm_storage: false
-```
-
-Set it before building the hub. Flipping it on an existing hub does not
-uninstall anything - the role only skips those two steps on the next run, so an
-already-installed LVM Storage has to be removed by hand.
-
-That matters because **LVM Storage and ODF both want the `openshift-storage`
-namespace**. LVM Storage's operator, its `LVMCluster`, ODF's operator and the
-external `StorageCluster` all land there, and this repo has not tested them
-sharing it. Run one or the other on a given hub:
-
-- switch the hub to Ceph from the start (`use_lvm_storage: false`), or
-- remove LVM Storage from the hub before running `setup_ceph_odf.yaml`, or
-- leave the hub on LVM Storage and point the ODF plays at a different cluster
-  entirely: `-e ceph_odf_target_kubeconfig=/path/to/other/kubeconfig`.
-
-If the two do end up coexisting, at least keep the default StorageClass
-unambiguous by setting `ceph_odf_rbd_default_sc: false`.
-
-### Build the Ceph cluster
-
-```bash
-ansible-playbook -i inventory/hosts setup_ceph.yaml --ask-vault-pass
-```
-
-Three ordered plays, tagged so each can be re-run on its own
-(`--tags ceph-vm`, `rhsm`, `ceph-prereqs`, `ceph-cluster`):
-
-1. **`setup-ceph-vm`** creates the four VMs from `rhel9_kvm_image`, expands the
-   OS partition into a 60G disk, and attaches the raw OSD disks to ceph1-3.
-2. **`setup-rhsm` + `setup-ceph-prereqs`** register each node directly with
-   `subscription-manager`, enable `rhceph_tools_repo`, install `cephadm` and
-   `ceph-common`, and drop `pull_secret` as the node's podman authfile.
-3. **`setup-ceph-cluster`** (delegated to ceph1) runs `cephadm bootstrap`,
-   distributes the cluster's SSH key, adds ceph2/ceph3 as `mon,mgr,osd` hosts
-   and `cephadmin` as `_admin`, places mon/mgr by label, and deploys OSDs on
-   every available device.
-
-The third play is a one-shot cluster **creation** role, not a day-2 reconciler:
-everything after the bootstrap check is gated on `/etc/ceph/ceph.conf` not
-already existing. Re-running against a live cluster re-checks the prereqs and
-leaves the cluster alone. The bootstrap output - including the dashboard URL -
-is printed on the first run only.
-
-```bash
-ssh root@192.168.122.27 ceph -s
-ssh root@192.168.122.27 ceph orch host ls
-ssh root@192.168.122.27 ceph osd tree
-```
-
-Expect `HEALTH_OK` with 3 mons, 3 mgrs (1 active, 2 standby) and 9 OSDs before
-moving on - the export step will happily produce a JSON blob against a degraded
-cluster, and you will find out later.
-
-### Attach it to OpenShift
-
-```bash
-ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass
-```
-
-Targets the same hub as every other playbook here (`target_hub`, defaulting to
-`hub`); pass `-e target_hub=hub2` for the DR hub, or
-`-e ceph_odf_target_kubeconfig=...` for something else entirely. Three ordered
-plays, because ODF has to be installed *before* the export can run:
-
-1. **`setup-ceph-odf-consumer`, stage `install`** (`--tags ceph-odf-install`) -
-   creates `openshift-storage`, subscribes to the ODF operator on channel
-   `stable-{{ ocp_major_version }}`, waits for the `StorageCluster` CRD, enables
-   the `odf-console` plugin, and extracts the exporter script **from the
-   installed operator** - the ConfigMap `rook-ceph-external-cluster-script-config`
-   (`.data.script`) on ODF 4.19+, falling back to the
-   `external.features.ocs.openshift.io/export-script` CSV annotation on 4.18 and
-   below.
-2. **`setup-ceph-odf-export`** (`--tags ceph-odf-export`, delegated to
-   `cephadmin`) - creates the RBD pool `ceph_odf_rbd_pool` and, if
-   `ceph_odf_enable_cephfs`, the CephFS `ceph_odf_cephfs_name` plus an MDS to
-   serve it. The exporter creates *users*, not pools, so these have to exist
-   first. It then runs the version-matched script with `--v2-port-enable` and
-   fetches the resulting JSON - fsid, mon endpoints, scoped CSI credentials - to
-   `ceph_odf_export_dir` on the controller.
-3. **`setup-ceph-odf-consumer`, stage `create`** (`--tags ceph-odf-create`) -
-   loads that JSON into the `rook-ceph-external-cluster-details` secret and
-   applies the external `StorageCluster` named `ceph_odf_storagecluster_name`.
-
-The exported JSON holds live cluster credentials. `ceph-odf/` is in
-`.gitignore`; keep it that way.
-
-### Verifying
-
-```bash
-oc get storagecluster -n openshift-storage
-oc get pods -n openshift-storage
-oc get sc
-```
-
-A healthy external `StorageCluster` reaches `Ready`, and `oc get sc` shows
-`ocs-external-storagecluster-ceph-rbd` (marked `(default)` when
-`ceph_odf_rbd_default_sc` is true) alongside
-`ocs-external-storagecluster-cephfs`. Then prove it end to end - binding is not
-mounting, and the 4.22 issue above only shows up on the mount:
-
-```bash
-oc apply -f - <<'EOF'
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ceph-rbd-smoke
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 1Gi
-  storageClassName: ocs-external-storagecluster-ceph-rbd
----
-apiVersion: v1
-kind: Pod
-metadata:
-  name: ceph-rbd-smoke
-spec:
-  containers:
-    - name: smoke
-      image: registry.access.redhat.com/ubi9/ubi-minimal
-      command: ["sleep", "3600"]
-      volumeMounts:
-        - name: vol
-          mountPath: /data
-  volumes:
-    - name: vol
-      persistentVolumeClaim:
-        claimName: ceph-rbd-smoke
-EOF
-
-oc get pvc ceph-rbd-smoke
-oc wait --for=condition=Ready pod/ceph-rbd-smoke --timeout=180s
-oc exec ceph-rbd-smoke -- sh -c 'echo ok > /data/f && cat /data/f'
-```
-
-A PVC that goes `Bound` while the pod stays `ContainerCreating` with
-`rbd: map failed ... failed to add secret to kernel` is the kernel issue
-above (seen on 4.20; 4.21 and 4.22 work), not a Ceph or credentials problem.
-
-### Notes and constraints
-
-- **The exporter script must match the installed operator.** Do not substitute
-  a copy from a GitHub branch. An older upstream script emits the CSI secrets
-  as `adminID`/`adminKey`, while a current ODF operator reads `userID`/`userKey`
-  - the operator finds no usable credential, falls back to DNS SRV mon
-  discovery, and the `StorageCluster` sits in `Progressing` with
-  `unable to get monitor info from DNS SRV` / `RADOS object not found`. Nothing
-  says "wrong key names". This is why `setup_ceph_odf.yaml` installs ODF first
-  and pulls the script out of the operator, and why `ceph_odf_exporter_local_path`
-  points at a file the playbook writes rather than one you supply.
-- **Do not add `reconcileStrategy: ignore` to the StorageCluster's
-  `managedResources.cephBlockPools`.** It reads like the right thing in external
-  mode - the operator is not managing the pools - but what it actually suppresses
-  is the *StorageClass* creation the operator is responsible for, so no
-  StorageClass ever appears and nothing can provision. The template deliberately
-  sets only `defaultStorageClass` (from `ceph_odf_rbd_default_sc`), which is what
-  the ODF console generates.
-- **The mons have to be answering msgr2.** The exporter runs with
-  `--v2-port-enable`, so the endpoints it hands ODF are the v2 port 3300; if the
-  mons are only bound to the v1 port 6789 those endpoints are dead and CSI
-  cannot reach the cluster. A Ceph 9 cluster bootstrapped by cephadm has msgr2
-  on already - confirm with `ceph mon dump` (each mon should show a `v2:` entry)
-  and, in the unlikely case it does not, `ceph mon enable-msgr2` turns it on.
-- The Ceph cluster is entirely independent of the HCP flow - no other playbook
-  in this repo imports `setup_ceph.yaml`, and skipping it changes nothing else.
-- `setup_ceph_odf.yaml` can be pointed at hub2 as well, but the export step
-  re-runs the exporter against the same Ceph cluster, so both hubs end up
-  consuming the same pool. That is fine for a lab; it is not isolation.
 
 ## Three-node compact cluster
 
@@ -2193,9 +1937,11 @@ Every playbook here is run with `-i inventory/hosts`. Most plays target
 mirror registry, minio, `ceph1`, `cephadmin` - and a delegated host that is not
 in the inventory gets no `ansible_ssh_private_key_file` or
 `StrictHostKeyChecking=no`, so the SSH fails or hangs on a host-key prompt.
-`setup_ceph.yaml` goes further and has a play against the `ceph_nodes` group,
+`ceph/setup_ceph.yaml` goes further and has a play against the `ceph_nodes` group,
 which does not exist at all without `-i`. Passing it everywhere keeps one habit
-instead of a rule about which playbook needs it.
+instead of a rule about which playbook needs it. Playbooks in a subdirectory
+(`ceph/`, `compact-cluster/`, `kubevirt/`, `udn-bgp-evpn/`) are run from inside
+it, with `-i ../inventory/hosts`.
 
 `inventory/hosts` is generated from `inventory/hosts.j2` and `vars.yaml`
 (`lab_network_prefix` + `ip_list`) by `setup_bm_host.yaml`, which re-reads it in
@@ -2220,8 +1966,8 @@ delegates.
 | `cleanup.yaml`                | Destroy all VMs, or one piece with `--tags hub\|hub2\|hubd\|hub2d\|hosted\|helper\|minio\|ceph\|sno\|compact\|...` (see [Cleanup](#cleanup)). The mirror registry is only shut down; `--tags registry-destroy` really removes it |
 | `setup_hosted_cluster_vm.yaml` | Create a hosted cluster's worker VMs; builds the disconnected set when `disconnected_install: true` |
 | `create_hosted_cluster.yaml`  | Render the HostedCluster/NodePool bundle; renders the disconnected clusters when `disconnected_install: true` |
-| `setup_ceph.yaml`             | Build the standalone Ceph 9 cluster (ceph1-3 + cephadmin) |
-| `setup_ceph_odf.yaml`         | Install ODF and attach that Ceph cluster to a hub in external mode |
+| `ceph/setup_ceph.yaml`        | Build the standalone Ceph 9 cluster (ceph1-3 + cephadmin) - see [ceph/README.md](ceph/README.md) |
+| `ceph/setup_ceph_odf.yaml`    | Install ODF and attach that Ceph cluster to a hub in external mode |
 | `udn-bgp-evpn/setup_udn_bgp_lab.yaml` | Build the containerlab BGP/EVPN provider fabric and wire a cluster into it. Phase-tagged: `--tags fabric\|preflight\|default\|shared\|vrflite\|evpn` |
 
 
