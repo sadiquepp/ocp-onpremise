@@ -658,7 +658,8 @@ hub2. No new backup is needed, and hub1 stays shut down. The fix only acts at
 restore time, and Run 1's hub2 already holds MCE's regenerated import secret,
 so it can't be reused.
 
-1. Remove Run 1's hub2: `ansible-playbook -i inventory/hosts cleanup-hub2.yaml`,
+1. Remove Run 1's hub2: `ansible-playbook -i inventory/hosts cleanup.yaml --tags hub2`
+   (`cleanup-hub2.yaml` when this was run, since merged into `cleanup.yaml`),
    then `virsh list --all | grep hub2` (no rows).
 2. [steps.md](../steps.md) steps 15-19, as in Run 1.
 3. Check and pin the image (section 1.0), then step 20 with
