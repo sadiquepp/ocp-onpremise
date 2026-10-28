@@ -1,0 +1,219 @@
+---
+# Brings sushy-emulator up. See main.yml.
+
+- name: Fail fast if the BMC password is missing from vault.yaml
+  ansible.builtin.assert:
+    that:
+      - sushy_emulator_password is defined
+      - sushy_emulator_password | string | length >= 8
+    fail_msg: >-
+      Set sushy_emulator_password (8+ characters) in vault.yaml
+      (ansible-vault edit vault.yaml). It protects the worker VMs' Redfish
+      BMCs, and the BareMetalHosts' BMC secrets carry it.
+
+- name: Install podman and htpasswd
+  ansible.builtin.dnf:
+    name:
+      - podman
+      - httpd-tools
+    state: present
+
+# Virtual media lands in a libvirt storage pool: on InsertMedia, sushy
+# downloads the ISO and uploads it as a volume into the pool named
+# sushy_emulator_storage_pool, then attaches that volume to the domain as its
+# CD-ROM. Without the pool every InsertMedia fails with a 500
+# ("Storage pool not found"). An existing pool of that name is used as it is.
+- name: Check for the storage pool virtual media is uploaded into
+  ansible.builtin.command: virsh pool-info {{ sushy_emulator_storage_pool }}
+  register: sushy_pool_info
+  changed_when: false
+  failed_when: false
+
+# A pool fails to define with "Storage source conflict" when another pool
+# already owns the directory - hence a directory of its own (defaults).
+- name: Create it as a directory pool
+  ansible.builtin.shell: |
+    set -e
+    mkdir -p {{ sushy_emulator_storage_pool_dir }}
+    virsh pool-define-as {{ sushy_emulator_storage_pool }} dir --target {{ sushy_emulator_storage_pool_dir }}
+    virsh pool-build {{ sushy_emulator_storage_pool }}
+  when: sushy_pool_info.rc != 0
+
+- name: Make sure it is active and starts with libvirt
+  ansible.builtin.shell: |
+    set -e
+    changed=0
+    virsh pool-info {{ sushy_emulator_storage_pool }} | grep -Eq '^State:\s+running' || { virsh pool-start {{ sushy_emulator_storage_pool }}; changed=1; }
+    virsh pool-info {{ sushy_emulator_storage_pool }} | grep -Eq '^Autostart:\s+yes' || { virsh pool-autostart {{ sushy_emulator_storage_pool }}; changed=1; }
+    echo "changed=$changed"
+  register: sushy_pool_state
+  changed_when: "'changed=1' in sushy_pool_state.stdout"
+
+# By name in vars.yaml, by UUID in the emulator: a Redfish System id is the
+# domain UUID, and the allow-list takes UUIDs.
+- name: Start from an empty list of exposed systems
+  ansible.builtin.set_fact:
+    sushy_emulator_systems: []
+
+- name: Look up the worker VMs' UUIDs
+  ansible.builtin.command: virsh domuuid {{ item }}
+  loop: "{{ sushy_emulator_domains }}"
+  register: sushy_domuuid
+  changed_when: false
+  failed_when: false
+
+- name: Collect the domains that exist
+  ansible.builtin.set_fact:
+    sushy_emulator_systems: >-
+      {{ sushy_emulator_systems + [{
+           'name': item.item,
+           'uuid': item.stdout | trim,
+           'address': 'redfish-virtualmedia+http://' ~ sushy_emulator_listen_ip ~ ':'
+                      ~ sushy_emulator_port ~ '/redfish/v1/Systems/' ~ (item.stdout | trim)
+         }] }}
+  loop: "{{ sushy_domuuid.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.rc == 0 and (item.stdout | trim | length) > 0
+
+# An empty allow-list would expose every domain on the host - the hubs
+# included - so refuse rather than start with one.
+- name: Fail if none of the worker VMs exist yet
+  ansible.builtin.fail:
+    msg: >-
+      None of {{ sushy_emulator_domains | join(', ') }} is defined in libvirt,
+      so there is nothing to give a BMC. Create them first:
+      ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml
+      --ask-vault-pass -e hosted_cluster_worker_provisioning=bmh
+      (which also runs this role).
+  when: sushy_emulator_systems | default([]) | length == 0
+
+- name: Report worker VMs that are not defined (left out of the allow-list)
+  ansible.builtin.debug:
+    msg: "Not defined in libvirt, no BMC: {{ sushy_domuuid.results | rejectattr('rc', 'equalto', 0) | map(attribute='item') | join(', ') }}"
+  when: sushy_domuuid.results | rejectattr('rc', 'equalto', 0) | list | length > 0
+
+- name: Create the config directory
+  ansible.builtin.file:
+    path: "{{ sushy_emulator_config_dir }}"
+    state: directory
+    mode: '0750'
+
+# htpasswd -v exits 0 when the stored hash matches, so the file is only
+# rewritten when the password changed.
+- name: Check the stored BMC password
+  ansible.builtin.command: >-
+    htpasswd -vb {{ sushy_emulator_config_dir }}/htpasswd
+    {{ sushy_emulator_username }} {{ sushy_emulator_password }}
+  register: sushy_htpasswd_check
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+# bcrypt (-B): the emulator's basic-auth middleware accepts bcrypt hashes only.
+- name: Write the BMC credentials
+  ansible.builtin.command: >-
+    htpasswd -bBc {{ sushy_emulator_config_dir }}/htpasswd
+    {{ sushy_emulator_username }} {{ sushy_emulator_password }}
+  when: sushy_htpasswd_check.rc != 0
+  notify: Restart sushy-emulator
+  no_log: true
+
+- name: Restrict the credentials file
+  ansible.builtin.file:
+    path: "{{ sushy_emulator_config_dir }}/htpasswd"
+    mode: '0640'
+
+- name: Render the emulator config
+  ansible.builtin.template:
+    src: sushy-emulator.conf.j2
+    dest: "{{ sushy_emulator_config_dir }}/sushy-emulator.conf"
+    mode: '0640'
+  notify: Restart sushy-emulator
+
+- name: Pull the sushy-tools image
+  ansible.builtin.command: podman pull {{ sushy_emulator_image }}
+  register: sushy_pull
+  changed_when: "'Writing manifest' in sushy_pull.stderr"
+
+- name: Install the systemd unit
+  ansible.builtin.template:
+    src: sushy-emulator.service.j2
+    dest: /etc/systemd/system/sushy-emulator.service
+    mode: '0644'
+  notify: Restart sushy-emulator
+
+# Same pattern as the compact cluster's NTP server: only when firewalld runs,
+# in whatever zone virbr0 is in (libvirt's own, normally). The hubs' Ironic
+# reaches the emulator from virbr0.
+- name: Check whether firewalld is running
+  ansible.builtin.command: systemctl is-active firewalld
+  register: sushy_firewalld
+  changed_when: false
+  failed_when: false
+
+- name: Find the firewalld zone of the lab bridge
+  ansible.builtin.command: firewall-cmd --get-zone-of-interface=virbr0
+  register: sushy_virbr0_zone
+  changed_when: false
+  failed_when: false
+  when: sushy_firewalld.stdout == 'active'
+
+- name: Open the Redfish port to the lab network
+  ansible.builtin.shell:
+    cmd: |
+      zone={{ (sushy_virbr0_zone.stdout | default('', true) | trim) or 'libvirt' }}
+      port={{ sushy_emulator_port }}/tcp
+      changed=0
+      firewall-cmd --zone=$zone --query-port=$port >/dev/null || { firewall-cmd --zone=$zone --add-port=$port; changed=1; }
+      firewall-cmd --permanent --zone=$zone --query-port=$port >/dev/null || { firewall-cmd --permanent --zone=$zone --add-port=$port; changed=1; }
+      echo "zone=$zone changed=$changed"
+  register: sushy_fw
+  changed_when: "'changed=1' in sushy_fw.stdout"
+  when: sushy_firewalld.stdout == 'active'
+
+- name: Enable and start sushy-emulator
+  ansible.builtin.systemd:
+    name: sushy-emulator
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Apply config changes now
+  ansible.builtin.meta: flush_handlers
+
+# The same request Ironic makes first. Proves the port, the auth and the
+# allow-list in one go.
+- name: Wait for the Redfish API to list the worker VMs
+  ansible.builtin.uri:
+    url: "http://{{ sushy_emulator_listen_ip }}:{{ sushy_emulator_port }}/redfish/v1/Systems"
+    url_username: "{{ sushy_emulator_username }}"
+    url_password: "{{ sushy_emulator_password }}"
+    force_basic_auth: true
+    return_content: true
+  register: sushy_systems
+  until: sushy_systems.status == 200
+  retries: 12
+  delay: 5
+  no_log: true
+
+# Each member is {"@odata.id": "/redfish/v1/Systems/<uuid>"}. The key is read
+# through dict2items because map(attribute='@odata.id') takes the dot as a
+# path and looks up ['@odata']['id'], which is undefined.
+- name: Collect the System ids the emulator lists
+  ansible.builtin.set_fact:
+    sushy_listed_uuids: "{{ sushy_systems.json.Members | default([]) | map('dict2items') | flatten | selectattr('key', 'equalto', '@odata.id') | map(attribute='value') | map('basename') | list }}"
+
+- name: Fail if the emulator does not expose exactly the worker VMs
+  ansible.builtin.assert:
+    that:
+      - (sushy_listed_uuids | sort) == (sushy_emulator_systems | map(attribute='uuid') | sort)
+    fail_msg: >-
+      The emulator lists {{ sushy_listed_uuids }}, expected
+      {{ sushy_emulator_systems | map(attribute='uuid') | list }}.
+      Check {{ sushy_emulator_config_dir }}/sushy-emulator.conf and
+      journalctl -u sushy-emulator.
+
+- name: Report the BMC addresses
+  ansible.builtin.debug:
+    msg: "{{ sushy_emulator_systems | map(attribute='name') | zip(sushy_emulator_systems | map(attribute='address')) | map('join', '  ') | list }}"

@@ -327,11 +327,34 @@ oadp_bucket_name: adp-backup-bucket-xjt   # S3 bucket names are globally unique 
 ## comparison further down; override per run with -e oadp_backup_method=csi.
 oadp_backup_method: fs
 
+## --- Operator versions -----------------------------------------------------
+
+## Which ACM and OADP the hubs install (roles/setup-hub-acm). The defaults suit
+## the 4.22 build above. An OLM catalog only offers what supports that
+## OpenShift version, so on another version read the catalog first. Build the
+## hub with --skip-tags acm, then on it:
+##   oc get packagemanifest advanced-cluster-management -n openshift-marketplace \
+##     -o jsonpath='{range .status.channels[*]}{.name}{"  "}{.currentCSV}{"\n"}{end}'
+##   oc get packagemanifest redhat-oadp-operator -n openshift-marketplace \
+##     -o jsonpath='{range .status.channels[*]}{.name}{": "}{.entries[*].name}{"\n"}{end}'
+## set these, and run the same playbook with --tags acm.
+acm_operator_channel: release-2.17
+oadp_operator_channel: stable
+## Empty: install the channel head and keep upgrading (automatic approval).
+## A CSV name, e.g. oadp-operator.v1.5.4: install exactly that version and
+## never upgrade it (manual approval; the role approves only that CSV's
+## InstallPlan). Use it to test a specific OADP release.
+oadp_operator_starting_csv: ""
+
 ## --- RHCOS live ISOs offered to hosted clusters ----------------------------
 
 ## The AgentServiceConfig's osImages catalogue - the versions ACM/MCE will
 ## offer when installing a hosted cluster. One entry's openshiftVersion must
 ## match bminfra_ocp_version, which follows ocp_major_version above.
+## Building on another OpenShift version (say 4.19) needs an entry for it here,
+## or the InfraEnv never produces a discovery ISO. Take the newest RHCOS live
+## ISO under .../dependencies/rhcos/<major>/ on mirror.openshift.com; its file
+## name is in that version's directory.
 agent_service_os_images:
   - openshiftVersion: "4.21"
     version: "4.21.0"
@@ -1182,6 +1205,27 @@ hosted_cluster_workers:
   - name: c1_worker3
     ip_key: c1worker3
 
+## How those workers join the hub's InfraEnv. Same VMs, same names, MACs and
+## addresses either way:
+##
+##   agent - setup_hosted_cluster_vm.yaml boots them straight off the discovery
+##           ISO; they register as Agents, which you approve. The hub has no
+##           way to power or reboot them. Default, and how this lab has always
+##           worked.
+##   bmh   - each VM gets a Redfish BMC from sushy-emulator on this host
+##           (roles/setup-sushy-emulator), and a BareMetalHost plus BMC secret
+##           in the agent namespace. The hub's Bare Metal Operator powers the
+##           VMs on and boots them from virtual media; the BareMetalAgent
+##           controller approves the resulting Agents. This is how bare-metal
+##           workers with real BMCs are managed, and what
+##           oadp/BMH-DR-test.md tests across a DR restore.
+##
+## Override per run: -e hosted_cluster_worker_provisioning=bmh. bmh applies to
+## the hub's connected hosted cluster workers only (hosted_cluster_workers);
+## the disconnected and compact-cluster workers stay agent. bmh also needs
+## sushy_emulator_password in vault.yaml.
+hosted_cluster_worker_provisioning: agent
+
 
 ## Variables for Hosted Cluster1
 hosted_cluster2_cpu: 4
@@ -1253,6 +1297,15 @@ oadp_backup_prefix: hcp-backup
 oadp_backup_ttl: 999h0m0s
 oadp_bminfra_namespace: bminfra
 oadp_storage_location: default
+
+## Restore every BareMetalHost detached (baremetalhost.metal3.io/detached), so
+## the restoring hub's Bare Metal Operator does not act on the hosts until you
+## remove the annotation. Only matters for workers built with
+## hosted_cluster_worker_provisioning=bmh. Override per run:
+##   -e oadp_restore_detach_bmh=true
+## See oadp/BMH-DR-test.md.
+oadp_restore_detach_bmh: false
+oadp_restore_bmh_modifier_name: hcp-restore-bmh-detached
 
 ## How the control-plane PVs (the hosted cluster's etcd volumes) are
 ## backed up. Both methods use the same S3 bucket and the same

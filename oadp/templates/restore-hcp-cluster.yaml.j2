@@ -14,3 +14,13 @@ spec:
     - backups.velero.io
     - restores.velero.io
     - resticrepositories.velero.io
+{% if oadp_restore_detach_bmh | default(false) | bool %}
+  # oadp_restore_detach_bmh: restore every BareMetalHost with the
+  # baremetalhost.metal3.io/detached annotation, so this hub's Bare Metal
+  # Operator leaves the hosts alone until you remove it. The ConfigMap is
+  # applied by restore_hosted_cluster.yaml from
+  # restore-bmh-detached-modifier.yaml.j2.
+  resourceModifier:
+    kind: ConfigMap
+    name: {{ oadp_restore_bmh_modifier_name }}
+{% endif %}

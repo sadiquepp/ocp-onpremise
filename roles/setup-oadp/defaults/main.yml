@@ -8,3 +8,11 @@
 # the latter makes this role label the VolumeSnapshotClass Velero needs
 # (csi-snapshot-class.yml).
 oadp_backup_method: fs
+
+# Replace the hypershift Velero plugin image the OADP operator would
+# otherwise use, via the DPA's spec.unsupportedOverrides
+# (hypershiftPluginImageFqin). Empty = the operator's own image. Only for
+# testing a plugin fix ahead of an OADP release, e.g. OCPBUGS-121709 -
+# see oadp/OCPBUGS-121709-test.md. Set per run:
+#   -e oadp_hypershift_plugin_image=quay.io/<you>/hypershift-oadp-plugin:<tag>
+oadp_hypershift_plugin_image: ""

@@ -1,0 +1,50 @@
+---
+# defaults file for setup-sushy-emulator
+#
+# sushy-emulator is a Redfish BMC for libvirt domains. With it, each worker VM
+# looks to the hub like a server with a BMC: the hub's Bare Metal Operator
+# (Ironic) can power it on and off and boot it from virtual media, which is
+# what turns a worker into a BareMetalHost. See
+# hosted_cluster_worker_provisioning in vars.yaml.
+
+# present: run it. absent: stop it and remove its unit, config and firewall
+# rule (cleanup-sushy-emulator.yaml).
+sushy_emulator_state: present
+
+# The sushy-tools container image (sushy-emulator plus the libvirt driver).
+# Pin a tag or digest here for a repeatable lab.
+sushy_emulator_image: quay.io/metal3-io/sushy-tools:latest
+
+# Where the BMCs listen. The hosts' gateway on virbr0 is the one address on
+# this host every hub node reaches directly - both hubs' Ironic call it.
+sushy_emulator_listen_ip: "{{ lab_network_prefix }}.1"
+sushy_emulator_port: 8000
+
+# Resolver for the container. The discovery ISO is fetched by the BMC side -
+# here, sushy - from the hub's image service, so the container must resolve
+# the hubs' *.apps names. The helper serves those zones. libvirt's dnsmasq on
+# virbr0 would not do: it only answers queries arriving on virbr0, and the
+# container's queries arrive on podman's bridge.
+sushy_emulator_dns: "{{ lab_network_prefix }}.{{ ip_list.helper_server }}"
+
+# Basic auth for the Redfish API. The password comes from vault.yaml
+# (sushy_emulator_password); the BareMetalHosts' BMC secrets carry the same
+# pair.
+sushy_emulator_username: admin
+
+sushy_emulator_config_dir: /etc/sushy
+
+# The libvirt storage pool sushy uploads virtual media ISOs into. sushy looks
+# it up by this name ('default' in sushy-tools); the role creates it as a
+# directory pool on sushy_emulator_storage_pool_dir when it is missing.
+# A directory of its own: libvirt allows one pool per directory, and on this
+# host download_dir itself already belongs to a pool ('images'). Under
+# download_dir, so the ISOs get the SELinux label QEMU can read.
+sushy_emulator_storage_pool: default
+sushy_emulator_storage_pool_dir: "{{ download_dir }}/sushy-vmedia"
+sushy_emulator_container_name: sushy-emulator
+
+# The libvirt domains exposed through Redfish, by name. Only these: the
+# emulator is restricted to their UUIDs, so the hub VMs, the helper and the
+# rest of the lab never get a BMC anyone could power-cycle.
+sushy_emulator_domains: "{{ hosted_cluster_workers | map(attribute='name') | list }}"

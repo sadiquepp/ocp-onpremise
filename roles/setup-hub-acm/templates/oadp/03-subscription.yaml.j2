@@ -9,8 +9,15 @@ metadata:
   name: redhat-oadp-operator
   namespace: openshift-adp
 spec:
-  channel: stable
+  channel: "{{ oadp_operator_channel }}"
+{% if oadp_operator_starting_csv | default('') | length > 0 %}
+  # Pinned (oadp_operator_starting_csv): only this CSV's InstallPlan is
+  # approved, by roles/setup-hub-acm, so OLM never upgrades past it.
+  startingCSV: "{{ oadp_operator_starting_csv }}"
+  installPlanApproval: Manual
+{% else %}
   installPlanApproval: Automatic
+{% endif %}
   name: redhat-oadp-operator
   source: "{{ acm_catalog_source }}"
   sourceNamespace: "{{ acm_catalog_source_namespace }}"

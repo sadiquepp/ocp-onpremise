@@ -1,0 +1,27 @@
+## Velero resource modifier for oadp_restore_detach_bmh. Applied by
+## restore_hosted_cluster.yaml and referenced from the Restore's
+## spec.resourceModifier.
+##
+## Adds baremetalhost.metal3.io/detached to every BareMetalHost as it is
+## restored. A detached host is one the Bare Metal Operator does not manage:
+## no power actions, no provisioning, no virtual media. That is the point -
+## a restored BareMetalHost arrives without its status, and a DR hub that
+## takes it over as a new host could reboot a worker that is running
+## production. Remove the annotation once the cluster is healthy and each
+## host's state checks out (oadp/BMH-DR-test.md, runbook 5.3 and 6.1).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ oadp_restore_bmh_modifier_name }}
+  namespace: openshift-adp
+data:
+  modifiers.yaml: |
+    version: v1
+    resourceModifierRules:
+      - conditions:
+          groupResource: baremetalhosts.metal3.io
+        mergePatches:
+          - patchData: |
+              metadata:
+                annotations:
+                  baremetalhost.metal3.io/detached: ""

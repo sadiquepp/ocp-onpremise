@@ -30,6 +30,22 @@
         (ansible-vault edit vault.yaml) before running this playbook. See
         oadp/README.md for how to create the IAM user and access key.
 
+  ## Only catches values that cannot be a key - an example left in place
+  ## ('AKIA...', '<access key>', 'changeme'). A well-formed but wrong
+  ## key gets past this; the BackupStorageLocation check in setup-oadp
+  ## is what proves the key works. The message never echoes the values.
+  - name: Fail fast if the AWS credentials are still placeholders
+    ansible.builtin.assert:
+      that:
+        - oadp_aws_access_key_id | trim is match('^[A-Z0-9]{16,128}$')
+        - oadp_aws_secret_access_key | trim | length >= 16
+        - oadp_aws_secret_access_key is not search('[.][.][.]|[<> ]|(?i:changeme)')
+      fail_msg: >-
+        oadp_aws_access_key_id / oadp_aws_secret_access_key in vault.yaml
+        look like placeholders, not a real key. An access key id is 20
+        upper-case letters and digits (AKIA...), a secret access key is 40
+        characters. Set the real values with ansible-vault edit vault.yaml.
+
   - ansible.builtin.import_role:
       name: setup-oadp
     environment:

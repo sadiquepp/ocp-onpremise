@@ -1,0 +1,18 @@
+## Removes sushy-emulator from this bare-metal host: stops it, and removes its
+## systemd unit, config (including the BMC credentials) and firewall rule.
+##
+##   ansible-playbook -i inventory/hosts cleanup-sushy-emulator.yaml
+##
+## BareMetalHosts that still point at it lose their BMC and go to an error
+## state on the hub, so remove the hosted cluster or its BareMetalHosts first.
+## The worker VMs themselves are left alone.
+
+- name: Remove sushy-emulator
+  hosts: localhost
+  become: true
+  vars_files:
+    - vars.yaml
+  vars:
+    sushy_emulator_state: absent
+  roles:
+    - setup-sushy-emulator

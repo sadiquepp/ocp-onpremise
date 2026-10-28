@@ -1,0 +1,28 @@
+# Rendered by roles/setup-sushy-emulator - edits are overwritten.
+
+# Inside the container. The host side of the port is published on
+# {{ sushy_emulator_listen_ip }}:{{ sushy_emulator_port }} by the systemd unit.
+SUSHY_EMULATOR_LISTEN_IP = '0.0.0.0'
+SUSHY_EMULATOR_LISTEN_PORT = 8000
+
+# Plain HTTP: the BareMetalHosts use redfish-virtualmedia+http://. The lab
+# network is private to this host.
+SUSHY_EMULATOR_SSL_CERT = None
+SUSHY_EMULATOR_SSL_KEY = None
+
+SUSHY_EMULATOR_OS_CLOUD = None
+SUSHY_EMULATOR_LIBVIRT_URI = 'qemu:///system'
+
+# Honour boot-device changes. Virtual media boot depends on them: Ironic sets
+# a one-time boot from the virtual CD, then from disk.
+SUSHY_EMULATOR_IGNORE_BOOT_DEVICE = False
+
+# The ISO is downloaded from the hub's image service, which serves the hub
+# router's certificate - not one this container trusts.
+SUSHY_EMULATOR_VMEDIA_VERIFY_SSL = False
+
+# bcrypt htpasswd file, written by the role.
+SUSHY_EMULATOR_AUTH_FILE = '{{ sushy_emulator_config_dir }}/htpasswd'
+
+# Only these domains get a BMC.
+SUSHY_EMULATOR_ALLOWED_INSTANCES = {{ sushy_emulator_systems | map(attribute='uuid') | list | to_json }}
