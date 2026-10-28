@@ -4,7 +4,11 @@
 # Creates the minio VM on the baremetal host (localhost). Same pattern
 # as setup-mirror-registry-vm: reuses the already-customized RHEL9 base
 # image, offline virt-resize into a sparse disk (no pre-allocation).
-# Runs only when disconnected_install is true.
+#
+# Not tied to disconnected_install: the VM's DHCP reservation and DNS
+# records are rendered for every ip_list entry by setup_bm_host.yaml, so
+# this works in a connected lab too. setup_minio.yaml is simply never
+# imported by either install flow.
 
 - name: Check the minio Disk Existence
   stat:

@@ -21,7 +21,7 @@ In a hurry? [steps.md](steps.md) is the same end-to-end run as commands only.
   - [Choose Connected or Disconnected](#choose-connected-or-disconnected)
   - [Setup Bare Metal Host](#setup-bare-metal-host-1)
   - [Setup Mirror Registry (disconnected only)](#setup-mirror-registry-disconnected-only)
-  - [Setup MinIO (disconnected only)](#setup-minio-disconnected-only)
+  - [Setup MinIO (optional, any lab)](#setup-minio-optional-any-lab)
   - [Setup Bastion VM (optional)](#setup-bastion-vm-optional)
   - [Choose the Hub's PV Storage](#choose-the-hubs-pv-storage)
   - [Setup Hub Cluster](#setup-hub-cluster)
@@ -461,23 +461,25 @@ That last directory holds the `ImageDigestMirrorSet` / `ImageTagMirrorSet` /
 `CatalogSource` the hub install stages and applies as day-2 resources; the hub
 install fails with a clear message if it is not there yet.
 
-### Setup MinIO (disconnected only)
+### Setup MinIO (optional, any lab)
 
-**Skip this section entirely when `disconnected_install: false`.** A connected
-lab points OADP at a real S3 bucket; this is its stand-in for one.
+A local S3-compatible target on the lab network. OADP has to write the
+control-plane backup somewhere S3-shaped, and a disconnected lab has no route
+to AWS - but the server is useful in a connected lab too, for anything that
+wants a bucket without an AWS account.
 
-OADP has to write the control-plane backup somewhere S3-shaped, and a
-disconnected lab has no route to AWS. This builds a MinIO server on the lab
-network and creates the bucket for OADP to target. Run it **after**
-`setup_bm_host.yaml` - it needs the helper's DNS to resolve
-`minio.<hub_domain>`:
+**Unlike the mirror registry, this is not gated on `disconnected_install`**, and
+it is self-contained. Nothing in either install flow imports
+`setup_minio.yaml`, so it changes nothing until you run it, and everything the
+VM needs is already there in any lab: `setup_bm_host.yaml` renders the DHCP
+reservation for every `ip_list` entry, the `minio.<hub_domain>` A and PTR
+records, and the `[minio]` inventory group regardless of the flag. So the one
+prerequisite is a prepared lab host - run `setup_bm_host.yaml` first, then
+this:
 
 ```bash
 ansible-playbook -i inventory/hosts setup_minio.yaml --ask-vault-pass
 ```
-
-Like the mirror registry it refuses to run unless `disconnected_install: true`,
-and nothing in the connected flow imports it.
 
 | Tag | Step |
 | --- | --- |
@@ -2305,7 +2307,7 @@ delegates.
 | ----------------------------- | --------------------------------------------- |
 | `setup_bm_host.yaml`          | Prepare bare metal, create helper VM (DNS/LB) |
 | `setup_mirror_registry.yaml`  | Build the mirror registry VM and fill it with oc-mirror - required first when `disconnected_install: true`, refuses to run otherwise |
-| `setup_minio.yaml`            | Build the MinIO VM and create OADP's bucket - the disconnected lab's stand-in for an S3 bucket, refuses to run unless `disconnected_install: true` |
+| `setup_minio.yaml`            | Build the MinIO VM and create a bucket - a local stand-in for S3, for OADP on a disconnected cluster or anything else wanting a bucket. Standalone: nothing imports it, and it is not gated on `disconnected_install` |
 | `setup_bastion.yaml`          | Build the 256G bastion VM for container image builds and CVE scanning - optional, nothing else depends on it |
 | `setup_hub_cluster.yaml`      | Deploy the hub (OCP + day-2 operators): hub1, or hubd when `disconnected_install: true` |
 | `setup_hub_cluster2.yaml`     | Deploy the DR replacement hub: hub2, or hub2d when `disconnected_install: true` |

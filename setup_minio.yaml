@@ -1,16 +1,27 @@
-## Creates the minio VM and installs/configures MinIO as the local
-## S3-compatible OADP backup target for disconnected-install simulation.
-## Structured the same way as setup_mirror_registry.yaml: VM creation
-## happens on the baremetal host (localhost), then the actual in-guest
-## setup is delegated into the new VM.
+## Creates the minio VM and installs/configures MinIO as a local
+## S3-compatible target - for OADP when the cluster is disconnected, and
+## for anything else in the lab that wants a bucket. Structured the same
+## way as setup_mirror_registry.yaml: VM creation happens on the baremetal
+## host (localhost), then the actual in-guest setup is delegated into the
+## new VM.
 ##
-## This playbook is entirely new - nothing in the connected install flow
-## imports or calls it, so running the connected flow is completely
-## unaffected whether or not you ever run this.
+## SELF-CONTAINED, and deliberately NOT gated on disconnected_install.
+## Nothing in either install flow imports this playbook, so it changes
+## nothing until you run it - and everything the minio VM needs is created
+## unconditionally by setup_bm_host.yaml:
 ##
-## Requires disconnected_install: true (vars.yaml, default false),
-## minio_root_user / minio_root_password defined in vault.yaml, and
-## org_id / activation_key defined in vault.yaml (see roles/setup-rhsm).
+##   - the DHCP reservation for ip_list.minio in the libvirt default
+##     network (that template loops over the whole of ip_list)
+##   - minio.<hub_domain> A and PTR records in the helper's zones
+##   - the [minio] inventory group in inventory/hosts
+##
+## So the only prerequisite is a prepared lab host: run setup_bm_host.yaml
+## first, connected or disconnected, then this.
+##
+## Requires minio_root_user / minio_root_password in vault.yaml, and
+## org_id / activation_key in vault.yaml (see roles/setup-rhsm) - the
+## in-guest step registers with RHSM to install the Go toolchain it builds
+## the MinIO server with.
 ##
 ## Usage:
 ##   ansible-playbook -i inventory/hosts setup_minio.yaml --ask-vault-pass
@@ -22,15 +33,6 @@
     - vars.yaml
     - vault.yaml
   tasks:
-  - name: Refuse to run unless disconnected_install is enabled
-    ansible.builtin.assert:
-      that:
-        - disconnected_install | bool
-      fail_msg: >-
-        Set disconnected_install: true in vars.yaml (or pass
-        -e disconnected_install=true) before running this playbook -
-        it's off by default so the connected flow is never affected.
-
   - name: Fail fast if minio_root_user/minio_root_password are missing from vault.yaml
     ansible.builtin.assert:
       that:
@@ -45,7 +47,9 @@
         - activation_key is defined
       fail_msg: >-
         Add org_id / activation_key to vault.yaml (ansible-vault edit
-        vault.yaml) - needed to register minio with subscription-manager.
+        vault.yaml) - needed to register minio with subscription-manager,
+        which is how the Go toolchain that builds the MinIO server gets
+        installed.
 
   - ansible.builtin.import_role:
       name: setup-minio-vm

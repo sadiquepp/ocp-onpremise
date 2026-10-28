@@ -1763,9 +1763,13 @@ mirror_catalog_index: "registry.redhat.io/redhat/redhat-operator-index:v{{ ocp_m
 ## destination layout, change this to match or the extract will 404.
 mirror_release_repository: openshift/release-images
 
-## setup-minio-vm / setup-minio: local S3-compatible OADP backup target
-## for disconnected-install simulation (see setup_minio.yaml). Also
-## gated behind disconnected_install (shared with mirror-registry above).
+## setup-minio-vm / setup-minio: a local S3-compatible target, for OADP
+## when the cluster is disconnected and for anything else in the lab that
+## wants a bucket (see setup_minio.yaml). NOT gated on
+## disconnected_install, unlike the mirror registry above: nothing imports
+## setup_minio.yaml, and the VM's DHCP reservation and DNS records are
+## rendered for every ip_list entry either way, so it runs standalone on a
+## connected lab too.
 ## minio_root_user / minio_root_password go in vault.yaml, not here.
 minio_name: minio
 minio_disk: minio_disk.qcow2
