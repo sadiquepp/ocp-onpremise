@@ -29,26 +29,86 @@
     mode: '0750'
   become: true
 
-- name: Check if MinIO binaries already installed
-  stat:
+- name: Check whether the MinIO server binary is already installed
+  ansible.builtin.stat:
     path: /usr/local/bin/minio
   register: minio_binary_status
 
-- name: Download MinIO server binary
-  get_url:
-    url: https://dl.min.io/server/minio/release/linux-amd64/minio
-    dest: /usr/local/bin/minio
-    mode: '0755'
-  become: true
-  when: not minio_binary_status.stat.exists
+- name: Check whether the mc client is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/mc
+  register: minio_mc_status
+  # Checked separately from the server. Both used to hang off the server's
+  # stat, so a host that had the server but no mc never got mc - and the bucket
+  # tasks at the end of this file need it.
 
-- name: Download MinIO client (mc) binary
-  get_url:
-    url: https://dl.min.io/client/mc/release/linux-amd64/mc
+# ── The server ────────────────────────────────────────────────────────────────
+# Built from source at a pinned tag: dl.min.io stopped serving the community
+# binary (HTTP 410, archived) and GitHub Releases never carried one. See
+# defaults/main.yml.
+- name: Build and install the MinIO server
+  when: not minio_binary_status.stat.exists
+  become: true
+  block:
+    - name: Install the Go toolchain
+      ansible.builtin.package:
+        name: "{{ minio_build_packages }}"
+        state: present
+
+    - name: Create the build directory
+      ansible.builtin.file:
+        path: "{{ minio_build_dir }}"
+        state: directory
+        mode: '0700'
+
+    - name: "Build MinIO {{ minio_server_release }} from source (minutes, ~1.5G of modules)"
+      ansible.builtin.command:
+        cmd: "go install -v github.com/minio/minio@{{ minio_server_release }}"
+        creates: /usr/local/bin/minio
+      environment:
+        GOBIN: /usr/local/bin        # lands the binary where minio.service expects it
+        GOPATH: "{{ minio_build_dir }}"
+        GOCACHE: "{{ minio_build_dir }}/cache"
+        GOTOOLCHAIN: auto            # fetches the go1.24.x the module requires
+      async: 3600
+      poll: 15
+      # async/poll rather than a plain run: this takes minutes, and a long
+      # silent SSH channel is what makes a build look like a hang.
+
+    - name: Remove the build tree
+      ansible.builtin.file:
+        path: "{{ minio_build_dir }}"
+        state: absent
+      when: minio_build_cleanup | bool
+  rescue:
+    - name: Explain the failed build
+      ansible.builtin.fail:
+        msg: >-
+          Building MinIO {{ minio_server_release }} failed:
+          {{ ansible_failed_result.msg | default('see the task above') }}.
+          There is no binary to fall back on - dl.min.io answers 410 for the
+          community server and GitHub Releases has source only. Usual causes,
+          in order: this VM cannot reach proxy.golang.org (the build fetches
+          modules, so it needs egress); the installed Go is older than 1.21, so
+          GOTOOLCHAIN cannot bootstrap the 1.24.x the module asks for
+          (`go version` on the VM); or {{ minio_build_dir }} has no room for
+          ~1.5G of module cache. Setting minio_build_cleanup=false keeps the
+          tree for inspection.
+
+# ── The client ────────────────────────────────────────────────────────────────
+- name: Install the mc client
+  ansible.builtin.get_url:
+    url: "{{ minio_mc_url }}"
     dest: /usr/local/bin/mc
+    checksum: "sha256:{{ minio_mc_sha256 }}"
     mode: '0755'
   become: true
-  when: not minio_binary_status.stat.exists
+  when: not minio_mc_status.stat.exists
+  # mc still ships prebuilt binaries, so it needs no build. The checksum is
+  # pinned as a literal rather than read from MinIO's published .sha256sum -
+  # see defaults/main.yml for why that file cannot be used directly. If GitHub
+  # ever drops the assets too, mc builds exactly like the server does:
+  # go install github.com/minio/mc@{{ minio_mc_release }}
 
 - name: Render MinIO environment file (root credentials)
   template:

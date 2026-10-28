@@ -1,2 +1,54 @@
 ---
 # defaults file for setup-minio
+#
+# ── Where the binaries come from ──────────────────────────────────────────────
+# MinIO Inc. archived its open-source projects: github.com/minio/minio went
+# read-only on 2026-04-25, github.com/minio/mc on 2026-07-14, and dl.min.io now
+# answers every community binary with
+#
+#   HTTP 410 Gone - "The open-source MinIO Server, MinIO Client (mc) and MinIO
+#   KES projects are archived and no longer maintained."
+#
+# So the straight `get_url` off dl.min.io this role used to do cannot work any
+# more. What is left:
+#
+#   server : source only. GitHub Releases carries just the source archives, so
+#            it is built at a pinned tag - which is exactly what that release's
+#            own notes say to do.
+#   mc     : still has prebuilt binaries on GitHub Releases, so it is still a
+#            download, now with MinIO's published checksum alongside it.
+#
+# Both are pinned rather than floating: @latest on an archived repository means
+# "whatever its last commit happened to be", which is not a version anyone can
+# reason about later.
+minio_server_release: RELEASE.2025-10-15T17-29-55Z
+minio_mc_release: RELEASE.2025-08-13T08-35-41Z
+minio_mc_url: "https://github.com/minio/mc/releases/download/{{ minio_mc_release }}/mc.linux-amd64.{{ minio_mc_release }}"
+
+# sha256 of that exact asset, pinned as a literal.
+#
+# NOT the `sha256:<url>.sha256sum` form, which looks tidier and does not work
+# here: get_url matches the entry inside the checksum file against the basename
+# of the SOURCE url, and MinIO's published file names the file differently from
+# the asset it belongs to -
+#
+#   asset          mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z
+#   .sha256sum     01f866e9... mc.RELEASE.2025-08-13T08-35-41Z
+#
+# so the lookup fails with "Unable to find a checksum for file". Bump this
+# together with minio_mc_release; `curl -sL <url>.sha256sum` prints the value.
+minio_mc_sha256: "01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
+
+# Packages the build needs. The distro's golang may be older than the module's
+# `go 1.24.0` directive - GOTOOLCHAIN=auto then fetches the exact toolchain it
+# asks for, so any Go >= 1.21 bootstraps the rest. git matters only if the Go
+# module proxy is bypassed, and costs nothing to have.
+minio_build_packages:
+  - golang
+  - git
+
+# Where the build works. It pulls roughly 1.5G of module cache and emits a
+# ~150M binary, and is removed again on success unless this is false (keep it
+# to make a rebuild quick).
+minio_build_dir: /root/go-minio-build
+minio_build_cleanup: true

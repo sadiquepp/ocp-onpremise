@@ -483,7 +483,7 @@ and nothing in the connected flow imports it.
 | --- | --- |
 | `minio-vm` | creates the `minio` VM (`.23`) - a 100G sparse disk expanded from the RHEL9 base image, then defined and booted |
 | `rhsm` | registers it with subscription-manager (hence `org_id` / `activation_key`) |
-| `minio` | installs the MinIO server and the `mc` client, runs MinIO under systemd as `minio-user`, waits for `/minio/health/live`, and creates `minio_bucket_name` |
+| `minio` | builds the MinIO server from source at a pinned tag, installs the `mc` client, runs MinIO under systemd as `minio-user`, waits for `/minio/health/live`, and creates `minio_bucket_name` |
 
 Before running it:
 
@@ -492,6 +492,31 @@ Before running it:
 - `minio_bucket_name` (`adp-backup-disconnected`) is in the START HERE block at
   the top of `vars.yaml`; the VM's size, memory and ports are in the
   `setup-minio-vm / setup-minio` block at the bottom.
+- The `minio` step needs egress from the VM: it installs `golang` from RHSM and
+  then fetches Go modules from `proxy.golang.org`. That is the same assumption
+  the mirror registry VM makes - these two guests stay connected, it is the
+  *cluster* that is disconnected.
+
+> **Why it builds instead of downloading.** MinIO Inc. archived its open-source
+> projects - [`minio/minio`](https://github.com/minio/minio) went read-only on
+> 25 Apr 2026, [`minio/mc`](https://github.com/minio/mc) on 14 Jul 2026 - and
+> `dl.min.io` now answers **HTTP 410 Gone** for every community binary, which
+> is what broke the old `get_url` here. GitHub Releases still carries prebuilt
+> `mc` binaries, so `mc` is a pinned download with a pinned sha256, but for the
+> server it has only source archives. The server is therefore built with
+> `go install github.com/minio/minio@RELEASE.2025-10-15T17-29-55Z`, which is
+> what that release's own notes tell you to do. Both tags live in
+> `roles/setup-minio/defaults/main.yml`.
+>
+> First run costs a few minutes and ~1.5G of module cache under
+> `/root/go-minio-build`, removed again on success
+> (`minio_build_cleanup: false` keeps it). Re-runs skip the build: the binary
+> is already at `/usr/local/bin/minio`.
+>
+> MinIO is not the only option any more - AIStor is the commercial successor,
+> and Garage, SeaweedFS, RustFS and Ceph RGW are the maintained open-source
+> S3 servers. Anything S3-compatible can serve this lab; only this role is
+> MinIO-shaped.
 
 It ends up serving the S3 API on `http://minio.<hub_domain>:9000`, with the
 console on `:9001`, holding the bucket named by `minio_bucket_name` - kept
