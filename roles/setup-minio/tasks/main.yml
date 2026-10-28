@@ -75,6 +75,31 @@
       # async/poll rather than a plain run: this takes minutes, and a long
       # silent SSH channel is what makes a build look like a hang.
 
+    - name: Make the built binary executable by the service user
+      ansible.builtin.file:
+        path: /usr/local/bin/minio
+        owner: root
+        group: root
+        mode: '0755'
+      # `go install` creates the binary under the invoking shell's umask, so a
+      # root umask of 077 leaves it 0700 - and minio.service runs as
+      # minio-user, which then cannot exec it. systemd reports that as
+      #   status=203/EXEC
+      #   "Failed to locate executable /usr/local/bin/minio: Permission denied"
+      # and because the unit has Restart=always it loops on it, so the symptom
+      # at the far end is the health check refusing to connect. The get_url
+      # tasks this replaced set mode explicitly; building has to do the same.
+
+    - name: Restore the SELinux label on the binary
+      ansible.builtin.command:
+        cmd: restorecon -F /usr/local/bin/minio
+      changed_when: false
+      failed_when: false
+      # The other route to 203/EXEC: a label SELinux will not exec from. A file
+      # created directly in /usr/local/bin inherits bin_t, but a build that
+      # stages it elsewhere first does not always. A no-op where SELinux is
+      # permissive or restorecon is not installed, hence failed_when: false.
+
     - name: Remove the build tree
       ansible.builtin.file:
         path: "{{ minio_build_dir }}"
@@ -168,6 +193,12 @@
 
           The usual causes, in the order they bite:
 
+          - The binary is not executable by minio-user, or carries an SELinux
+            label it cannot be exec'd from. Both show up above as
+            status=203/EXEC and "Failed to locate executable ...: Permission
+            denied" - the file is found, the exec is refused.
+            `ls -lZ /usr/local/bin/minio` tells you which: it should be
+            -rwxr-xr-x root root and system_u:object_r:bin_t.
           - Root credentials MinIO will not accept. It enforces access key
             >= 3 characters and secret key >= 8, and fatals with
             "Invalid credentials" otherwise. The playbook now checks the
