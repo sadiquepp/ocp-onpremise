@@ -40,6 +40,21 @@
         - minio_root_password is defined
       fail_msg: "Add minio_root_user / minio_root_password to vault.yaml (ansible-vault edit vault.yaml)."
 
+  - name: Fail fast if the MinIO root credentials are shorter than MinIO accepts
+    ansible.builtin.assert:
+      that:
+        # `| string` first: an all-digit password in vault.yaml loads as an
+        # int, and `| length` on an int raises instead of failing the assert.
+        - minio_root_user | string | length >= 3
+        - minio_root_password | string | length >= 8
+      fail_msg: >-
+        MinIO enforces a minimum length on its root credentials - access key
+        3 characters, secret key 8 - and a shorter pair makes the server exit
+        at startup with "Invalid credentials", which shows up here as a
+        100-second wait on /minio/health/live followed by "Connection
+        refused". Lengthen minio_root_user / minio_root_password in
+        vault.yaml (ansible-vault edit vault.yaml).
+
   - name: Fail fast if org_id/activation_key are missing from vault.yaml
     ansible.builtin.assert:
       that:

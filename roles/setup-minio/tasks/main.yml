@@ -135,14 +135,55 @@
     state: "{{ 'restarted' if minio_unit.changed else 'started' }}"
   become: true
 
-- name: Wait for the MinIO API to respond
-  ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ minio_api_port }}/minio/health/live"
-    status_code: 200
-  register: minio_health
-  until: minio_health.status == 200
-  retries: 20
-  delay: 5
+- name: Wait for the MinIO API, and say why if it never answers
+  block:
+    - name: Wait for the MinIO API to respond
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ minio_api_port }}/minio/health/live"
+        status_code: 200
+      register: minio_health
+      until: minio_health.status == 200
+      retries: 20
+      delay: 5
+  rescue:
+    - name: Read what the minio unit actually said
+      ansible.builtin.shell: |
+        systemctl status minio --no-pager -l 2>&1 | head -n 20
+        echo '--- journal ---'
+        journalctl -u minio -n 40 --no-pager 2>&1
+      register: minio_unit_state
+      changed_when: false
+      failed_when: false
+      become: true
+
+    - name: Fail with the service's own error
+      ansible.builtin.fail:
+        msg: |
+          MinIO never answered http://127.0.0.1:{{ minio_api_port }}/minio/health/live.
+          "Connection refused" here means the process is not listening - it
+          started and exited, so look for the fatal below rather than at the
+          network.
+
+          {{ minio_unit_state.stdout | default('(could not read the unit state)') }}
+
+          The usual causes, in the order they bite:
+
+          - Root credentials MinIO will not accept. It enforces access key
+            >= 3 characters and secret key >= 8, and fatals with
+            "Invalid credentials" otherwise. The playbook now checks the
+            lengths up front, so this only bites if /etc/default/minio was
+            written some other way.
+          - No credentials at all: this release has NO minioadmin/minioadmin
+            fallback, so if /etc/default/minio is missing or empty the server
+            refuses to start. The unit reads it with
+            `EnvironmentFile=-`, where the `-` means "carry on if absent".
+          - {{ minio_data_dir }} not writable by minio-user, or SELinux
+            denying it - `ausearch -m avc -ts recent` on the VM.
+          - Port {{ minio_api_port }} already bound by something else.
+  # The old version of this task just ran out of retries and reported
+  # "Connection refused", which says nothing about why. The cause is always in
+  # the unit's own log, so fetch it rather than making the next person go and
+  # look.
 
 - name: Set the local mc alias for this MinIO instance
   shell: >
