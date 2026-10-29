@@ -573,7 +573,7 @@ ip_list:
   # connected-infrastructure treatment as mirror_registry.
   minio: 23
 
-  # Ceph - 3-node all-in-one + 1-node admin Ceph 9 cluster (see setup_ceph.yaml).
+  # Ceph - 3-node all-in-one + 1-node admin Ceph 9 cluster (see ceph/setup_ceph.yaml).
   ceph1: 24
   ceph2: 25
   ceph3: 26
@@ -1328,7 +1328,7 @@ oadp_restore_bmh_modifier_name: hcp-restore-bmh-detached
 ##         snapshot of the volume, the data mover copies that snapshot
 ##         to S3, and the snapshot is then released. Needs a CSI driver
 ##         with snapshot support and a VolumeSnapshotClass - i.e. the
-##         Ceph/ODF external StorageClass from setup_ceph_odf.yaml.
+##         Ceph/ODF external StorageClass from ceph/setup_ceph_odf.yaml.
 ##         LVM Storage cannot do this (no VolumeSnapshotClass), which is
 ##         the reason the Ceph cluster exists in this lab.
 ##
@@ -1339,7 +1339,7 @@ oadp_restore_bmh_modifier_name: hcp-restore-bmh-detached
 ## setup-oadp labels it velero.io/csi-volumesnapshot-class="true" -
 ## Velero picks the VolumeSnapshotClass for a PVC's CSI driver by that
 ## label and fails the volume if no class carries it. This is the name
-## ODF creates for the external RBD pool (setup_ceph_odf.yaml); it is
+## ODF creates for the external RBD pool (ceph/setup_ceph_odf.yaml); it is
 ## derived from ceph_odf_storagecluster_name.
 oadp_csi_snapshot_class: "{{ ceph_odf_storagecluster_name }}-rbdplugin-snapclass"
 
@@ -1809,7 +1809,7 @@ minio_data_dir: /data/minio
 
 ## setup-ceph-vm / setup-ceph-prereqs / setup-ceph-cluster: a 3-node
 ## all-in-one (mon+mgr+osd) + 1-node admin Ceph 9 cluster (see
-## setup_ceph.yaml). Entirely independent of the HCP/hub flow.
+## ceph/setup_ceph.yaml). Entirely independent of the HCP/hub flow.
 ceph_storage_node_names:
   - ceph1
   - ceph2
@@ -1853,7 +1853,7 @@ ceph_dashboard_user: admin
 ## setup-ceph-odf-export / setup-ceph-odf-consumer: exports this Ceph
 ## cluster's RBD pool (+ optional CephFS) and scoped CSI credentials
 ## for OpenShift Data Foundation (ODF) "external mode" to consume as
-## PVs (see setup_ceph_odf.yaml). ODF operator channel is
+## PVs (see ceph/setup_ceph_odf.yaml). ODF operator channel is
 ## stable-{{ ocp_major_version }} (same ocp_major_version as the hub).
 ceph_odf_rbd_pool: ocs-storagecluster-cephblockpool
 ceph_odf_rbd_pool_pg_num: 32
@@ -1874,7 +1874,8 @@ ceph_odf_rbd_default_sc: true
 ## copies it to cephadmin from here.
 ceph_odf_exporter_local_path: "{{ playbook_dir }}/ceph-odf/ceph-external-cluster-details-exporter.py"
 ## Where the exported JSON (contains cluster credentials!) lands
-## locally - see .gitignore, never commit this.
+## locally - see .gitignore, never commit this. playbook_dir is ceph/
+## (the playbooks live there), so both of these resolve to ceph/ceph-odf/.
 ceph_odf_export_dir: "{{ playbook_dir }}/ceph-odf"
 
 ## ===========================================================================

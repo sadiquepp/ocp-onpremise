@@ -2,7 +2,7 @@
 # Tasks file for setup-ceph-odf-consumer
 #
 # This role runs in two stages, selected by ceph_odf_consumer_stage
-# (see setup_ceph_odf.yaml), because ODF has to be installed BEFORE
+# (see ceph/setup_ceph_odf.yaml), because ODF has to be installed BEFORE
 # the export play (so we can extract the version-matched exporter
 # script from the operator CSV), but the StorageCluster can only be
 # created AFTER the export play has produced the JSON:

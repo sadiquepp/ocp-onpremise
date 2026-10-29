@@ -1,7 +1,7 @@
 ---
 # Tasks file for setup-ceph-prereqs
 #
-# Runs delegated to a single Ceph node (see setup_ceph.yaml), after
+# Runs delegated to a single Ceph node (see ceph/setup_ceph.yaml), after
 # setup-rhsm has already registered it with subscription-manager
 # using org_id/activation_key from vault.yaml. There is no Satellite
 # anywhere in this flow - repos come straight from the CDN entitled

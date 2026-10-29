@@ -215,7 +215,7 @@
       VMs run there relies on one (empty root_volume_storage_class or no
       csi_storage_class_mapping).
       {{ (item.item.infra == '') | ternary(
-         'Attach Ceph to the hub - steps 5 and 7 of ../steps.md (setup_ceph.yaml, setup_ceph_odf.yaml) - or name the classes in kubevirt/vars.yaml.',
+         'Attach Ceph to the hub - steps 5 and 7 of ../steps.md (ceph/setup_ceph.yaml, ceph/setup_ceph_odf.yaml) - or name the classes in kubevirt/vars.yaml.',
          (item.item.infra == 'sno') | ternary(
            'Give the SNO LVM Storage from the repository root: ansible-playbook -i inventory/hosts setup_sno.yaml --tags snostorage --ask-vault-pass -e sno_lvm_storage=true',
            'Give it a default StorageClass, or name the classes in kubevirt/vars.yaml.')) }}

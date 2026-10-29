@@ -89,7 +89,7 @@ If `nested` is `N`, reboot the host now, before any VM exists: this step wrote
 ## 4. Ceph cluster
 
 ```bash
-ansible-playbook -i inventory/hosts setup_ceph.yaml --ask-vault-pass
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass)
 ssh root@192.168.122.27 ceph -s          # HEALTH_OK, 3 mons, 9 OSDs
 ```
 
@@ -138,7 +138,7 @@ control planes without it. The cost is hub1's disks if the host crashes:
 
 ```bash
 export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
-ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass)
 oc get storagecluster -n openshift-storage
 oc get sc                                 # ocs-external-storagecluster-ceph-rbd (default)
 ```

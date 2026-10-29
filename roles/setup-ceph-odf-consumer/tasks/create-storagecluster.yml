@@ -1,7 +1,7 @@
 ---
 # setup-ceph-odf-consumer : create-storagecluster.yml
 #
-# The SECOND consumer stage (see setup_ceph_odf.yaml). Runs with
+# The SECOND consumer stage (see ceph/setup_ceph_odf.yaml). Runs with
 # KUBECONFIG pointed at the target OCP cluster, AFTER the export play
 # has produced external-cluster-details.json. Creates the
 # external-cluster secret from that JSON and the external

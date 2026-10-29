@@ -1,7 +1,7 @@
 ---
 # Tasks file for setup-ceph-odf-export
 #
-# Delegated to cephadmin (see setup_ceph_odf.yaml) - the one node in
+# Delegated to cephadmin (see ceph/setup_ceph_odf.yaml) - the one node in
 # this cluster that already has the admin keyring/ceph.conf (_admin
 # label from setup-ceph-cluster) and ceph-common installed
 # (setup-ceph-prereqs), so plain `ceph`/`rbd` CLI commands just work
@@ -74,7 +74,7 @@
 # The version-matched script also enables v2-port-enable itself, so
 # the mon endpoints come out :3300 natively (no regex fix-up needed).
 #
-# setup_ceph_odf.yaml's first play extracts that script straight from
+# ceph/setup_ceph_odf.yaml's first play extracts that script straight from
 # the operator's CSV annotation and drops it at
 # ceph_odf_exporter_local_path on the controller. Here we just push
 # that copy to cephadmin and run it.
@@ -112,5 +112,5 @@
     msg: >-
       Wrote {{ ceph_odf_export_dir }}/external-cluster-details.json -
       contains cluster credentials, do not commit it (see
-      .gitignore). Run setup_ceph_odf.yaml's second play
+      .gitignore). Run ceph/setup_ceph_odf.yaml's second play
       (setup-ceph-odf-consumer) next to apply it to your OCP cluster.

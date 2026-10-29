@@ -21,15 +21,18 @@
 ## with the rest of the lab) plus ceph_dashboard_password (vault.yaml,
 ## new - the initial Ceph dashboard admin password).
 ##
-## Usage:
-##   ansible-playbook -i inventory/hosts setup_ceph.yaml --ask-vault-pass
+## Usage (from inside ceph/ - ansible.cfg is read from the working
+## directory, and the one here adds ../roles to roles_path; see
+## README.md in this directory):
+##   cd ceph
+##   ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass
 
 - name: Create Ceph VMs
   hosts: localhost
   become: true
   vars_files:
-    - vars.yaml
-    - vault.yaml
+    - ../vars.yaml
+    - ../vault.yaml
   tasks:
   - name: Fail fast if org_id/activation_key are missing from vault.yaml
     ansible.builtin.assert:
@@ -64,8 +67,8 @@
   gather_facts: false
   become: true
   vars_files:
-    - vars.yaml
-    - vault.yaml
+    - ../vars.yaml
+    - ../vault.yaml
   tasks:
   - ansible.builtin.import_role:
       name: setup-rhsm
@@ -81,8 +84,8 @@
   hosts: localhost
   become: true
   vars_files:
-    - vars.yaml
-    - vault.yaml
+    - ../vars.yaml
+    - ../vault.yaml
   tasks:
   - ansible.builtin.import_role:
       name: setup-ceph-cluster

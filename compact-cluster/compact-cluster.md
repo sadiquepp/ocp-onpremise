@@ -109,7 +109,7 @@ built, not only what is installed on them afterwards.
 
 | | LVM Storage (default) | Ceph 9 via ODF external mode |
 |---|---|---|
-| Where the data lives | A 500 GB disk (`vdb`) on each node, local to that node | A separate Ceph cluster: `ceph1`-`ceph3` (`.24`-`.26`) and `cephadmin` (`.27`), built by `setup_ceph.yaml` |
+| Where the data lives | A 500 GB disk (`vdb`) on each node, local to that node | A separate Ceph cluster: `ceph1`-`ceph3` (`.24`-`.26`) and `cephadmin` (`.27`), built by `ceph/setup_ceph.yaml` |
 | Default StorageClass | `lvms-vg1` | `ocs-external-storagecluster-ceph-rbd` |
 | Other classes | none | `ocs-external-storagecluster-cephfs` (RWX) |
 | CSI volume snapshots | No VolumeSnapshotClass | Yes, RBD and CephFS |
@@ -171,8 +171,8 @@ To move a cluster that already has LVM Storage, see
 
 ```bash
 # 0. Ceph only (use_lvm_storage: false), from the repository root: the Ceph
-#    cluster. It does not depend on the compact cluster.
-ansible-playbook -i inventory/hosts setup_ceph.yaml --ask-vault-pass
+#    cluster (ceph/README.md). It does not depend on the compact cluster.
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass)
 ssh root@192.168.122.27 ceph -s          # HEALTH_OK, 3 mons, 9 OSDs
 
 # 1. DNS, from the repository root: the zone on the helper, and api/*.apps in
@@ -185,12 +185,13 @@ ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns --ask-vault-pa
 cd compact-cluster
 ansible-playbook -i ../inventory/hosts setup_compact_cluster.yaml --ask-vault-pass
 
-# 3. Ceph only, back at the repository root: ODF on the compact cluster,
-#    attached to the Ceph cluster from step 0
-cd ..
+# 3. Ceph only, from inside ceph/: ODF on the compact cluster, attached to
+#    the Ceph cluster from step 0
+cd ../ceph
 test -x /usr/bin/oc || cp /var/lib/libvirt/images/compact_install/oc /usr/bin/oc
-ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass \
+ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass \
   -e ceph_odf_target_kubeconfig=/var/lib/libvirt/images/compact_install/auth/kubeconfig
+cd ..
 ```
 
 For Ceph, pass **`ceph_odf_target_kubeconfig`**. `setup_ceph_odf.yaml` knows
@@ -203,9 +204,10 @@ and the compact build keeps its own `oc` in `compact_install/`, off the
 Run the two compact playbooks from **inside `compact-cluster/`**. Ansible
 reads `ansible.cfg` from the working directory, and the one in this folder
 adds `../roles` to `roles_path`. Run from the repository root, Ansible cannot
-find `setup-compact-cluster`. The shared playbooks (`setup_bm_host.yaml`,
-`setup_mirror_registry.yaml`, `setup_ceph.yaml`, `setup_ceph_odf.yaml`,
-`cleanup.yaml`) stay at the repository root and run from there.
+find `setup-compact-cluster`. The Ceph playbooks run from inside `ceph/` for
+the same reason ([ceph/README.md](../ceph/README.md)). The shared playbooks
+(`setup_bm_host.yaml`, `setup_mirror_registry.yaml`, `cleanup.yaml`) stay at
+the repository root and run from there.
 
 | Tag | What it does | Role file |
 |---|---|---|
@@ -260,7 +262,7 @@ ansible-vault view vault.yaml   # copy the pull_secret value
 vi /root/pull-secret.json       # paste it here, as one line of JSON
 ```
 
-**Ceph only: build the Ceph cluster now.** *Automated by: `setup_ceph.yaml`*
+**Ceph only: build the Ceph cluster now.** *Automated by: `ceph/setup_ceph.yaml`*
 
 Skip this for LVM Storage. With Ceph
 ([Choose the storage](#choose-the-storage-lvm-storage-or-ceph)), build it
@@ -275,13 +277,13 @@ grep -q '^use_lvm_storage: false' vars.yaml && echo "Ceph path"
 ansible-vault view vault.yaml | grep -q '^ceph_dashboard_password:' && echo "dashboard password set"
 grep -A4 '^\[ceph' inventory/hosts       # the ceph, ceph_admin and ceph_nodes groups
 
-ansible-playbook -i inventory/hosts setup_ceph.yaml --ask-vault-pass
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass)
 ```
 
 The playbook builds four VMs from `rhel9_kvm_image` and registers them with
 `subscription-manager`. It then runs `cephadm bootstrap` on `ceph1`, adds
 `ceph2` and `ceph3` as mon, mgr and OSD hosts, and makes `cephadmin` the admin
-node. The [README](../README.md#build-the-ceph-cluster) describes each play.
+node. [ceph/README.md](../ceph/README.md#build-the-ceph-cluster) describes each play.
 
 ```bash
 ssh root@192.168.122.27 ceph -s           # HEALTH_OK, 3 mons, 3 mgrs, 9 OSDs
@@ -921,7 +923,7 @@ the default.
 
 #### 12b - Ceph via ODF external mode
 
-*Automated by: `setup_ceph_odf.yaml` (from the repository root), which runs
+*Automated by: `ceph/setup_ceph_odf.yaml` (from inside `ceph/`), which runs
 `roles/setup-ceph-odf-consumer` and `roles/setup-ceph-odf-export`*
 
 ODF in **external mode** runs no Ceph daemon on the compact cluster. The
@@ -937,7 +939,7 @@ of the Ceph cluster from Step 1. The playbook runs three plays, in this order:
    and the CephFS filesystem `ocs-storagecluster-cephfilesystem` if they are
    missing. Then run the exporter script, which creates scoped CSI users and
    writes the fsid, mon endpoints and keys as JSON to
-   `ceph-odf/external-cluster-details.json` on the hypervisor. That file holds
+   `ceph/ceph-odf/external-cluster-details.json` on the hypervisor. That file holds
    credentials and is in `.gitignore`.
 3. **On the compact cluster:** create the `rook-ceph-external-cluster-details`
    Secret from that JSON and the external `StorageCluster`
@@ -955,16 +957,16 @@ oc get storageclass                            # no lvms-vg1, and nothing marked
 If LVM Storage is there, remove it first, as in
 [Switching a cluster that already has LVM Storage](#switching-a-cluster-that-already-has-lvm-storage).
 
-**Run the playbook** from the repository root:
+**Run the playbook** from inside `ceph/`:
 
 ```bash
-cd /path/to/ocp-onpremise                      # the repository root
+cd /path/to/ocp-onpremise/ceph                 # ceph/ in the repository
 
 # The ODF plays run plain `oc`. The compact build keeps its oc in $WORK, off
 # the PATH; a hub build puts one in /usr/bin.
 test -x /usr/bin/oc || cp $WORK/oc /usr/bin/oc
 
-ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass \
+ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass \
   -e ceph_odf_target_kubeconfig=$WORK/auth/kubeconfig
 ```
 
@@ -1046,19 +1048,20 @@ oc get pvc -n hcp-compact1-hcp-compact1        # data-etcd-*, Bound on ocs-exter
 ##### Sharing Ceph with a hub
 
 One Ceph cluster can serve the hub and the compact cluster at the same time.
-Run `setup_ceph_odf.yaml` once for each cluster, each with its own
+Run `ceph/setup_ceph_odf.yaml` once for each cluster, each with its own
 kubeconfig. By default both runs use the same RBD pool and CephFS filesystem,
 so both clusters provision into one pool. That works, but a pool of its own
 keeps the compact cluster's volumes apart and makes it safe to clean up one
 cluster without the other:
 
 ```bash
-ansible-playbook -i inventory/hosts setup_ceph_odf.yaml --ask-vault-pass \
+cd /path/to/ocp-onpremise/ceph
+ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass \
   -e ceph_odf_target_kubeconfig=$WORK/auth/kubeconfig \
   -e ceph_odf_rbd_pool=compact-rbd -e ceph_odf_enable_cephfs=false
 ```
 
-Each run overwrites `ceph-odf/external-cluster-details.json`. That is
+Each run overwrites `ceph/ceph-odf/external-cluster-details.json`. That is
 harmless: the cluster from the earlier run already holds its copy as a Secret.
 
 A Ceph cluster shared with a hub also shares the hub's lifecycle. The DR
@@ -1069,7 +1072,7 @@ etcd included.
 ##### Switching a cluster that already has LVM Storage
 
 Setting `use_lvm_storage: false` after the build uninstalls nothing. Remove
-LVM Storage by hand before running `setup_ceph_odf.yaml`. Volumes on
+LVM Storage by hand before running `ceph/setup_ceph_odf.yaml`. Volumes on
 `lvms-vg1` cannot move to Ceph, so delete or back up the PVCs that use it
 first:
 
