@@ -37,15 +37,15 @@ sushy_emulator_password: '<8+ characters>'
 
 ### S2. Build the lab up to the InfraEnv
 
-Follow [steps.md](../steps.md) steps 1-8 as usual (hub1, Ceph, ACM, InfraEnv).
+Follow [steps.md](steps.md) steps 1-8 as usual (hub1, Ceph, ACM, InfraEnv).
 
 ### S3. Step 9, with BareMetalHosts
 
 Replace step 9's first command with:
 
 ```bash
-ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass \
-  -e hosted_cluster_worker_provisioning=bmh
+(cd hcp && ansible-playbook -i ../inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass \
+  -e hosted_cluster_worker_provisioning=bmh)
 ```
 
 This:
@@ -88,7 +88,7 @@ In the sushy log, each host should show `InsertMedia` 204, a `PATCH` of the
 System (boot settings) 204, and `ComputerSystem.Reset` 204. A few `PATCH` 500s
 that are then retried successfully do no harm.
 
-Then create the hosted cluster as in step 9 (`create_hosted_cluster.yaml`,
+Then create the hosted cluster as in step 9 (`hcp/create_hosted_cluster.yaml`,
 `oc apply` the rendered file). The NodePool takes two of the three Agents.
 Their BareMetalHosts move to `provisioned` as they install. The third host
 (normally `c1worker3`) stays as a **spare**, booted into discovery and still
@@ -156,14 +156,14 @@ A worker reboot shows up as a `POST .../Actions/ComputerSystem.Reset` or
 The runbook's precaution. Expectation: **the DR hub takes no power or virtual
 media action on any worker.**
 
-1. Hub2 up to step 20 as in [steps.md](../steps.md), with the fixed hypershift
+1. Hub2 up to step 20 as in [steps.md](steps.md), with the fixed hypershift
    plugin image or the import-secret workaround (see
    [OCPBUGS-121709-test.md](OCPBUGS-121709-test.md)).
 2. Restore detached:
    ```bash
-   ansible-playbook -i inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
+   (cd hcp/dr && ansible-playbook -i ../../inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
      -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2 -e oadp_backup_method=csi \
-     -e oadp_restore_detach_bmh=true
+     -e oadp_restore_detach_bmh=true)
    ```
    The playbook applies the `hcp-restore-bmh-detached` modifier ConfigMap and
    references it from the Restore.
@@ -224,8 +224,8 @@ round: rebuild hub2 (steps 17-20) and restore the **same backup** again, with
 `oadp_restore_detach_bmh` left at its default (`false`):
 
 ```bash
-ansible-playbook -i inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
-  -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2 -e oadp_backup_method=csi
+(cd hcp/dr && ansible-playbook -i ../../inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
+  -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2 -e oadp_backup_method=csi)
 ```
 
 Watch as in S6, then record:
@@ -242,7 +242,7 @@ the workers.
 ## Cleanup
 
 ```bash
-ansible-playbook -i inventory/hosts cleanup-sushy-emulator.yaml   # after the BareMetalHosts are gone
+(cd hcp && ansible-playbook -i ../inventory/hosts cleanup-sushy-emulator.yaml)   # after the BareMetalHosts are gone
 ```
 
 The worker VMs are removed by the usual cleanup playbooks.

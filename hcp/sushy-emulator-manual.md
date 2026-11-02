@@ -10,7 +10,7 @@ redfish-virtualmedia+http://192.168.122.1:8000/redfish/v1/Systems/<vm-uuid>
 
 which is what the BareMetalHost's `bmc.address` points at. Background:
 `hosted_cluster_worker_provisioning` in `vars.yaml`, and
-[oadp/BMH-DR-test.md](oadp/BMH-DR-test.md).
+[dr/BMH-DR-test.md](dr/BMH-DR-test.md).
 
 Run everything as root on the bare-metal host. The values below are the
 repo's defaults: `lab_network_prefix` 192.168.122, the helper at .21, port
@@ -35,8 +35,8 @@ the discovery ISO itself.
 To create just the VMs that way, without sushy or the BareMetalHosts:
 
 ```bash
-ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml \
-  -e hosted_cluster_worker_provisioning=bmh --tags bmh-vms
+(cd hcp && ansible-playbook -i ../inventory/hosts setup_hosted_cluster_vm.yaml \
+  -e hosted_cluster_worker_provisioning=bmh --tags bmh-vms)
 ```
 
 It creates each disk only if it's missing, so re-running it can't wipe a
@@ -243,7 +243,7 @@ podman exec sushy-emulator getent hosts \
 Per worker, in the agent namespace: a BMC secret, and a BareMetalHost whose
 `bmc.address` is
 `redfish-virtualmedia+http://$LISTEN_IP:$PORT/redfish/v1/Systems/<uuid>`.
-`setup_hosted_cluster_vm.yaml -e hosted_cluster_worker_provisioning=bmh`
+`hcp/setup_hosted_cluster_vm.yaml -e hosted_cluster_worker_provisioning=bmh`
 renders them from `roles/setup-bminfra/templates/05-baremetalhosts.yaml.j2`.
 That template is also the reference if you create them by hand: label
 `infraenvs.agent-install.openshift.io: <infraenv>`, annotations
@@ -258,4 +258,4 @@ That template is also the reference if you create them by hand: label
 | A worker VM was rebuilt (new UUID) | Redo steps 3a and 5, then `systemctl restart sushy-emulator`, and update that BareMetalHost's `bmc.address` |
 | Change the password | Step 4 with the new value, `systemctl restart sushy-emulator`, and update the BMC secrets on the hub |
 | Watch what the hubs do | `journalctl -u sushy-emulator -f \| grep -E '"(POST\|PATCH\|DELETE) '` (power actions and virtual media) |
-| Remove it | `systemctl disable --now sushy-emulator; rm -rf /etc/systemd/system/sushy-emulator.service /etc/sushy; systemctl daemon-reload`, then close the firewall port. Or `ansible-playbook -i inventory/hosts cleanup-sushy-emulator.yaml` |
+| Remove it | `systemctl disable --now sushy-emulator; rm -rf /etc/systemd/system/sushy-emulator.service /etc/sushy; systemctl daemon-reload`, then close the firewall port. Or `(cd hcp && ansible-playbook -i ../inventory/hosts cleanup-sushy-emulator.yaml)` |

@@ -102,4 +102,4 @@ with it applied.
 ---
 
 Detailed walkthrough: [README.md](README.md) and
-[oadp/README.md](oadp/README.md). Commands only: [steps.md](steps.md).
+[../../oadp/README.md](../../oadp/README.md). Commands only: [steps.md](steps.md).

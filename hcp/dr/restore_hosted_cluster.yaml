@@ -1,10 +1,12 @@
 ## Restores a hosted cluster's control plane via OADP/Velero.
-## Run this against the target hub - normally hub2, after
-## setup_hub_cluster2.yaml and setup_oadp.yaml -e target_hub=hub2 have
-## already been run against the same S3 bucket/prefix the backup used.
+## Run this against the target hub - normally cluster2 (hub2), after
+## ../../standard-cluster/setup_cluster2.yaml, ../../acm/setup_acm.yaml
+## -e target_hub=hub2 and ../../oadp/setup_oadp.yaml -e target_hub=hub2 have
+## already been run, the last against the same S3 bucket/prefix the backup
+## used.
 ##
-## Usage:
-##   ansible-playbook -i inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
+## Usage (from inside hcp/dr/):
+##   ansible-playbook -i ../../inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
 ##     -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2
 ##
 ## oadp_backup_method must match the method the backup was taken with
@@ -14,20 +16,20 @@
 ##   fs   restore-hcp-cluster.yaml.j2     <- "<cluster>-backup"
 ##   csi  restore-hcp-cluster-csi.yaml.j2 <- "<cluster>-backup-csi"
 ##
-##   ansible-playbook restore_hosted_cluster.yaml --ask-vault-pass \
+##   ansible-playbook -i ../../inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
 ##     -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2 \
 ##     -e oadp_backup_method=csi
 ##
 ## Workers built as BareMetalHosts (hosted_cluster_worker_provisioning=bmh):
 ## add -e oadp_restore_detach_bmh=true to restore them detached, so this hub
-## does not power-cycle or reprovision them. See oadp/BMH-DR-test.md.
+## does not power-cycle or reprovision them. See BMH-DR-test.md.
 
 - name: Restore Hosted Cluster Control Plane
   hosts: localhost
   become: true
   vars_files:
-    - vars.yaml
-    - vault.yaml
+    - ../../vars.yaml
+    - ../../vault.yaml
   vars:
     hub_kubeconfig: >-
       {{ (target_hub == 'hub2') | ternary(hub2_install_folder, hub_install_folder) }}/auth/kubeconfig
@@ -55,7 +57,7 @@
 
   ## A Backup or Restore against an Unavailable location fails only
   ## after Velero tries the bucket; say why up front instead.
-  ## setup_oadp.yaml is what makes it Available.
+  ## ../../oadp/setup_oadp.yaml is what makes it Available.
   - name: Check the BackupStorageLocation is Available
     shell: >
       oc get backupstoragelocation.velero.io "{{ oadp_storage_location }}" -n openshift-adp
@@ -72,7 +74,7 @@
         BackupStorageLocation '{{ oadp_storage_location }}' on this hub is
         '{{ bsl_status.stdout.split('|', 1)[0] or 'missing' }}', not 'Available'.
         {{ bsl_status.stdout.split('|', 1)[1] | default('') }}
-        Run setup_oadp.yaml against this hub (-e target_hub={{ target_hub }})
+        Run oadp/setup_oadp.yaml against this hub (-e target_hub={{ target_hub }})
         and fix what it reports - usually the AWS key in vault.yaml.
     when: bsl_status.stdout.split('|', 1)[0] != 'Available'
 
@@ -100,7 +102,7 @@
       msg: >-
         Backup '{{ oadp_backup_name | trim }}' is not present in
         openshift-adp on this hub. Velero syncs backups from the
-        BackupStorageLocation, so run setup_oadp.yaml against this hub
+        BackupStorageLocation, so run oadp/setup_oadp.yaml against this hub
         and give it a minute, and check oadp_backup_method
         ('{{ oadp_backup_method }}') matches the method the backup was
         taken with - the csi method names its backup '<cluster>-backup-csi'.
@@ -111,7 +113,7 @@
   ## it restores. It must exist before the Restore does.
   - name: Render the BareMetalHost detach modifier (oadp_restore_detach_bmh)
     template:
-      src: oadp/templates/restore-bmh-detached-modifier.yaml.j2
+      src: templates/restore-bmh-detached-modifier.yaml.j2
       dest: "/tmp/{{ oadp_restore_bmh_modifier_name }}.yaml"
     when: oadp_restore_detach_bmh | bool
 
@@ -123,7 +125,7 @@
 
   - name: Render Restore manifest
     template:
-      src: "oadp/templates/{{ oadp_restore_template | trim }}"
+      src: "templates/{{ oadp_restore_template | trim }}"
       dest: "/tmp/{{ oadp_restore_name | trim }}.yaml"
 
   - name: Apply Restore

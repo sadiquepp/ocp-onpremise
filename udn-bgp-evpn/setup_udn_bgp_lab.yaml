@@ -90,16 +90,17 @@
 ##   ansible-playbook -i ../inventory/hosts setup_udn_bgp_lab.yaml --ask-vault-pass --tags shared
 ##   ansible-playbook -i ../inventory/hosts setup_udn_bgp_lab.yaml --ask-vault-pass --tags vrflite
 ##
-## The cluster-build playbooks stay in the repository root. Call them with a
+## The cluster-build playbooks live in the repository root (setup_bm_host.yaml,
+## setup_sno.yaml) and in standard-cluster/ (the hub). Call them with a
 ## relative path - NOT a wrapper playbook and NOT a symlink here:
 ##
-##   ansible-playbook -i ../inventory/hosts ../setup_hub_cluster.yaml --ask-vault-pass
+##   ansible-playbook -i ../inventory/hosts ../standard-cluster/setup_cluster1.yaml --ask-vault-pass
 ##
 ## `playbook_dir` follows the PLAYBOOK, not the working directory, so running
-## ../setup_hub_cluster.yaml from here still gives those plays a playbook_dir
-## of the repository root and their `{{ playbook_dir }}/inventory/hosts.j2`
-## and `roles/` keep resolving. An `import_playbook` wrapper or a symlink in
-## this directory would make playbook_dir point HERE instead and break both.
+## them from here still gives those plays their own playbook_dir, and their
+## vars_files, `{{ playbook_dir }}/inventory/hosts.j2` and ../roles/ includes
+## keep resolving. An `import_playbook` wrapper or a symlink in this directory
+## would make playbook_dir point HERE instead and break all three.
 ##
 ## Run containerlab on the bare-metal host instead of in a VM:
 ##   ... -e clab_deploy_mode=host

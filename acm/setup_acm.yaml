@@ -1,0 +1,130 @@
+## Turns a standard cluster (../standard-cluster) into a hosted-control-plane
+## hub: installs ACM - which brings MCE, HyperShift and assisted-service with
+## it - MetalLB and the OADP operator through roles/setup-hub-acm, creates the
+## Provisioning CR and one single-address MetalLB pool per hosted cluster, and
+## renders the AgentServiceConfig for review.
+##
+## Run from inside acm/ (acm/ansible.cfg is what puts the shared ../roles on
+## the role search path), after the cluster itself is up:
+##
+##   ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass                     # cluster1 (hub)
+##   ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass -e target_hub=hub2  # cluster2 (hub2)
+##
+## target_hub picks the cluster (default: target_hub in vars.yaml, normally
+## hub); disconnected_install picks its disconnected build, the same way the
+## cluster playbooks do:
+##
+##   target_hub   disconnected_install   cluster          kubeconfig from                    metallb_hub
+##   hub          false                  cluster1         hub_install_folder                 hub
+##   hub          true                   cluster1d/hubd   hub_disconnected_install_folder    hubd
+##   hub2         false                  cluster2         hub2_install_folder                hub2
+##   hub2         true                   cluster2d/hub2d  hub2_disconnected_install_folder   hub2
+##
+## metallb_hub picks each hosted cluster's address out of
+## hosted_cluster_metallb_pools. cluster2 gets hub2 in BOTH modes: as the DR
+## hub, a hosted cluster restored onto it comes up on hub2's addresses whichever
+## way cluster2 was built. What disconnected_install decides there is *which*
+## clusters get pools - the connected three, or the '-d' three - see
+## roles/setup-hub-acm/defaults/main.yml. Before restoring a '-d' cluster onto
+## a cluster2 built connected, create its pool with just this:
+##   ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass --tags metallb \
+##     -e target_hub=hub2 -e disconnected_install=true
+##
+## Narrower re-runs, against a hub that is already up:
+##   --tags metallb   only the hosted clusters' MetalLB API pools - the step to
+##                    run after adding a hosted cluster to
+##                    hosted_cluster_metallb_pools
+##   --tags oadp      only the pinned-OADP InstallPlan approval / CSV wait
+##
+## On a disconnected run the role also points every Subscription at the
+## mirrored CatalogSource, publishes the mirror registry CA to openshift-config
+## and injects it into the cluster image config, stages the RHCOS live ISOs on
+## the helper, creates a ClusterImageSet per osImage version and renders the
+## disconnected AgentServiceConfig - see roles/setup-hub-acm/defaults/main.yml.
+##
+## In either mode the AgentServiceConfig is only rendered, not applied: review
+## ../roles/setup-hub-acm/files/.rendered-05-agentserviceconfig.yaml and apply
+## it by hand once the cluster has a default StorageClass (README.md here).
+##
+## LVM Storage is not part of this: the cluster playbooks install it
+## (use_lvm_storage). The compact cluster's ACM step is its own
+## (../compact-cluster/setup_compact_cluster.yaml --tags acm).
+
+- name: Install ACM/MCE, MetalLB and the OADP operator on a standard cluster
+  hosts: localhost
+  become: true
+  vars_files:
+    - ../vars.yaml
+    - ../vault.yaml
+  vars:
+    acm_target_hub: "{{ target_hub | default('hub') }}"
+    acm_disconnected: "{{ disconnected_install | default(false) | bool }}"
+    ## Keyed by target_hub, then by install mode. Play vars rather than a
+    ## set_fact, so a --tags metallb / --tags oadp run resolves them too.
+    acm_install_folders:
+      hub:
+        connected: "{{ hub_install_folder }}"
+        disconnected: "{{ hub_disconnected_install_folder }}"
+      hub2:
+        connected: "{{ hub2_install_folder }}"
+        disconnected: "{{ hub2_disconnected_install_folder }}"
+    acm_mode: "{{ 'disconnected' if (disconnected_install | default(false) | bool) else 'connected' }}"
+    acm_kubeconfig: "{{ acm_install_folders[acm_target_hub][acm_mode] }}/auth/kubeconfig"
+    acm_metallb_hub: >-
+      {{ 'hub2' if acm_target_hub == 'hub2'
+         else ('hubd' if (disconnected_install | default(false) | bool) else 'hub') }}
+  tasks:
+  - name: Fail fast on a target_hub this playbook does not install
+    ansible.builtin.assert:
+      that:
+        - acm_target_hub in acm_install_folders
+      fail_msg: >-
+        target_hub must be 'hub' (cluster1) or 'hub2' (cluster2), not
+        '{{ acm_target_hub }}'. For the disconnected builds keep target_hub at
+        hub/hub2 and add -e disconnected_install=true. The compact cluster has
+        its own ACM step: ../compact-cluster/setup_compact_cluster.yaml --tags acm.
+    tags:
+      - always
+
+  - name: Check the cluster's kubeconfig exists
+    ansible.builtin.stat:
+      path: "{{ acm_kubeconfig }}"
+    register: acm_kubeconfig_stat
+    tags:
+      - always
+
+  - name: Fail fast if the cluster has not been built
+    ansible.builtin.assert:
+      that:
+        - acm_kubeconfig_stat.stat.exists
+      fail_msg: >-
+        No kubeconfig at {{ acm_kubeconfig }}. Build the cluster first:
+        cd ../standard-cluster && ansible-playbook -i ../inventory/hosts
+        {{ 'setup_cluster2.yaml' if acm_target_hub == 'hub2' else 'setup_cluster1.yaml' }}
+        --ask-vault-pass{{ ' -e disconnected_install=true' if acm_mode == 'disconnected' else '' }}
+    tags:
+      - always
+
+  - name: Report which cluster ACM is being installed on
+    ansible.builtin.debug:
+      msg: >-
+        {{ 'cluster2' if acm_target_hub == 'hub2' else 'cluster1' }}
+        ({{ acm_mode }}, kubeconfig {{ acm_kubeconfig }}),
+        MetalLB addresses from metallb_hub={{ acm_metallb_hub | trim }}
+    tags:
+      - always
+
+  # The cluster playbook waits for this already; waiting again is a no-op on a
+  # healthy cluster and catches one that is still rolling out a MachineConfig
+  # (the disconnected day-2 mirror resources, or anything done by hand since).
+  - name: Wait for ClusterOperators to be healthy before installing operators
+    ansible.builtin.include_tasks: ../roles/setup-hub-cluster/tasks/wait-for-cluster-operators.yml
+    vars:
+      kubeconfig_path: "{{ acm_kubeconfig }}"
+
+  - ansible.builtin.import_role:
+      name: setup-hub-acm
+    vars:
+      metallb_hub: "{{ acm_metallb_hub | trim }}"
+    environment:
+      KUBECONFIG: "{{ acm_kubeconfig }}"

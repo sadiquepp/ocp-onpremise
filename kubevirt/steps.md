@@ -9,7 +9,7 @@ hub1's ACM. Commands only, start to finish. Explanations:
 [README.md](README.md).
 
 Steps 1-6 are the same commands as steps 1, 3-7 of the backup/restore flow
-([../steps.md](../steps.md)), repeated here so this file stands alone. They
+([../hcp/dr/steps.md](../hcp/dr/steps.md)), repeated here so this file stands alone. They
 run from the repository root; steps 8 onwards run from `kubevirt/`.
 
 ## Contents
@@ -61,7 +61,7 @@ ssh_key:
 ceph_dashboard_password: '...'
 ```
 
-The `oadp_*` keys from ../steps.md are only needed to back the cluster up;
+The `oadp_*` keys from ../hcp/dr/steps.md are only needed to back the cluster up;
 add them if you will.
 
 In `vars.yaml`:
@@ -96,13 +96,17 @@ ssh root@192.168.122.27 ceph -s          # HEALTH_OK, 3 mons, 9 OSDs
 ## 5. Hub1
 
 ```bash
-ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass \
-  -e hub_disk_cache_unsafe=true
+(cd standard-cluster && ansible-playbook -i ../inventory/hosts setup_cluster1.yaml --ask-vault-pass \
+  -e hub_disk_cache_unsafe=true)
+(cd acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass)
 
 export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
 oc get ipaddresspool hcp-kv1-api-pool -n metallb-system \
   -o jsonpath='{.spec.addresses}{"\n"}'  # ["192.168.122.250-192.168.122.250"]
 ```
+
+The first builds hub1 (cluster1), the second installs ACM/MCE, MetalLB and
+the OADP operator on it - which is what creates `hcp-kv1-api-pool`.
 
 `hub_disk_cache_unsafe=true` builds hub1's disks with `cache=unsafe`. It is off
 by default; on this lab's spinning disks hub1's etcd is too slow for the hosted
@@ -197,7 +201,7 @@ router, so it needs no DNS record of its own.
 
 ```bash
 export KUBECONFIG=/var/lib/libvirt/images/hcp-kv1/kubeconfig
-oc apply -f ../hello-openshift.yaml
+oc apply -f ../hcp/hello-openshift.yaml
 
 oc apply -k https://github.com/sadiquepp/openshift/test-workloads/online-boutique/overlays/no-loadgenerator
 oc get pods -n online-boutique
@@ -275,7 +279,7 @@ them; on a hub1 built before hcp-kv2 was in `vars.yaml`, render both again:
 
 ```bash
 ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns --ask-vault-pass
-ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --tags metallb --ask-vault-pass
+(cd acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --tags metallb --ask-vault-pass)
 
 dig +short api.hcp-kv2.hub.mylab.com @192.168.122.21     # 192.168.122.252
 oc --kubeconfig /var/lib/libvirt/images/hub_install/auth/kubeconfig \

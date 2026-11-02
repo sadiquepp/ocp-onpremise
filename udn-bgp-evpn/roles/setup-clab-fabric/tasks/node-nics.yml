@@ -34,7 +34,7 @@
       one is listed under cluster '{{ item.item.cluster | default('?') }}'.
 
       Either that cluster has not been built yet (hub1 comes from
-      setup_hub_cluster.yaml, the SNO from setup_sno.yaml), or its domain name
+      standard-cluster/setup_cluster1.yaml, the SNO from setup_sno.yaml), or its domain name
       in clab_clusters does not match what virsh calls the VM. Check with
       `virsh list --all`.
   loop: "{{ clab_domiflist.results }}"

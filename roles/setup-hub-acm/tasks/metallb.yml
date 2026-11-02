@@ -7,8 +7,8 @@
 # Imported from main.yml under the extra tag 'metallb', so a hub that is
 # already up can pick up a hosted cluster added to vars.yaml since it was
 # built - its pool and nothing else - with:
-#   ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --tags metallb --ask-vault-pass
-# (setup_hub_cluster2.yaml the same, for hub2). The MetalLB operator itself is
+#   cd acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --tags metallb --ask-vault-pass
+# (add -e target_hub=hub2 for cluster2). The MetalLB operator itself is
 # installed with the rest of the operators, in main.yml.
 
 # Pool names are hub-independent but their addresses are not: hub2 is the DR
@@ -108,9 +108,10 @@
       {{ hosted_cluster_metallb_pools | default({}) | dict2items
          | selectattr('value.ip', 'contains', metallb_hub)
          | map(attribute='key') | sort | join(', ') | default('none', true) }}.
-      metallb_hub is set by the hub playbook - hub (setup_hub_cluster.yaml),
-      hub2 (setup_hub_cluster2.yaml) or hubd (setup_hub_cluster.yaml with
-      disconnected_install). Hubs named in that map:
+      metallb_hub is set by acm/setup_acm.yaml - hub (cluster1),
+      hub2 (cluster2, -e target_hub=hub2) or hubd (cluster1 with
+      disconnected_install) - or compact by the compact cluster's acm tag.
+      Hubs named in that map:
       {{ hosted_cluster_metallb_pools | default({}) | dict2items
          | map(attribute='value.ip') | map('list') | flatten
          | unique | sort | join(', ') }}.

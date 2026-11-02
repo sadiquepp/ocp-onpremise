@@ -2,7 +2,7 @@
 # defaults file for setup-oadp
 
 # Backup method for the control-plane PVs. Normally set in vars.yaml
-# (which both setup_oadp.yaml and the backup/restore playbooks load);
+# (which both oadp/setup_oadp.yaml and the backup/restore playbooks load);
 # repeated here so the role is safe to use on its own. 'fs' = Kopia
 # file-system backup, 'csi' = CSI VolumeSnapshot + Velero data mover -
 # the latter makes this role label the VolumeSnapshotClass Velero needs
@@ -13,6 +13,6 @@ oadp_backup_method: fs
 # otherwise use, via the DPA's spec.unsupportedOverrides
 # (hypershiftPluginImageFqin). Empty = the operator's own image. Only for
 # testing a plugin fix ahead of an OADP release, e.g. OCPBUGS-121709 -
-# see oadp/OCPBUGS-121709-test.md. Set per run:
+# see hcp/dr/OCPBUGS-121709-test.md. Set per run:
 #   -e oadp_hypershift_plugin_image=quay.io/<you>/hypershift-oadp-plugin:<tag>
 oadp_hypershift_plugin_image: ""

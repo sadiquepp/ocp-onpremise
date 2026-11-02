@@ -1,8 +1,8 @@
 ## The worker VMs for hcp-cluster2, PXE-booted rather than booted from the
 ## discovery ISO.
 ##
-##   ansible-playbook -i inventory/hosts setup_hosted_cluster2_vm.yaml --ask-vault-pass
-##   ansible-playbook -i inventory/hosts setup_hosted_cluster2_vm.yaml --ask-vault-pass -e target_hub=hub2
+##   ansible-playbook -i ../inventory/hosts setup_hosted_cluster2_vm.yaml --ask-vault-pass
+##   ansible-playbook -i ../inventory/hosts setup_hosted_cluster2_vm.yaml --ask-vault-pass -e target_hub=hub2
 ##
 ## PXE, end to end:
 ##   - libvirt's dnsmasq offers pxelinux.0 from the helper
@@ -31,7 +31,7 @@
   hosts: localhost
   become: true
   vars_files:
-    - vars.yaml
+    - ../vars.yaml
   vars:
     ## Anything not named here is hub1, as before. The old two-way ternary
     ## sent -e target_hub=hubd to hub1's kubeconfig without saying so.
@@ -46,7 +46,7 @@
     KUBECONFIG: "{{ hub_kubeconfig }}"
   tasks:
     - name: Stage the InfraEnv's PXE artifacts on the helper
-      ansible.builtin.include_tasks: roles/setup-bminfra/tasks/download-discovery-iso.yml
+      ansible.builtin.include_tasks: ../roles/setup-bminfra/tasks/download-discovery-iso.yml
       vars:
         discovery_download_iso: false
 

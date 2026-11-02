@@ -3,22 +3,22 @@
 ## Agents in the bminfra namespace.
 ##
 ## Connected (default):
-##   ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass
+##   ansible-playbook -i ../inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass
 ## builds hosted_cluster_workers (c1_worker1..3, ip_list.c1worker*) against the
 ## hub selected by target_hub, exactly as before.
 ##
 ## Disconnected:
-##   ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass \
+##   ansible-playbook -i ../inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass \
 ##     -e disconnected_install=true
 ## builds hosted_cluster_disconnected_workers (c1-d-worker1..3,
 ## ip_list.c1dworker*) instead, against the hub installed by
-## setup_hub_cluster.yaml with the same flag, and cuts those three IPs off from
+## ../standard-cluster/setup_cluster1.yaml with the same flag, and cuts those three IPs off from
 ## the real internet first so the cluster can only ever pull from the local
 ## mirror registry. disconnected_install wins over target_hub, same as in
 ## setup_bminfra.yaml.
 ##
 ## The compact cluster's hosted cluster (hcp-compact1):
-##   ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass \
+##   ansible-playbook -i ../inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass \
 ##     -e target_hub=compact
 ## builds compact_hosted_cluster_workers (two VMs, ip_list.hcpc1worker*)
 ## against the compact cluster's InfraEnv (setup_bminfra.yaml -e
@@ -27,7 +27,7 @@
 ## cluster off it.
 ##
 ## BareMetalHosts instead of plain Agents (the hub's connected workers only):
-##   ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass \
+##   ansible-playbook -i ../inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass \
 ##     -e hosted_cluster_worker_provisioning=bmh
 ## defines the same VMs powered off, gives each a Redfish
 ## BMC through sushy-emulator on this host (roles/setup-sushy-emulator), and
@@ -38,7 +38,7 @@
 ##
 ## Only the powered-off VMs, for setting sushy-emulator up by hand
 ## (sushy-emulator-manual.md):
-##   ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml \
+##   ansible-playbook -i ../inventory/hosts setup_hosted_cluster_vm.yaml \
 ##     -e hosted_cluster_worker_provisioning=bmh --tags bmh-vms
 ##
 ## Both paths run the same tasks - only the worker set, the VM folder and the
@@ -52,7 +52,7 @@
   hosts: localhost
   become: true
   vars_files:
-    - vars.yaml
+    - ../vars.yaml
   vars:
     ## Anything not named here is hub1, as before.
     hub_install_folders:
@@ -176,7 +176,7 @@
     # loaded in bmh mode, so an agent run needs nothing new from the vault.
     - name: Load the BMC password from vault.yaml (bmh)
       ansible.builtin.include_vars:
-        file: vault.yaml
+        file: ../vault.yaml
       when: hcp_worker_bmh | bool
 
     # Only the disconnected workers get their egress cut - the connected
@@ -184,7 +184,7 @@
     # balancer all stay reachable. Done before the VMs exist so nothing ever
     # boots with a working route to quay.io.
     - name: Cut the disconnected hosted cluster's workers off from the real internet
-      ansible.builtin.include_tasks: roles/setup-hub-cluster-disconnected/tasks/block-node-nat.yml
+      ansible.builtin.include_tasks: ../roles/setup-hub-cluster-disconnected/tasks/block-node-nat.yml
       vars:
         disconnected_nat_enabled: "{{ hosted_cluster_disconnected_block_node_nat }}"
         disconnected_nat_ip_keys: "{{ hcp_workers | map(attribute='ip_key') | list }}"
@@ -204,13 +204,13 @@
     # hub whose InfraEnv predates the override is fixed in place rather than
     # needing setup_bminfra.yaml re-run.
     - name: Make sure the hub InfraEnv's discovery ISO skips image signature checks
-      ansible.builtin.include_tasks: roles/setup-bminfra/tasks/ensure-ignition-override.yml
+      ansible.builtin.include_tasks: ../roles/setup-bminfra/tasks/ensure-ignition-override.yml
       when: hcp_disconnected
       tags: [discovery-ignition]
 
     # bmh mode never touches the ISO here: the hub hands its URL to the BMC.
     - name: Download discovery ISO from hub InfraEnv
-      ansible.builtin.include_tasks: roles/setup-bminfra/tasks/download-discovery-iso.yml
+      ansible.builtin.include_tasks: ../roles/setup-bminfra/tasks/download-discovery-iso.yml
       when: not (hcp_worker_bmh | bool)
 
     # The hub's hosted cluster workers get their DHCP reservations from the
@@ -380,8 +380,8 @@
     # the other .rendered-* bminfra files, as the record of what was applied.
     - name: Render the BMC secrets and the BareMetalHosts (bmh)
       ansible.builtin.template:
-        src: "{{ playbook_dir }}/roles/setup-bminfra/templates/05-baremetalhosts.yaml.j2"
-        dest: "{{ playbook_dir }}/roles/setup-bminfra/templates/{{ item.file }}"
+        src: "{{ playbook_dir }}/../roles/setup-bminfra/templates/05-baremetalhosts.yaml.j2"
+        dest: "{{ playbook_dir }}/../roles/setup-bminfra/templates/{{ item.file }}"
         mode: "{{ item.mode }}"
       vars:
         bmh_render_part: "{{ item.part }}"
@@ -396,7 +396,7 @@
     # sits in an error state until the next reconcile.
     - name: Apply the BMC secrets, then the BareMetalHosts (bmh)
       ansible.builtin.command: >-
-        oc apply -f {{ playbook_dir }}/roles/setup-bminfra/templates/{{ item }}
+        oc apply -f {{ playbook_dir }}/../roles/setup-bminfra/templates/{{ item }}
       loop:
         - .rendered-05-bmc-secrets.yaml
         - .rendered-05-baremetalhosts.yaml
@@ -406,7 +406,7 @@
 
     - name: Remove the rendered BMC secrets, which hold the password (bmh)
       ansible.builtin.file:
-        path: "{{ playbook_dir }}/roles/setup-bminfra/templates/.rendered-05-bmc-secrets.yaml"
+        path: "{{ playbook_dir }}/../roles/setup-bminfra/templates/.rendered-05-bmc-secrets.yaml"
         state: absent
       when: hcp_worker_bmh | bool
 

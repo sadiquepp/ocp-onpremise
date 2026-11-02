@@ -54,7 +54,7 @@ client -> *.apps VIP .101 (MetalLB L2, on a worker)
 | Worker 1 | VM `hcp_compact1_worker1`, `192.168.122.8`, MAC `52:54:00:e2:54:08` | `ip_list.hcpc1worker1`, `compact_hosted_cluster_workers` |
 | Worker 2 | VM `hcp_compact1_worker2`, `192.168.122.9`, MAC `52:54:00:e2:54:09` | `ip_list.hcpc1worker2` |
 | Worker size | 4 vCPU, 16 GiB, 120 GB disk, booted from the compact InfraEnv's ISO | `compact_hosted_cluster_cpu/_memory` |
-| Agents | InfraEnv `bminfra` in namespace `bminfra` **on compact** | `setup_bminfra.yaml -e target_hub=compact` |
+| Agents | InfraEnv `bminfra` in namespace `bminfra` **on compact** | `hcp/setup_bminfra.yaml -e target_hub=compact` |
 
 **Why these addresses.**
 
@@ -82,11 +82,11 @@ existing MetalLB address map is what keeps the two management clusters apart:
 | Piece | Hub run | Compact run |
 |---|---|---|
 | MetalLB API pools (`roles/setup-hub-acm`) | `metallb_hub=hub`: `hcp-cluster1/2/3` only | `metallb_hub=compact`: `hcp-compact1` only |
-| Hosted cluster bundle (`create_hosted_cluster.yaml`) | renders `hcp-cluster1/2/3`, skips `hcp-compact1` | `-e target_hub=compact`: renders `hcp-compact1` only |
-| InfraEnv (`setup_bminfra.yaml`) | on the hub | `-e target_hub=compact`: on the compact cluster |
+| Hosted cluster bundle (`hcp/create_hosted_cluster.yaml`) | renders `hcp-cluster1/2/3`, skips `hcp-compact1` | `-e target_hub=compact`: renders `hcp-compact1` only |
+| InfraEnv (`hcp/setup_bminfra.yaml`) | on the hub | `-e target_hub=compact`: on the compact cluster |
 | Discovery ISO cache | `bminfra-discovery-<ver>.iso` | `compact-bminfra-discovery-<ver>.iso` |
 | Helper PXE files | copied | left alone (the compact workers boot the ISO) |
-| Worker VMs (`setup_hosted_cluster_vm.yaml`) | `c1_worker1..3` | `-e target_hub=compact`: `hcp_compact1_worker1..2` |
+| Worker VMs (`hcp/setup_hosted_cluster_vm.yaml`) | `c1_worker1..3` | `-e target_hub=compact`: `hcp_compact1_worker1..2` |
 | `*.apps` | helper haproxy (`c1lb` ...) | MetalLB inside the hosted cluster, no haproxy |
 | DNS | `hcp-clusterN.mylab.com` zones | `hcp-compact1.compact.mylab.com` zone, rendered in the same run |
 
@@ -189,7 +189,7 @@ cd compact-cluster
 ansible-playbook -i ../inventory/hosts setup_compact_cluster.yaml --ask-vault-pass --tags acm
 ```
 
-This installs the same set as the hub's `--tags acm`:
+This installs the same set as `acm/setup_acm.yaml` puts on the hub:
 
 - ACM and its MultiClusterHub, which brings MCE and HyperShift;
 - MetalLB;
@@ -235,7 +235,7 @@ as `compact-bminfra-discovery-<version>.iso`:
 
 ```bash
 cd ..
-ansible-playbook -i inventory/hosts setup_bminfra.yaml --ask-vault-pass -e target_hub=compact
+(cd hcp && ansible-playbook -i ../inventory/hosts setup_bminfra.yaml --ask-vault-pass -e target_hub=compact)
 ```
 
 It fails at once if Step 3 was skipped: an InfraEnv without assisted-service
@@ -247,7 +247,7 @@ hub's workers.
 **(root)**
 
 ```bash
-ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass -e target_hub=compact
+(cd hcp && ansible-playbook -i ../inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass -e target_hub=compact)
 ```
 
 This playbook:
@@ -283,7 +283,7 @@ secrets, ManagedCluster and KlusterletAddonConfig for `hcp-compact1` only.
 The compact cluster's kubeconfig is used for the checks:
 
 ```bash
-ansible-playbook -i inventory/hosts create_hosted_cluster.yaml --ask-vault-pass -e target_hub=compact
+(cd hcp && ansible-playbook -i ../inventory/hosts create_hosted_cluster.yaml --ask-vault-pass -e target_hub=compact)
 ```
 
 As on the hub, the bundle is rendered for review, not applied:
@@ -680,7 +680,7 @@ with it.
 
 | Symptom | Likely cause | Check |
 |---|---|---|
-| `setup_bminfra.yaml` fails: `No AgentServiceConfig on this hub` | Step 3 was skipped, or `-e target_hub=compact` was left off and it looked at the hub | `oc get agentserviceconfig agent` on compact |
+| `hcp/setup_bminfra.yaml` fails: `No AgentServiceConfig on this hub` | Step 3 was skipped, or `-e target_hub=compact` was left off and it looked at the hub | `oc get agentserviceconfig agent` on compact |
 | The AgentServiceConfig's PVCs stay `Pending` | No default StorageClass on compact | `oc get sc`. LVM Storage: `lvms-vg1 (default)`, else run `--tags compactstorage` (compact-cluster.md, Step 12a). Ceph: `ocs-external-storagecluster-ceph-rbd (default)`, else run `ceph/setup_ceph_odf.yaml` (Step 12b) and check `oc -n openshift-storage get storagecluster`. |
 | Ceph was chosen, but the etcd or AgentServiceConfig PVCs are on `lvms-vg1` | LVM Storage was still installed, and `lvms-vg1` was the default when the PVCs were created | Bound PVCs do not move. Remove LVM Storage and attach Ceph ([Step 12b](compact-cluster.md#switching-a-cluster-that-already-has-lvm-storage)), then recreate the AgentServiceConfig and the hosted cluster. |
 | `data-etcd-*` stay `Pending`, or etcd pods stay `ContainerCreating`, on Ceph | The StorageCluster is not `Ready`, or the node kernel cannot map a Ceph 9 RBD image (seen on OCP 4.20; 4.21 and 4.22 work) | `oc -n openshift-storage get storagecluster`; `oc -n hcp-compact1-hcp-compact1 describe pod etcd-0`. See compact-cluster.md troubleshooting. |
@@ -695,4 +695,4 @@ with it.
 | The Online Boutique route answers 503 | The router has the Route but no ready `frontend` pod behind it | `oc --kubeconfig $HCP_KUBECONFIG -n online-boutique get pods,endpoints frontend` (Step 10) |
 | Online Boutique pods are `ImagePullBackOff` on `redis:alpine` or `busybox` | Docker Hub anonymous pull-rate limit | Retry, or mirror those two images. `oc --kubeconfig $HCP_KUBECONFIG -n online-boutique describe pod <pod>` names the registry. |
 | Ingress and console operators in the hosted cluster are Degraded | `*.apps` does not resolve to `.101`, or `.101` is not answering | `dig x.apps.hcp-compact1.compact.mylab.com`, `arping -c2 -I virbr0 192.168.122.101` |
-| The hub's `--tags acm` now lists `hcp-compact1` as not rendered | Expected: it has no `hub` address | Nothing to fix |
+| The hub's `acm/setup_acm.yaml` run now lists `hcp-compact1` as not rendered | Expected: it has no `hub` address | Nothing to fix |

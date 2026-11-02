@@ -7,9 +7,11 @@
 ## tags to remove everything, or narrow it to one or more pieces with
 ## --tags a,b:
 ##
-##   --tags hub      hub1 - VMs, VM folder and install folder
-##   --tags hub2     the DR hub (setup_hub_cluster2.yaml), the same way
-##   --tags hubd     the disconnected hub (setup_hub_cluster.yaml
+##   --tags hub      cluster1/hub1 (standard-cluster/setup_cluster1.yaml) - VMs,
+##                   VM folder and install folder
+##   --tags hub2     cluster2/hub2, the DR hub (standard-cluster/setup_cluster2.yaml),
+##                   the same way
+##   --tags hubd     the disconnected cluster1 (standard-cluster/setup_cluster1.yaml
 ##                   -e disconnected_install=true) - VMs, folders, staged
 ##                   oc-mirror manifests and its egress-blocking iptables rules
 ##   --tags hub2d    the disconnected DR hub, the same way
@@ -402,7 +404,7 @@
       rm -rf {{ compact_install_folder | default(download_dir ~ '/compact_install') }}
 
   ## The worker VMs of the hosted cluster the compact cluster manages
-  ## (setup_hosted_cluster_vm.yaml -e target_hub=compact). Its control plane is
+  ## (hcp/setup_hosted_cluster_vm.yaml -e target_hub=compact). Its control plane is
   ## pods on the compact cluster, so it goes with it; --tags compacthcp removes
   ## only the workers, e.g. to rebuild them. To retire the hosted cluster
   ## while keeping the compact cluster, delete its HostedCluster/NodePool on
@@ -551,7 +553,7 @@
 ##
 ## The trust goes by default because a rebuilt registry generates a NEW CA, and
 ## a stale one is worse than none: it is what roles/setup-compact-cluster and
-## setup_hub_cluster.yaml check to decide the mirror registry "has been set up",
+## standard-cluster/setup_cluster1.yaml check to decide the mirror registry "has been set up",
 ## so leaving it behind makes a disconnected run start and then fail on a TLS
 ## error instead of stopping with a clear message. Keep it with:
 ##

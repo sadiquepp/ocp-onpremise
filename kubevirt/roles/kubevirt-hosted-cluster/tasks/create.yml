@@ -11,7 +11,7 @@
 #   4. the ACM import      - kubevirt_acm_import only; MCE's hypershift
 #                            add-on imports the cluster by itself
 #
-# The kube-apiserver's MetalLB pool is not here: setup_hub_cluster.yaml
+# The kube-apiserver's MetalLB pool is not here: acm/setup_acm.yaml
 # (roles/setup-hub-acm) creates it from hosted_cluster_metallb_pools, the same
 # as for the Agent clusters, and the preflight checks it is there.
 #

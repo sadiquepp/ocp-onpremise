@@ -17,8 +17,8 @@ L0  RHEL host            kvm nested=1 (roles/setup-bm-host)
 ```
 
 **Commands only, start to finish: [steps.md](steps.md).** The host, Ceph and
-the hub are built with the same root playbooks as the backup/restore flow
-([../steps.md](../steps.md)), and their commands are repeated there; this directory
+the hub are built with the same playbooks as the backup/restore flow
+([../hcp/dr/steps.md](../hcp/dr/steps.md)), and their commands are repeated there; this directory
 automates only what that flow doesn't do.
 
 Nested virtualisation is fine for learning the flow (ingress, kubevirt-csi,
@@ -44,9 +44,9 @@ Virtualization itself.
 
 | Piece | Where | Comes from |
 |---|---|---|
-| Host, Ceph, hub1, ODF on Ceph | | root playbooks, [steps.md](steps.md) steps 1-6 |
-| API address `192.168.122.250` | hub MetalLB, pool `hcp-kv1-api-pool` | `setup_hub_cluster.yaml` (step 6), from `hosted_cluster_metallb_pools` |
-| `api.hcp-kv1.hub.mylab.com` | helper DNS | `setup_bm_host.yaml` (step 4) |
+| Host, Ceph, hub1, ODF on Ceph | | shared playbooks, [steps.md](steps.md) steps 1-6 |
+| API address `192.168.122.250` | hub MetalLB, pool `hcp-kv1-api-pool` | `acm/setup_acm.yaml` (step 5), from `hosted_cluster_metallb_pools` |
+| `api.hcp-kv1.hub.mylab.com` | helper DNS | `setup_bm_host.yaml` (step 3) |
 | OpenShift Virtualization | hub, `openshift-cnv` | `--tags mgmt` (`roles/kubevirt-mgmt`) |
 | HostedCluster, NodePool, Secrets | hub, namespace `hcp-kv1` | `--tags cluster` (`roles/kubevirt-hosted-cluster`) |
 | Control plane | hub, namespace `hcp-kv1-hcp-kv1` | HyperShift |
@@ -287,7 +287,7 @@ planes and the cluster that runs VMs are three different ones:
 
 | Cluster | Role | Built by |
 |---|---|---|
-| hub1 | ACM: manages sno3, the SNO and every hosted cluster | `../setup_hub_cluster.yaml`, unchanged |
+| hub1 | ACM: manages sno3, the SNO and every hosted cluster | `../standard-cluster/setup_cluster1.yaml` + `../acm/setup_acm.yaml`, unchanged |
 | sno3 (`192.168.122.63`, `sno3.hub.mylab.com`) | MCE only: hcp-kv3's control plane, MetalLB for its API (`.253`) | `setup_sno3_mce.yaml` |
 | sno | OpenShift Virtualization: hcp-kv3's two worker VMs | `../setup_sno.yaml`, as for hcp-kv2 |
 
@@ -337,19 +337,19 @@ part to watch on a first run: `oc get managedclusteraddon -n sno3` on hub1.
 ## Before you start
 
 Build the host, Ceph and hub1 with steps 1-6 of [steps.md](steps.md): the
-same root playbooks, and the same commands, as steps 1 and 3-7 of the
-backup/restore flow ([../steps.md](../steps.md)). Its steps 8 and 9
+same playbooks, and the same commands, as steps 1 and 3-7 of the
+backup/restore flow ([../hcp/dr/steps.md](../hcp/dr/steps.md)). Its steps 8 and 9
 (AgentServiceConfig, bminfra, libvirt worker VMs) are for Agent clusters and
 are not needed here.
 
 What that gives this lab, and why it matters here:
 
-- **MCE and MetalLB** on hub1 (step 6).
+- **MCE and MetalLB** on hub1 (step 5, `acm/setup_acm.yaml`).
 - **hcp-kv1's API pool and DNS name.** hcp-kv1 is in the root `vars.yaml`, so
-  step 4 publishes `api.hcp-kv1.hub.mylab.com` and step 6 creates
+  step 3 publishes `api.hcp-kv1.hub.mylab.com` and step 5 creates
   `hcp-kv1-api-pool` at `.250`. On a hub built before hcp-kv1 was added,
-  re-run `setup_hub_cluster.yaml --tags metallb` and `setup_bm_host.yaml --tags dns`.
-- **Ceph RBD as the default StorageClass** (step 7, with
+  re-run `acm/setup_acm.yaml --tags metallb` and `setup_bm_host.yaml --tags dns`.
+- **Ceph RBD as the default StorageClass** (step 6, with
   `use_lvm_storage: false`). CDI gives the worker root disks ReadWriteMany
   block, so the VMs live-migrate when a hub node drains, and kubevirt-csi
   volumes inside the hosted cluster come from the same pool.
@@ -387,12 +387,12 @@ ignores the guests' flushes. Leave it off for the other labs; turn it on for
 the KubeVirt builds:
 
 ```bash
-ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass -e hub_disk_cache_unsafe=true
+(cd standard-cluster && ansible-playbook -i ../inventory/hosts setup_cluster1.yaml --ask-vault-pass -e hub_disk_cache_unsafe=true)
 ```
 
 The trade-off: if the host itself crashes or loses power, hub1's disks can be
 corrupted - its etcd most of all - and hub1 has to be rebuilt. A clean
-shutdown (`shutdown_hub_cluster.yaml`, or `virsh shutdown`) is safe.
+shutdown (`hcp/dr/shutdown_hub_cluster.yaml`, or `virsh shutdown`) is safe.
 
 It applies to VMs as they are created. To switch a running hub1, restart its
 masters one at a time with the new mode - each comes back before the next goes,
@@ -466,7 +466,7 @@ oc --kubeconfig /var/lib/libvirt/images/hub_install/auth/kubeconfig \
 
 All in the root `vars.yaml`, next to hcp-kv1. Then, from the repository
 root, `setup_bm_host.yaml --tags dns` (its API name) and
-`setup_hub_cluster.yaml --tags metallb` (its API pool), and this playbook:
+`acm/setup_acm.yaml --tags metallb` (its API pool, run from `acm/`), and this playbook:
 
 ```yaml
 hosted_clusters:
@@ -498,11 +498,11 @@ rest of the lab knows about KubeVirt clusters through a few lines:
   already read, so the API name, its zone and the hub's API pool come out the
   same way as for every other hosted cluster.
 - **`roles/create-hosted-cluster`** skips `platform: kubevirt` entries, so
-  `create_hosted_cluster.yaml` never renders hcp-kv1 as an Agent cluster.
+  `hcp/create_hosted_cluster.yaml` never renders hcp-kv1 as an Agent cluster.
   Naming one with `-e hcp_cluster_name` fails with the command to use instead.
 
 Everything else - the host, Ceph, the hub, MCE, MetalLB, the API pool, DNS,
-ODF - comes from the root playbooks ([steps.md](steps.md) steps 1-6) and is
+ODF - comes from the shared playbooks ([steps.md](steps.md) steps 1-6) and is
 not repeated here.
 
 ## Remove a cluster

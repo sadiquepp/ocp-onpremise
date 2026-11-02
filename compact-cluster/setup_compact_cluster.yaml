@@ -35,7 +35,7 @@
 # tags are also tagged 'never', so a plain run - or --tags compact - does not
 # turn the compact cluster into a management cluster; ask for them by name:
 #   --tags acm            ACM (with MCE), MetalLB and OADP, exactly what
-#                         setup_hub_cluster.yaml --tags acm puts on the hub
+#                         acm/setup_acm.yaml puts on cluster1/cluster2
 #                         (roles/setup-hub-acm), with metallb_hub=compact so
 #                         MetalLB gets the API pool of each hosted cluster
 #                         addressed 'compact' in hosted_cluster_metallb_pools

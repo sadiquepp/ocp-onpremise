@@ -67,7 +67,7 @@
 
 # The InfraEnv cannot do anything useful until AgentServiceConfig exists on
 # this hub - assisted-service is what serves the discovery ISO. That apply is
-# still manual (roles/setup-hub-acm renders it and README.md/steps.md apply
+# still manual (roles/setup-hub-acm renders it and acm/README.md and hcp/dr/steps.md apply
 # it), so check for it here rather than creating an InfraEnv that will sit
 # there doing nothing with no indication why.
 - name: Check AgentServiceConfig exists on this hub

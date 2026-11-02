@@ -107,8 +107,8 @@ cd /root/ocp-onpremise/spiffe-spire
 | Step | What | About |
 | --- | --- | --- |
 | `bmhost` | `../setup_bm_host.yaml` - skipped if the helper VM exists | 15 min |
-| `clusters` | `../setup_hub_cluster.yaml --skip-tags acm` and `../setup_sno.yaml` in parallel - each skipped if its kubeconfig exists | 75 min |
-| `lvm` | per cluster: LVM Storage from the base playbooks (`../setup_hub_cluster.yaml --tags lvm`, `../setup_sno.yaml --tags snostorage`) - a no-op on clusters the `clusters` step just built | 1-10 min |
+| `clusters` | `../standard-cluster/setup_cluster1.yaml` (no ACM) and `../setup_sno.yaml` in parallel - each skipped if its kubeconfig exists | 75 min |
+| `lvm` | per cluster: LVM Storage from the base playbooks (`../standard-cluster/setup_cluster1.yaml --tags lvm`, `../setup_sno.yaml --tags snostorage`) - a no-op on clusters the `clusters` step just built | 1-10 min |
 | `preflight` | per cluster: operator in the catalog? which channel? StorageClass? Changes nothing | 1 min |
 | `probe` | per cluster: one short-lived pod in its own namespace - every node name resolves (the agent dials its kubelet by name), both clusters' `*.apps` resolve and their routers answer, the demo images pull. Deletes the namespace after | 1-2 min |
 | `operator` | per cluster: Subscription, CSV, CRDs, API check | 5 min |
@@ -247,8 +247,8 @@ it - and the operator names a StorageClass in it.
 The class comes from the base lab, not from this one. With
 `use_lvm_storage: true` (the base default) LVM Storage is part of the
 cluster builds themselves (`roles/setup-lvm-storage`): the hub's, on the
-500G `storage_worker<N>.qcow2` disk every worker is built with - outside
-`--tags acm`, so `--skip-tags acm` keeps it - and the SNO's, on a second
+500G `storage_worker<N>.qcow2` disk every worker is built with - ACM is a
+separate playbook (`acm/setup_acm.yaml`) this lab never runs - and the SNO's, on a second
 disk `setup_sno.yaml` hot-plugs after the install. Either way the cluster
 comes up with `lvms-vg1` as its default StorageClass, and
 `spire_storage_class: auto` uses it: a thin LV on whichever node the SPIRE
@@ -257,7 +257,7 @@ PVC also deletes the CA keys - a rebuild is a genuinely new trust domain root.
 
 On a lab whose clusters were built before LVM Storage moved into the build,
 the `lvm` step (`./build-lab.sh --only lvm`) runs the base playbooks with just
-their storage tags - `../setup_hub_cluster.yaml --tags lvm` and
+their storage tags - `../standard-cluster/setup_cluster1.yaml --tags lvm` and
 `../setup_sno.yaml --tags snostorage` - and touches nothing else.
 
 **Fallback, a local PV.** A cluster with no default class at all (the SNO on

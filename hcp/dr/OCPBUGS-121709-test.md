@@ -3,7 +3,7 @@
 How the fix from
 [openshift/hypershift-oadp-plugin#316](https://github.com/openshift/hypershift-oadp-plugin/pull/316)
 is built for OADP 1.6 and tested with the hub1 → hub2 restore in
-[steps.md](../steps.md). Runs 1 and 2 (sections 5 and 6) cover OADP 1.6 on
+[steps.md](steps.md). Runs 1 and 2 (sections 5 and 6) cover OADP 1.6 on
 OCP 4.22; Run 3 (section 7) covers the `oadp-1.5` backport on OADP 1.5 and
 OCP 4.21. All three pass.
 
@@ -41,7 +41,7 @@ klusterlet cannot create its CSR and the `ManagedCluster` stays in
 `Importing` (or `Pending`/`Unknown`).
 
 The workaround today is
-[step 12 of steps.md](../steps.md#12-exclude-acms-import-secret-from-the-backup):
+[step 12 of steps.md](steps.md#12-exclude-acms-import-secret-from-the-backup):
 label the secret `velero.io/exclude-from-backup=true` before the backup.
 
 ## The fix
@@ -73,7 +73,7 @@ Consequences:
   that contain the secret, restore correctly.
 - The plugin only acts on backups whose `includedResources` names
   `hostedcluster`, `hostedcontrolplane` or `nodepool` (or `*`).
-  `oadp/templates/backup-hcp-cluster*.yaml.j2` include `hostedcluster`.
+  `templates/backup-hcp-cluster*.yaml.j2` include `hostedcluster`.
 - It matches by name suffix only. Any secret ending in `-import` in the
   restored namespaces is skipped, not just ACM's.
 
@@ -208,7 +208,7 @@ grep -ac "Skipping restore of ACM/MCE import secret" /tmp/plugin   # 1 or more
 
 ## 2. Run the backup without the workaround
 
-Follow [steps.md](../steps.md) up to step 11 as usual. Then make sure the
+Follow [steps.md](steps.md) up to step 11 as usual. Then make sure the
 import secret **is** backed up, so the restore actually exercises the fix.
 
 ### 2.1 Skip step 12: remove the exclude label
@@ -223,8 +223,8 @@ MCE reconciles this secret. Check the label again right before step 13.
 ### 2.2 Step 13: backup
 
 ```bash
-ansible-playbook -i inventory/hosts backup_hosted_cluster.yaml --ask-vault-pass \
-  -e hcp_cluster_name=hcp-cluster1 -e oadp_backup_method=csi
+(cd hcp/dr && ansible-playbook -i ../../inventory/hosts backup_hosted_cluster.yaml --ask-vault-pass \
+  -e hcp_cluster_name=hcp-cluster1 -e oadp_backup_method=csi)
 ```
 
 Confirm the secret is in the backup:
@@ -246,14 +246,14 @@ Run steps 14–19 as usual. Hub2 must be on OADP 1.6.
 
 **This is the step that makes hub2 use the new image.** It works the same
 whether you were given `$IMG` (1.0) or built it (1.1–1.3). Run step 20
-(`setup_oadp.yaml`) with `-e oadp_hypershift_plugin_image`:
+(`oadp/setup_oadp.yaml`) with `-e oadp_hypershift_plugin_image`:
 
 ```bash
 export KUBECONFIG=/var/lib/libvirt/images/hub2_install/auth/kubeconfig
 
-ansible-playbook -i inventory/hosts setup_oadp.yaml --ask-vault-pass \
+(cd oadp && ansible-playbook -i ../inventory/hosts setup_oadp.yaml --ask-vault-pass \
   -e target_hub=hub2 -e oadp_backup_method=csi \
-  -e oadp_hypershift_plugin_image=$IMG
+  -e oadp_hypershift_plugin_image=$IMG)
 ```
 
 How the image gets from that variable into Velero:
@@ -306,8 +306,8 @@ operator's image.
 ### 3.2 Step 21: restore
 
 ```bash
-ansible-playbook -i inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
-  -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2 -e oadp_backup_method=csi
+(cd hcp/dr && ansible-playbook -i ../../inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
+  -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2 -e oadp_backup_method=csi)
 ```
 
 Continue with steps 22 (DNS cutover) and 23 (verify).
@@ -661,7 +661,7 @@ so it can't be reused.
 1. Remove Run 1's hub2: `ansible-playbook -i inventory/hosts cleanup.yaml --tags hub2`
    (`cleanup-hub2.yaml` when this was run, since merged into `cleanup.yaml`),
    then `virsh list --all | grep hub2` (no rows).
-2. [steps.md](../steps.md) steps 15-19, as in Run 1.
+2. [steps.md](steps.md) steps 15-19, as in Run 1.
 3. Check and pin the image (section 1.0), then step 20 with
    `-e oadp_hypershift_plugin_image=quay.io/jparrill/hypershift-oadp-plugin@sha256:<digest>`,
    and confirm the pulled `imageID` (section 3.1).

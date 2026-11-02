@@ -296,7 +296,7 @@ topology. The resume hint printed on a failure carries the mode for you.
 | Step | What it runs | By hand |
 | --- | --- | --- |
 | `bmhost` | the helper VM - DNS, load balancer, `inventory/hosts`. Passes `clab_topology`, so the DNS zone holds this mode's tenant ingress names | [1.1](#or-step-by-step) |
-| `clusters` | the hub (`--skip-tags acm`) and the SNO **in parallel**, each to its own log under `build-logs/` | [1.1](#or-step-by-step), [1.2](#12-the-sno) |
+| `clusters` | the hub (`standard-cluster/setup_cluster1.yaml`, no ACM) and the SNO **in parallel**, each to its own log under `build-logs/` | [1.1](#or-step-by-step), [1.2](#12-the-sno) |
 | `fabric` | containerlab leaf1 / spine / leaf2 and the node NICs. Under EVPN also leaf2's internet egress for `violet` and the NAT for it on the containerlab host | [2](#2-the-fabric) |
 | `preflight` | reports what the clusters can do; changes nothing | [3](#3-pre-flight) |
 | `tenants` | `--tags <mode>` on the hub, then the SNO. Each ends in the phase's own verify - under EVPN that includes the internet probe from a violet pod | [5](#5-path-a-shared-vrf) / [6](#6-path-b-vrf-lite) / [7](#7-path-c-evpn), [8.2](#82-build) |
@@ -368,10 +368,10 @@ ansible-playbook -i ../inventory/hosts ../setup_bm_host.yaml --ask-vault-pass
 # now, once per lab host, the helper-DNS step from the root README
 # ("Do this once") - so routes you add later resolve from the host too
 
-# the hub. --skip-tags acm because ACM/MCE belongs to the hosted-cluster and
-# backup flows - nothing in this lab reads it, and it is not a small install.
-ansible-playbook -i ../inventory/hosts ../setup_hub_cluster.yaml --ask-vault-pass \
-  --skip-tags acm
+# the hub (cluster1). No ACM: that is a separate playbook (acm/setup_acm.yaml)
+# for the hosted-cluster and backup flows - nothing in this lab reads it, and
+# it is not a small install.
+ansible-playbook -i ../inventory/hosts ../standard-cluster/setup_cluster1.yaml --ask-vault-pass
 ```
 
 ### 1.2 The SNO

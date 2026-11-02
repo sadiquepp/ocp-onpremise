@@ -83,7 +83,7 @@
     msg: >-
       None of {{ sushy_emulator_domains | join(', ') }} is defined in libvirt,
       so there is nothing to give a BMC. Create them first:
-      ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml
+      cd hcp && ansible-playbook -i ../inventory/hosts setup_hosted_cluster_vm.yaml
       --ask-vault-pass -e hosted_cluster_worker_provisioning=bmh
       (which also runs this role).
   when: sushy_emulator_systems | default([]) | length == 0

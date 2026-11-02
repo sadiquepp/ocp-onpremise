@@ -163,7 +163,7 @@ usage() { sed -n '2,/^set -/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
 list_steps() {
     cat <<EOF
   bmhost     the helper VM: DNS, load balancer, the generated inventory
-  clusters   hub (--skip-tags acm) and the SNO, IN PARALLEL - and sno2,
+  clusters   hub (cluster1, no ACM) and the SNO, IN PARALLEL - and sno2,
              when sno2_enabled is true
   fabric     containerlab leaf1/spine/leaf2, virbr1, the node NICs
   preflight  report what the clusters can do; changes nothing
@@ -400,7 +400,7 @@ should_run() {
     return 0
 }
 
-# setup_hub_cluster.yaml and setup_sno.yaml are NOT idempotent. Their VM
+# standard-cluster/setup_cluster1.yaml and setup_sno.yaml are NOT idempotent. Their VM
 # creation is unguarded shell: `qemu-img create` OVERWRITES an existing disk
 # and `virt-install` fails on a domain that already exists. Run them against a
 # built cluster and you do not get a no-op, you get a destroyed one.
@@ -464,7 +464,7 @@ guard_clusters() {
 REFUSING to rebuild the clusters - this lab looks already built:
 $(printf '  - %s\n' "${found[@]}")
 
-setup_hub_cluster.yaml and setup_sno.yaml are not idempotent. qemu-img create
+standard-cluster/setup_cluster1.yaml and setup_sno.yaml are not idempotent. qemu-img create
 overwrites an existing disk and virt-install fails on an existing domain, so
 re-running them against a live cluster destroys it rather than skipping.
 
@@ -495,7 +495,7 @@ run_step() {
     clusters)
         guard_clusters
         say "$(pos clusters)  hub and SNO$( (( SNO2 )) && echo ' and sno2'), in parallel"
-        play_bg hub ../setup_hub_cluster.yaml --skip-tags acm
+        play_bg hub ../standard-cluster/setup_cluster1.yaml
         play_bg sno ../setup_sno.yaml
         if (( SNO2 )); then play_bg sno2 ../setup_sno2.yaml; fi
         wait_all ;;

@@ -1,8 +1,20 @@
 # HCP Backup & Restore - Steps
 
 Connected lab, Ceph 9 / ODF external storage, CSI snapshot backup, DR cutover
-to hub2. Commands only. What it proves: [summary.md](summary.md).
-Explanations: [README.md](README.md) and [oadp/README.md](oadp/README.md).
+to cluster2 (hub2). Commands only. What it proves: [summary.md](summary.md).
+Explanations: [README.md](README.md) (this directory), [../README.md](../README.md)
+(hosted clusters), [../../acm/README.md](../../acm/README.md),
+[../../standard-cluster/README.md](../../standard-cluster/README.md) and
+[../../oadp/README.md](../../oadp/README.md).
+
+**Run every command from the repository root** (`cd ocp-onpremise`, step 1).
+Playbooks that live in a subdirectory are run from inside it, in a subshell -
+`(cd standard-cluster && ansible-playbook -i ../inventory/hosts ...)` - because
+each directory's `ansible.cfg` is what puts the shared `roles/` on the role
+path.
+
+In variable names and `target_hub` values cluster1 is `hub` (hub1) and
+cluster2 is `hub2`.
 
 ## 1. Prepare
 
@@ -110,11 +122,15 @@ ansible-playbook -i inventory/hosts setup_bm_host.yaml --ask-vault-pass
 ssh root@192.168.122.27 ceph -s          # HEALTH_OK, 3 mons, 9 OSDs
 ```
 
-## 6. Hub1
+## 6. Hub1 (cluster1 + ACM)
 
 ```bash
-ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass
+(cd standard-cluster && ansible-playbook -i ../inventory/hosts setup_cluster1.yaml --ask-vault-pass)
+(cd acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass)
 ```
+
+The first builds the cluster (no LVM Storage: `use_lvm_storage: false`), the
+second installs ACM/MCE, MetalLB and the OADP operator on it.
 
 ## 7. Attach Ceph to hub1
 
@@ -131,7 +147,7 @@ oc get sc                                 # ocs-external-storagecluster-ceph-rbd
 oc apply -f roles/setup-hub-acm/files/.rendered-05-agentserviceconfig.yaml
 oc get pvc -n multicluster-engine         # three Bound
 
-ansible-playbook -i inventory/hosts setup_bminfra.yaml --ask-vault-pass
+(cd hcp && ansible-playbook -i ../inventory/hosts setup_bminfra.yaml --ask-vault-pass)
 
 oc get infraenv -n bminfra
 ```
@@ -139,10 +155,10 @@ oc get infraenv -n bminfra
 ## 9. Hosted cluster
 
 ```bash
-ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass
+(cd hcp && ansible-playbook -i ../inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass)
 # approve the discovered agents in the ACM/MCE web UI
 
-ansible-playbook -i inventory/hosts create_hosted_cluster.yaml --ask-vault-pass
+(cd hcp && ansible-playbook -i ../inventory/hosts create_hosted_cluster.yaml --ask-vault-pass)
 
 oc apply -f roles/create-hosted-cluster/templates/.rendered-hcp-cluster1.yaml
 
@@ -158,7 +174,7 @@ sushy-emulator on this host) instead, add
 `-e hosted_cluster_worker_provisioning=bmh` to the first command, with
 `sushy_emulator_password` in `vault.yaml`. The hub then boots and approves
 them itself, so there is nothing to approve in the UI. See
-[oadp/BMH-DR-test.md](oadp/BMH-DR-test.md).
+[BMH-DR-test.md](BMH-DR-test.md).
 
 ## 10. Workload
 
@@ -182,7 +198,7 @@ and retry. The kubeconfig talks to `api.hcp-cluster1.mylab.com:6443`, so
 that name must resolve from where you run `oc`.
 
 ```bash
-oc apply -f hello-openshift.yaml
+oc apply -f hcp/hello-openshift.yaml
 ```
 
 Online Boutique, for a workload with something to look at after the
@@ -206,7 +222,7 @@ survives the restore is the workload definitions, not cart contents.
 
 ```bash
 export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
-ansible-playbook -i inventory/hosts setup_oadp.yaml --ask-vault-pass -e oadp_backup_method=csi
+(cd oadp && ansible-playbook -i ../inventory/hosts setup_oadp.yaml --ask-vault-pass -e oadp_backup_method=csi)
 oc get volumesnapshotclass -L velero.io/csi-volumesnapshot-class
 ```
 
@@ -228,8 +244,8 @@ check that JIRA for the current status.
 ## 13. Backup
 
 ```bash
-ansible-playbook -i inventory/hosts backup_hosted_cluster.yaml --ask-vault-pass \
-  -e hcp_cluster_name=hcp-cluster1 -e oadp_backup_method=csi
+(cd hcp/dr && ansible-playbook -i ../../inventory/hosts backup_hosted_cluster.yaml --ask-vault-pass \
+  -e hcp_cluster_name=hcp-cluster1 -e oadp_backup_method=csi)
 
 oc get backup.velero.io hcp-cluster1-backup-csi -n openshift-adp -o yaml
 oc get datauploads.velero.io -n openshift-adp
@@ -240,7 +256,7 @@ Do not continue until every `DataUpload` is `Completed`.
 ## 14. Shut down hub1
 
 ```bash
-ansible-playbook -i inventory/hosts shutdown_hub_cluster.yaml --ask-vault-pass
+(cd hcp/dr && ansible-playbook -i ../../inventory/hosts shutdown_hub_cluster.yaml)
 ```
 
 ## 15. Destroy Ceph
@@ -260,10 +276,11 @@ Both must return nothing.
 ssh root@192.168.122.27 ceph -s
 ```
 
-## 17. Hub2
+## 17. Hub2 (cluster2 + ACM)
 
 ```bash
-ansible-playbook -i inventory/hosts setup_hub_cluster2.yaml --ask-vault-pass
+(cd standard-cluster && ansible-playbook -i ../inventory/hosts setup_cluster2.yaml --ask-vault-pass)
+(cd acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass -e target_hub=hub2)
 ```
 
 ## 18. Attach Ceph to hub2
@@ -274,7 +291,7 @@ export KUBECONFIG=/var/lib/libvirt/images/hub2_install/auth/kubeconfig
 oc get sc                                 # ocs-external-storagecluster-ceph-rbd (default)
 ```
 
-## 19. ACM on hub2
+## 19. AgentServiceConfig on hub2
 
 ```bash
 oc apply -f roles/setup-hub-acm/files/.rendered-05-agentserviceconfig.yaml
@@ -284,16 +301,16 @@ oc get pvc -n multicluster-engine         # three Bound
 ## 20. OADP on hub2
 
 ```bash
-ansible-playbook -i inventory/hosts setup_oadp.yaml --ask-vault-pass \
-  -e target_hub=hub2 -e oadp_backup_method=csi
+(cd oadp && ansible-playbook -i ../inventory/hosts setup_oadp.yaml --ask-vault-pass \
+  -e target_hub=hub2 -e oadp_backup_method=csi)
 oc get backup.velero.io -n openshift-adp  # hcp-cluster1-backup-csi appears
 ```
 
 ## 21. Restore
 
 ```bash
-ansible-playbook -i inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
-  -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2 -e oadp_backup_method=csi
+(cd hcp/dr && ansible-playbook -i ../../inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
+  -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2 -e oadp_backup_method=csi)
 
 oc get restore.velero.io hcp-cluster1-restore-csi -n openshift-adp -o yaml
 oc get datadownloads.velero.io -n openshift-adp
@@ -350,7 +367,7 @@ ansible-playbook -i inventory/hosts cleanup.yaml
 ---
 
 Full explanations, the fs-vs-csi choice, troubleshooting and known-good
-output: **[README.md](README.md)** and **[oadp/README.md](oadp/README.md)**.
-Common failures: [no DataUpload](oadp/README.md#if-no-dataupload-is-created-at-all),
-[stuck in Importing](oadp/README.md#restored-cluster-stuck-in-importing),
-[backup already exists in object storage](oadp/README.md#recovering-from-backup-already-exists-in-object-storage).
+output: **[README.md](README.md)** and **[../../oadp/README.md](../../oadp/README.md)**.
+Common failures: [no DataUpload](../../oadp/README.md#if-no-dataupload-is-created-at-all),
+[stuck in Importing](README.md#restored-cluster-stuck-in-importing),
+[backup already exists in object storage](../../oadp/README.md#recovering-from-backup-already-exists-in-object-storage).

@@ -38,8 +38,8 @@
 
 
 # LVM Storage is not installed here any more: roles/setup-lvm-storage does it
-# as part of the cluster build itself (tag lvm), so a hub built with
-# --skip-tags acm still has a default StorageClass.
+# as part of the cluster build itself (standard-cluster/, tag lvm), so a
+# cluster that never gets ACM still has a default StorageClass.
 
 - name: Deploy MetalLB Operator  
   shell: |

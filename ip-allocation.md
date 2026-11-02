@@ -125,7 +125,7 @@ rebuild.
 | `.66` | VM | compact (three-node compact cluster) master3 | `ip_list.compact_master3` |  |
 | `.67`–`.69` |  |  |  |  |
 | `.70` | VM | UDN lab tenant client VM: orange and green | `ip_list.udnclient-og` |  |
-| `.71` | Reserved | reserved for a virtual BMC for hcp-cluster2 (only referenced in commented-out lines of setup_hosted_cluster2_vm.yaml) | `ip_list.c2vbmc` |  |
+| `.71` | Reserved | reserved for a virtual BMC for hcp-cluster2 (only referenced in commented-out lines of hcp/setup_hosted_cluster2_vm.yaml) | `ip_list.c2vbmc` |  |
 | `.72` | VM | hubd (disconnected hub) bootstrap | `ip_list.hubd_bootstrap` |  |
 | `.73` | VM | hubd (disconnected hub) master1 | `ip_list.hubd_master1` |  |
 | `.74` | VM | hubd (disconnected hub) master2 | `ip_list.hubd_master2` |  |
