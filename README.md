@@ -26,6 +26,7 @@ High-Level-Arch
   - [Setup Bare Metal Host](#setup-bare-metal-host-1)
   - [Resolving the lab's names from the hypervisor](#resolving-the-labs-names-from-the-hypervisor)
   - [Setup Mirror Registry (disconnected only)](#setup-mirror-registry-disconnected-only)
+  - [Setup MinIO (disconnected, optional)](#setup-minio-disconnected-optional)
   - [Setup Bastion VM (optional)](#setup-bastion-vm-optional)
 - [Hosted control planes, end to end](#hosted-control-planes-end-to-end)
 - [Ceph 9 Storage for Hub PVs (ODF External Mode)](#ceph-9-storage-for-hub-pvs-odf-external-mode)
@@ -48,7 +49,8 @@ High-Level-Arch
 | [`acm/`](acm/) | Turns a standard cluster (or the compact cluster) into a hosted-control-plane hub: ACM/MCE, MetalLB (with one API pool per hosted cluster) and the OADP operator; the AgentServiceConfig | [acm/README.md](acm/README.md) |
 | [`hcp/`](hcp/) | Agent-platform hosted clusters on a hub: InfraEnv, worker VMs (ISO, PXE or BareMetalHost), the HostedCluster bundle, connected and disconnected | [hcp/README.md](hcp/README.md) |
 | [`hcp/dr/`](hcp/dr/) | Back a hosted cluster up on cluster1 and restore it onto cluster2 with OADP - the DR walkthrough, its commands-only [steps.md](hcp/dr/steps.md) and [summary.md](hcp/dr/summary.md) | [hcp/dr/README.md](hcp/dr/README.md) |
-| [`oadp/`](oadp/) | Generic OADP: the S3 bucket and IAM user, `setup_oadp.yaml`, the local MinIO S3 target for the disconnected lab, fs vs csi, a hello-openshift smoke test, troubleshooting | [oadp/README.md](oadp/README.md) |
+| [`oadp/`](oadp/) | Generic OADP: the S3 bucket and IAM user, `setup_oadp.yaml`, fs vs csi, a hello-openshift smoke test, troubleshooting | [oadp/README.md](oadp/README.md) |
+| [`minio/`](minio/) | MinIO, the disconnected lab's local S3-compatible store - one bucket per consumer: OADP backups now, Loki/Tempo later | [minio/README.md](minio/README.md) |
 | [`ceph/`](ceph/) | A standalone Ceph 9 cluster attached to a cluster through ODF external mode, instead of LVM Storage | [ceph/README.md](ceph/README.md) |
 | [`compact-cluster/`](compact-cluster/) | A three-node compact cluster from one agent ISO, in the lab or on physical servers | [compact-cluster/README.md](compact-cluster/README.md) |
 | [`kubevirt/`](kubevirt/) | Hosted clusters on the KubeVirt platform | [kubevirt/README.md](kubevirt/README.md) |
@@ -395,6 +397,19 @@ That last directory holds the `ImageDigestMirrorSet` / `ImageTagMirrorSet` /
 `CatalogSource` the cluster install stages and applies as day-2 resources; the
 cluster install fails with a clear message if it is not there yet.
 
+### Setup MinIO (disconnected, optional)
+
+The disconnected lab's own S3-compatible object store, for anything that needs
+S3 without AWS - OADP backups now, Loki and Tempo later. Like the mirror
+registry it is shared infrastructure on the lab network, built after
+`setup_bm_host.yaml` and only with `disconnected_install: true`:
+
+```bash
+cd minio && ansible-playbook -i ../inventory/hosts setup_minio.yaml --ask-vault-pass && cd ..
+```
+
+Endpoint, buckets (`minio_buckets`) and vault entries: [minio/README.md](minio/README.md).
+
 ### Setup Bastion VM (optional)
 
 A big-disk guest for building and scanning container images. Nothing else in the
@@ -508,7 +523,7 @@ cd acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass
 > (`--tags acm` and `--tags metallb` runs become `acm/setup_acm.yaml` and
 > `acm/setup_acm.yaml --tags metallb`). The hosted-cluster playbooks moved to
 > `hcp/`, the backup/restore/shutdown playbooks and their templates to
-> `hcp/dr/`, `setup_oadp.yaml` and `setup_minio.yaml` to `oadp/`,
+> `hcp/dr/`, `setup_oadp.yaml` to `oadp/`, `setup_minio.yaml` to `minio/`,
 > `setup_sno.yaml` and `setup_sno2.yaml` to `sno/`, and `shutdown_hub_cluster.yaml`
 > became `standard-cluster/shutdown_cluster.yaml` (any of the four clusters, by
 > `target_hub` / `disconnected_install`). The compact cluster's `--tags acm` is
@@ -663,7 +678,7 @@ delegates.
 | `setup_bm_host.yaml` | Prepare bare metal, create helper VM (DNS/LB) |
 | `setup_mirror_registry.yaml` | Build the mirror registry VM and fill it with oc-mirror - required first when `disconnected_install: true`, refuses to run otherwise |
 | `setup_bastion.yaml` | Build the 256G bastion VM for container image builds and CVE scanning - optional, nothing else depends on it |
-| `oadp/setup_minio.yaml` | Build the MinIO VM, a local S3 target for the disconnected flow |
+| `minio/setup_minio.yaml` | Build the MinIO VM, the disconnected lab's local S3 store (buckets in `minio_buckets`) - see [minio/README.md](minio/README.md) |
 | `sno/setup_sno.yaml` / `sno/setup_sno2.yaml` | Single-node OpenShift clusters (used by the UDN, SPIFFE and KubeVirt labs) - see [sno/README.md](sno/README.md) |
 | `cleanup.yaml` | Destroy all VMs, or one piece with `--tags hub\|hub2\|hubd\|hub2d\|hosted\|helper\|minio\|ceph\|sno\|compact\|...` (see [Cleanup](#cleanup)). The mirror registry is only shut down; `--tags registry-destroy` really removes it |
 | `standard-cluster/setup_cluster1.yaml` | Deploy cluster1 (+ LVM Storage): hub1, or hubd when `disconnected_install: true` |

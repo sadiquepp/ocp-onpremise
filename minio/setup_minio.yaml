@@ -1,5 +1,8 @@
-## Creates the minio VM and installs/configures MinIO as the local
-## S3-compatible OADP backup target for disconnected-install simulation.
+## Creates the minio VM and installs/configures MinIO on it: the lab's local
+## S3-compatible object store for a disconnected deployment, where AWS S3 is
+## out of reach. One instance, one bucket per consumer (minio_buckets in
+## vars.yaml) - the OADP backup target today, Loki, Tempo or anything else
+## that speaks S3 later.
 ## Structured the same way as ../setup_mirror_registry.yaml: VM creation
 ## happens on the baremetal host (localhost), then the actual in-guest
 ## setup is delegated into the new VM.
@@ -12,7 +15,7 @@
 ## minio_root_user / minio_root_password defined in vault.yaml, and
 ## org_id / activation_key defined in vault.yaml (see roles/setup-rhsm).
 ##
-## Usage (from inside oadp/):
+## Usage (from inside minio/):
 ##   ansible-playbook -i ../inventory/hosts setup_minio.yaml --ask-vault-pass
 
 - name: Setup MinIO VM

@@ -569,8 +569,8 @@ ip_list:
   # even when master/worker IPs are cut off from the real internet.
   registry: 22
 
-  # MinIO - local S3-compatible target for OADP backups during
-  # disconnected-install simulation (see oadp/setup_minio.yaml). Same
+  # MinIO - local S3-compatible object store for the disconnected lab (OADP
+  # backups, later Loki/Tempo; see minio/setup_minio.yaml). Same
   # connected-infrastructure treatment as mirror_registry.
   minio: 23
 
@@ -1764,8 +1764,8 @@ mirror_catalog_index: "registry.redhat.io/redhat/redhat-operator-index:v{{ ocp_m
 ## destination layout, change this to match or the extract will 404.
 mirror_release_repository: openshift/release-images
 
-## setup-minio-vm / setup-minio: local S3-compatible OADP backup target
-## for disconnected-install simulation (see oadp/setup_minio.yaml). Also
+## setup-minio-vm / setup-minio: the lab's local S3-compatible object store
+## for a disconnected deployment (see minio/README.md). Also
 ## gated behind disconnected_install (shared with mirror-registry above).
 ## minio_root_user / minio_root_password go in vault.yaml, not here.
 minio_name: minio
@@ -1784,6 +1784,12 @@ minio_data_dir: /data/minio
 ## AWS S3 - kept distinct from oadp_bucket_name so switching between
 ## connected/disconnected DPA config is an explicit, visible choice.
 ## (minio_bucket_name itself is set in the START HERE block at the top.)
+##
+## Every bucket setup-minio creates, one per consumer of the store. Add one
+## here for each new S3 user (e.g. loki-chunks, tempo-traces) and re-run
+## minio/setup_minio.yaml --tags minio; existing buckets are left alone.
+minio_buckets:
+  - "{{ minio_bucket_name }}"
 
 # -----------------------------------------------------------------------
 # ADD to vars.yaml:

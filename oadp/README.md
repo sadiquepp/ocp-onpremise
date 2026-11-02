@@ -20,7 +20,7 @@ Backup/Restore playbooks, their templates and the DR cutover - is in
 - [What lives here](#what-lives-here)
 - [One-time AWS setup (per bucket, not per hub)](#one-time-aws-setup-per-bucket-not-per-hub)
 - [Configure OADP on a cluster](#configure-oadp-on-a-cluster)
-- [A local S3 target: MinIO (disconnected only)](#a-local-s3-target-minio-disconnected-only)
+- [A local S3 target for the disconnected lab](#a-local-s3-target-for-the-disconnected-lab)
 - [OADP configuration](#oadp-configuration)
 - [Backup methods: fs vs csi](#backup-methods-fs-vs-csi)
   - [What `csi` needs](#what-csi-needs)
@@ -37,14 +37,13 @@ Backup/Restore playbooks, their templates and the DR cutover - is in
 | File | Purpose |
 | --- | --- |
 | `setup_oadp.yaml` | Create the `cloud-credentials` secret and the `DataProtectionApplication` on a cluster (`roles/setup-oadp`); with `oadp_backup_method=csi`, also label the VolumeSnapshotClass Velero uses |
-| `setup_minio.yaml` | Build the `minio` VM and run MinIO on it - a local S3-compatible backup target for the disconnected lab (`disconnected_install: true` only) |
 | `hello-openshift-oadp.yaml` | Smoke-test app: a namespace, a Deployment and a PVC |
 | `hello-openshift-oadp-backup.yaml` / `hello-openshift-oadp-restore.yaml` | Velero `Backup` and `Restore` of that namespace (fs method) |
 | `ansible.cfg` | Mirrors the root `ansible.cfg` and adds `../roles` to `roles_path` |
 
-The playbooks share `vars.yaml`, `vault.yaml` and `inventory/hosts` with the
-rest of the repository; the roles stay in the shared [`roles/`](../roles/)
-directory. **Run them from inside this directory** - the `ansible.cfg` here is
+`setup_oadp.yaml` shares `vars.yaml`, `vault.yaml` and `inventory/hosts` with
+the rest of the repository; the role stays in the shared [`roles/`](../roles/)
+directory. **Run it from inside this directory** - the `ansible.cfg` here is
 what puts `../roles` on the role search path. The `oc apply` commands below
 assume the same working directory.
 
@@ -153,28 +152,13 @@ cluster1. The disconnected builds (`hubd`, `hub2d`) are not selectable yet -
 name the kubeconfig with `-e hub_kubeconfig=<install folder>/auth/kubeconfig`
 (see [hcp/dr/README.md](../hcp/dr/README.md#build-the-dr-hub-cluster2)).
 
-## A local S3 target: MinIO (disconnected only)
+## A local S3 target for the disconnected lab
 
-A disconnected lab cannot reach AWS, so `setup_minio.yaml` builds an
-S3-compatible store on the lab network instead: a `minio` VM (`.23`,
-`ip_list.minio`) expanded from the RHEL 9 base image, registered with
-subscription-manager, running MinIO as a systemd service (API on
-`minio_api_port` 9000, console on 9001) with the bucket `minio_bucket_name`
-(`adp-backup-disconnected`) created in it.
-
-```bash
-ansible-playbook -i ../inventory/hosts setup_minio.yaml --ask-vault-pass
-```
-
-It refuses to run unless `disconnected_install: true`, and needs
-`minio_root_user` / `minio_root_password` and `org_id` / `activation_key` in
-`vault.yaml`. Tags: `minio-vm`, `rhsm`, `minio`. Sizing is `minio_*` in
-`vars.yaml`; `cleanup.yaml --tags minio` (repository root) removes it.
-
-`minio_bucket_name` is deliberately distinct from `oadp_bucket_name`.
-`setup_oadp.yaml` still renders the DataProtectionApplication against AWS S3 -
-pointing it at MinIO (an `s3Url`, `s3ForcePathStyle` and the MinIO credentials)
-is not automated yet.
+A disconnected lab cannot reach AWS. [`minio/`](../minio/README.md) builds the
+lab's own S3-compatible store, with a bucket for OADP (`minio_bucket_name`,
+deliberately distinct from `oadp_bucket_name`). `setup_oadp.yaml` still renders
+the DataProtectionApplication against AWS S3 - pointing it at MinIO (an
+`s3Url`, `s3ForcePathStyle` and the MinIO credentials) is not automated yet.
 
 ## OADP configuration
 
