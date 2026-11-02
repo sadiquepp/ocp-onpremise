@@ -36,7 +36,7 @@
 # THE BASE LAB. The first two steps are the repository's own playbooks,
 # unchanged: bmhost (../setup_bm_host.yaml - the helper, DNS, load balancer)
 # and clusters (../standard-cluster/setup_cluster1.yaml - no ACM - and
-# ../setup_sno.yaml, in parallel). Each is SKIPPED when what it builds is
+# ../sno/setup_sno.yaml, in parallel). Each is SKIPPED when what it builds is
 # already there, so on a lab that another use case built, a bare
 # ./build-lab.sh goes straight to the SPIRE steps. The cluster playbooks are
 # not idempotent - re-running one over a live cluster destroys it - so a
@@ -44,7 +44,7 @@
 # rather than being built over.
 #
 # STORAGE. The third step, lvm, is the base playbooks' own storage step:
-# ../standard-cluster/setup_cluster1.yaml --tags lvm and ../setup_sno.yaml --tags
+# ../standard-cluster/setup_cluster1.yaml --tags lvm and ../sno/setup_sno.yaml --tags
 # snodns,snostorage (snodns: the SNO's node name in libvirt's DNS, which the
 # SPIRE agent needs to reach its kubelet - see troubleshooting.md case 2). A cluster built by the clusters step already has it (LVM
 # Storage is part of the build when use_lvm_storage is true), so there it is a quick no-op; on a lab built before that, it is
@@ -107,7 +107,7 @@ list_steps() {
     cat <<EOF
   bmhost     ../setup_bm_host.yaml: the helper VM (DNS, load balancer). Skipped
              when the helper VM already exists
-  clusters   ../standard-cluster/setup_cluster1.yaml and ../setup_sno.yaml,
+  clusters   ../standard-cluster/setup_cluster1.yaml and ../sno/setup_sno.yaml,
              IN PARALLEL. Each skipped when its kubeconfig already exists
   lvm        per cluster: LVM Storage from the base playbooks (--tags lvm /
              --tags snodns,snostorage) - lvms-vg1, the default StorageClass,
@@ -426,14 +426,14 @@ EOF
         done
         for c in "${want[@]}"; do
             if [[ $c == hub ]]; then play_bg hub ../standard-cluster/setup_cluster1.yaml
-            else play_bg sno ../setup_sno.yaml; fi
+            else play_bg sno ../sno/setup_sno.yaml; fi
         done
         wait_all ;;
     lvm)
         say "$(pos lvm)  LVM Storage on ${CLUSTERS[*]} (base playbooks)"
         for c in "${CLUSTERS[@]}"; do
             if [[ $c == hub ]]; then play_bg hub-lvm ../standard-cluster/setup_cluster1.yaml --tags lvm
-            else play_bg sno-storage ../setup_sno.yaml --tags snodns,snostorage; fi
+            else play_bg sno-storage ../sno/setup_sno.yaml --tags snodns,snostorage; fi
         done
         wait_all ;;
     preflight|probe|operator|storage|spire|demo|verify|prep)

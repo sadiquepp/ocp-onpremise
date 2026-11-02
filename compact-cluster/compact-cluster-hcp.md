@@ -46,7 +46,7 @@ client -> *.apps VIP .101 (MetalLB L2, on a worker)
 
 | What | Value | Where it is set |
 |---|---|---|
-| Management cluster | `compact` (ACM, MCE, MetalLB, OADP) | `compact-cluster/setup_compact_cluster.yaml --tags acm` |
+| Management cluster | `compact` (ACM, MCE, MetalLB, OADP) | `acm/setup_acm.yaml -e target_hub=compact` |
 | Hosted cluster | `hcp-compact1`, control plane in namespace `hcp-compact1-hcp-compact1` on `compact` | `hosted_clusters` in `vars.yaml` |
 | Its DNS domain | `hcp-compact1.compact.mylab.com` | `hosted_cluster_domains` |
 | API VIP: `api`, `api-int` | `192.168.122.100`, from MetalLB on **compact** | `hosted_cluster_metallb_pools['hcp-compact1'].ip.compact` |
@@ -181,15 +181,17 @@ dig +short @192.168.122.1 hcpc1worker1.hcp-compact1.compact.mylab.com   # 192.16
 
 ### Step 2 - ACM, MCE and MetalLB on the compact cluster
 
-**(compact-cluster/)** The hub's day-2 role, `roles/setup-hub-acm`, pointed at
-the compact cluster:
+**(acm/)** The same playbook that makes cluster1/cluster2 a hub,
+`acm/setup_acm.yaml` (`roles/setup-hub-acm`), pointed at the compact cluster:
 
 ```bash
-cd compact-cluster
-ansible-playbook -i ../inventory/hosts setup_compact_cluster.yaml --ask-vault-pass --tags acm
+cd ../acm
+ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass -e target_hub=compact
 ```
 
-This installs the same set as `acm/setup_acm.yaml` puts on the hub:
+It uses the compact cluster's kubeconfig and the `oc` in its install folder,
+refuses to run with `disconnected_install: true`, and installs the same set as
+on the hub:
 
 - ACM and its MultiClusterHub, which brings MCE and HyperShift;
 - MetalLB;
@@ -201,8 +203,9 @@ from compact-cluster.md, Step 12: LVM Storage or ODF.
 `metallb_hub=compact` makes MetalLB's only pool `hcp-compact1-api-pool`
 (`.100`), restricted to `hcp-compact1`'s control-plane namespace.
 
-`acm` is also tagged `never`, so a plain run of the playbook, or
-`--tags compact`, never turns the compact cluster into a management cluster.
+A plain run of `setup_compact_cluster.yaml` never turns the compact cluster
+into a management cluster; this is a separate step. (Its old `--tags acm` now
+just fails with the command above.)
 
 ```bash
 oc get multiclusterhub -n open-cluster-management      # Running (10-15 minutes)
@@ -686,7 +689,7 @@ with it.
 | `data-etcd-*` stay `Pending`, or etcd pods stay `ContainerCreating`, on Ceph | The StorageCluster is not `Ready`, or the node kernel cannot map a Ceph 9 RBD image (seen on OCP 4.20; 4.21 and 4.22 work) | `oc -n openshift-storage get storagecluster`; `oc -n hcp-compact1-hcp-compact1 describe pod etcd-0`. See compact-cluster.md troubleshooting. |
 | The workers boot but no Agent appears | They booted the hub's ISO, or cannot reach assisted-service through compact's `*.apps` | `virsh dumpxml hcp_compact1_worker1 \| grep iso` names `compact-bminfra-discovery-...`; `dig @192.168.122.1 x.apps.compact.mylab.com` |
 | A worker gets an address from `.201`-`.249` | Its DHCP reservation is missing | `virsh net-dumpxml default \| grep 54:08`; re-run Step 5 |
-| The HostedCluster waits on `kube-apiserver` with no EXTERNAL-IP | The MetalLB pool on compact is missing, or names another namespace | `oc get ipaddresspool hcp-compact1-api-pool -n metallb-system -o yaml`; re-run `--tags acm` |
+| The HostedCluster waits on `kube-apiserver` with no EXTERNAL-IP | The MetalLB pool on compact is missing, or names another namespace | `oc get ipaddresspool hcp-compact1-api-pool -n metallb-system -o yaml`; re-run `acm/setup_acm.yaml -e target_hub=compact --tags metallb` |
 | Nodes never join; kubelet cannot reach the API | `api.hcp-compact1.compact.mylab.com` does not resolve from the workers | `dig @192.168.122.1 api.hcp-compact1.compact.mylab.com`: Step 1, and the forwarder check in [Before you start](#before-you-start) |
 | A worker sits in `shut off` and its Agent stops progressing | The VM predates the `--import --boot hd,cdrom` fix in Step 5, so the guest's reboot after RHCOS was written stopped it | `virsh list --all \| grep hcp_compact1`, then `virsh start <domain>` (Step 7). Rebuilt workers do not do this. |
 | `--tags hcpingress` waits forever for Ready workers | The NodePool has not finished, Agents are unapproved, or a worker is powered off | `oc get nodepool,agents -A` on compact (Step 6), `virsh list --all` (Step 7) |

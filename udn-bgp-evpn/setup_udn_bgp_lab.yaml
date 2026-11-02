@@ -91,7 +91,7 @@
 ##   ansible-playbook -i ../inventory/hosts setup_udn_bgp_lab.yaml --ask-vault-pass --tags vrflite
 ##
 ## The cluster-build playbooks live in the repository root (setup_bm_host.yaml,
-## setup_sno.yaml) and in standard-cluster/ (the hub). Call them with a
+## sno/setup_sno.yaml) and in standard-cluster/ (the hub). Call them with a
 ## relative path - NOT a wrapper playbook and NOT a symlink here:
 ##
 ##   ansible-playbook -i ../inventory/hosts ../standard-cluster/setup_cluster1.yaml --ask-vault-pass

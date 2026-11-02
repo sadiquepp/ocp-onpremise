@@ -379,7 +379,7 @@ ansible-playbook -i ../inventory/hosts ../standard-cluster/setup_cluster1.yaml -
 **Only needed for section 8** (the second cluster on the EVPN fabric).
 
 ```bash
-ansible-playbook -i ../inventory/hosts ../setup_sno.yaml --ask-vault-pass
+ansible-playbook -i ../inventory/hosts ../sno/setup_sno.yaml --ask-vault-pass
 ```
 
 Run it in a second terminal **alongside** the hub install above, not after it -

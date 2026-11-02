@@ -1,7 +1,8 @@
 # ACM, MCE and MetalLB: making a cluster a hosted-control-plane hub
 
-`setup_acm.yaml` turns a [standard cluster](../standard-cluster/) into a
-management hub for hosted control planes. It runs
+`setup_acm.yaml` turns a [standard cluster](../standard-cluster/) - or the
+[compact cluster](../compact-cluster/) - into a management hub for hosted
+control planes. It runs
 [`roles/setup-hub-acm`](../roles/setup-hub-acm/), which installs:
 
 - **ACM** and its `MultiClusterHub` - which brings **MCE**, HyperShift and
@@ -37,7 +38,7 @@ a cluster can be built without becoming a hub, and become one later.
 
 | File             | Purpose |
 | ---------------- | ------- |
-| `setup_acm.yaml` | Install ACM/MCE, MetalLB and the OADP operator on cluster1 or cluster2 (connected or disconnected), create the hosted clusters' MetalLB pools, render the AgentServiceConfig |
+| `setup_acm.yaml` | Install ACM/MCE, MetalLB and the OADP operator on cluster1 or cluster2 (connected or disconnected) or the compact cluster, create the hosted clusters' MetalLB pools, render the AgentServiceConfig |
 | `ansible.cfg`    | Mirrors the root `ansible.cfg` and adds `../roles` to `roles_path` |
 
 The role stays in the shared [`roles/`](../roles/) directory. **Run the
@@ -68,13 +69,22 @@ build, exactly as the cluster playbooks do:
 | `hub` | `true` | cluster1 disconnected (`hubd`) | `hub_disconnected_install_folder` | `hubd` |
 | `hub2` | `false` | cluster2 | `hub2_install_folder` | `hub2` |
 | `hub2` | `true` | cluster2 disconnected (`hub2d`) | `hub2_disconnected_install_folder` | `hub2` |
+| `compact` | `false` (required) | the compact cluster | `compact_install_folder` | `compact` |
 
 `target_hub` defaults to the value in `vars.yaml` (`hub`). Keep it at `hub` or
 `hub2` for the disconnected builds and set `disconnected_install` instead -
-`-e target_hub=hubd` is refused with that advice. The compact cluster has its
-own ACM step (`compact-cluster/setup_compact_cluster.yaml --tags acm`, see
-[compact-cluster-hcp.md](../compact-cluster/compact-cluster-hcp.md)), which runs
-the same role with `metallb_hub=compact`.
+`-e target_hub=hubd` is refused with that advice.
+
+`-e target_hub=compact` makes the connected three-node compact cluster
+([`compact-cluster/`](../compact-cluster/)) a management cluster: its
+kubeconfig, the `oc` in its install folder, and `metallb_hub=compact`, so its
+only pools are for the hosted clusters with a `compact` address
+(`hcp-compact1`). It refuses `disconnected_install: true`. The walkthrough is
+[compact-cluster-hcp.md](../compact-cluster/compact-cluster-hcp.md):
+
+```bash
+ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass -e target_hub=compact
+```
 
 `metallb_hub` selects each hosted cluster's address out of
 `hosted_cluster_metallb_pools`. cluster2 gets `hub2` in **both** modes: as the
@@ -264,8 +274,8 @@ hosted_cluster_metallb_pools:
 Three variables select what a hub gets:
 
 - **`metallb_hub`** - which hub `setup-hub-acm` is configuring. Set by
-  `setup_acm.yaml` from `target_hub` and `disconnected_install` - `hub`, `hubd`
-  or `hub2`, per the table in [Install it](#install-it).
+  `setup_acm.yaml` from `target_hub` and `disconnected_install` - `hub`, `hubd`,
+  `hub2` or `compact`, per the table in [Install it](#install-it).
 - **`target_hub`** - which hub is currently authoritative. Picks the kubeconfig
   for this playbook and for the `hcp/` and `oadp/` playbooks, and selects the
   address `setup-dns` publishes as `api`/`api-int`. Defaults to `hub`.

@@ -1,7 +1,7 @@
 ---
 # Build the second single-node OpenShift, sno2, for the routed-rack EVPN lab.
 #
-#   ansible-playbook -i inventory/hosts setup_sno2.yaml --ask-vault-pass \
+#   ansible-playbook -i ../inventory/hosts setup_sno2.yaml --ask-vault-pass \
 #     -e sno2_enabled=true
 #
 # The same role as setup_sno.yaml, given sno2's name and its own install and
@@ -14,8 +14,8 @@
 # Runs on the hypervisor, like setup_sno.yaml. The DNS zone sno2.<base_domain>
 # comes from setup-dns, which renders it when sno2_enabled is true:
 #
-#   ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns \
-#     --ask-vault-pass -e sno2_enabled=true
+#   (cd .. && ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns \
+#     --ask-vault-pass -e sno2_enabled=true)
 #
 # Run that first; pre-flight fails if api.sno2.<base_domain> does not resolve.
 # That zone is served by the helper alone, and the lab host finds it through
@@ -40,8 +40,8 @@
   hosts: localhost
   become: true
   vars_files:
-    - vars.yaml
-    - vault.yaml
+    - ../vars.yaml
+    - ../vault.yaml
   pre_tasks:
     - name: Fail unless sno2 is enabled
       ansible.builtin.assert:
@@ -79,7 +79,7 @@
           The helper ({{ lab_network_prefix }}.{{ ip_list.helper_server }})
           does not resolve {{ item.item }}, and sno2 uses it as its only
           resolver.
-          {{ 'Render the zone: ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns --ask-vault-pass -e sno2_enabled=true'
+          {{ 'Render the zone, from the repository root: ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns --ask-vault-pass -e sno2_enabled=true'
              if item.item != 'quay.io' else
              'External names fail there, so a connected install cannot pull its payload. Check `dig quay.io @' ~ lab_network_prefix ~ '.' ~ ip_list.helper_server ~ '` and `dig +cd` - see dns_forwarders and dns_dnssec_validation in roles/setup-dns/defaults/main.yml.' }}
         success_msg: >-

@@ -88,7 +88,7 @@ new addresses, which the old cluster does not answer on.
 scheme, and `52:54:00:e2:55:<octet>` is already taken by the containerlab
 fabric NIC. The backup port of the bond takes the next prefix.
 
-**How it differs from the SNO** (`setup_sno.yaml`). The structure is the same:
+**How it differs from the SNO** (`sno/setup_sno.yaml`). The structure is the same:
 connected install, static addressing, one agent ISO, four stages. Two things
 change:
 

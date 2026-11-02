@@ -28,6 +28,7 @@ purpose that needs a second cluster.
 - [Build cluster1](#build-cluster1)
 - [Build cluster2](#build-cluster2)
 - [LVM Storage on a cluster that is already up](#lvm-storage-on-a-cluster-that-is-already-up)
+- [Shut a cluster down](#shut-a-cluster-down)
 - [Next steps](#next-steps)
 - [Cleanup](#cleanup)
 
@@ -37,6 +38,7 @@ purpose that needs a second cluster.
 | --------------------- | ------- |
 | `setup_cluster1.yaml` | Build cluster1 - connected (`hub`) or, with `disconnected_install: true`, disconnected (`hubd`) - plus LVM Storage when `use_lvm_storage: true` |
 | `setup_cluster2.yaml` | Build cluster2 - connected (`hub2`) or disconnected (`hub2d`) - plus LVM Storage when `use_lvm_storage: true` |
+| `shutdown_cluster.yaml` | Stop a cluster's VMs without deleting anything - cluster1 by default, any of the four with `target_hub` / `disconnected_install` |
 | `ansible.cfg`         | Mirrors the root `ansible.cfg` and adds `../roles` to `roles_path` |
 
 The roles stay in the shared [`roles/`](../roles/) directory
@@ -103,7 +105,7 @@ on it:
   cluster build (tag `lvm`), right after the cluster operators settle, so the
   cluster comes up with `lvms-vg1` as its default StorageClass on the workers'
   500G `storage_worker<N>.qcow2` disks. Good enough to stand up hosted clusters
-  and run workloads on them. The SNO (`setup_sno.yaml`) follows the same
+  and run workloads on them. The SNO (`sno/setup_sno.yaml`) follows the same
   switch: it gets a second disk and LVM Storage after its install.
 - **Ceph 9 via ODF external mode** - set `use_lvm_storage: false`, then build
   the Ceph cluster and attach it with the two playbooks in [`ceph/`](../ceph/)
@@ -189,13 +191,33 @@ else - to a cluster that is already running (one built with
 ```bash
 ansible-playbook -i ../inventory/hosts setup_cluster1.yaml --ask-vault-pass --tags lvm
 ansible-playbook -i ../inventory/hosts setup_cluster2.yaml --ask-vault-pass --tags lvm
-(cd .. && ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass --tags snostorage)   # the SNO's equivalent
+(cd ../sno && ansible-playbook -i ../inventory/hosts setup_sno.yaml --ask-vault-pass --tags snostorage)    # the SNO's equivalent
 ```
 
 The rest of the build is not idempotent - `qemu-img create` overwrites an
 existing disk and `virt-install` fails on an existing domain - so never re-run
 these playbooks without `--tags lvm` against a cluster that is up. Tear it down
 first (below).
+
+## Shut a cluster down
+
+`shutdown_cluster.yaml` stops a cluster's VMs - gracefully, or with
+`-e force_shutdown=true` as a hard power-off - and deletes nothing: the domains
+stay defined, the disks and DNS/LB records stay, and `virsh start` brings the
+cluster back. The hosted-cluster DR walkthrough uses it as its "primary hub is
+gone" step. It picks the cluster like [`acm/setup_acm.yaml`](../acm/README.md#install-it)
+does:
+
+```bash
+ansible-playbook -i ../inventory/hosts shutdown_cluster.yaml                                                  # cluster1 (hub)
+ansible-playbook -i ../inventory/hosts shutdown_cluster.yaml -e target_hub=hub2                               # cluster2 (hub2)
+ansible-playbook -i ../inventory/hosts shutdown_cluster.yaml -e disconnected_install=true                     # hubd
+ansible-playbook -i ../inventory/hosts shutdown_cluster.yaml -e target_hub=hub2 -e disconnected_install=true  # hub2d
+```
+
+Both default from `vars.yaml`, so check them there if you have set either one
+permanently - after a DR cutover with `target_hub: hub2`, a bare run stops
+cluster2.
 
 ## Next steps
 
@@ -220,5 +242,5 @@ ansible-playbook -i inventory/hosts cleanup.yaml --tags hubd     # disconnected 
 ansible-playbook -i inventory/hosts cleanup.yaml --tags hub2d    # disconnected cluster2, the same way
 ```
 
-To stop cluster1's VMs without deleting anything (the DR walkthrough's
-"primary hub is gone" step), see `hcp/dr/shutdown_hub_cluster.yaml`.
+To stop a cluster without deleting anything, see
+[Shut a cluster down](#shut-a-cluster-down).

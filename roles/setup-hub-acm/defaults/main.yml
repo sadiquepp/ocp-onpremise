@@ -7,8 +7,8 @@
 ## (target_hub=hub) hub normally, hubd when it runs with disconnected_install;
 ## for cluster2 (target_hub=hub2) hub2 in BOTH modes: its disconnected build
 ## (hub2d) is a different cluster but the same DR hub, so a restored hosted
-## cluster comes up on hub2's addresses either way. The compact cluster
-## (compact-cluster/setup_compact_cluster.yaml --tags acm) passes compact.
+## cluster comes up on hub2's addresses either way. For the compact cluster
+## (target_hub=compact) it passes compact.
 metallb_hub: hub
 
 ## MetalLB IPAddressPools for the hosted clusters' APIServer VIPs - one

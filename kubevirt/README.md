@@ -153,7 +153,7 @@ modes, destroy it and create it again.
 ## Workers on another cluster: hcp-kv2 on the SNO
 
 hcp-kv2 keeps its control plane on the hub like hcp-kv1, but its worker VMs
-run on the single-node cluster (`../setup_sno.yaml`) - HyperShift's "external
+run on the single-node cluster (`../sno/setup_sno.yaml`) - HyperShift's "external
 infrastructure". It is the same playbook; `infra: sno` on its
 `hosted_clusters` entry is the whole difference, and both clusters run side
 by side.
@@ -289,7 +289,7 @@ planes and the cluster that runs VMs are three different ones:
 |---|---|---|
 | hub1 | ACM: manages sno3, the SNO and every hosted cluster | `../standard-cluster/setup_cluster1.yaml` + `../acm/setup_acm.yaml`, unchanged |
 | sno3 (`192.168.122.63`, `sno3.hub.mylab.com`) | MCE only: hcp-kv3's control plane, MetalLB for its API (`.253`) | `setup_sno3_mce.yaml` |
-| sno | OpenShift Virtualization: hcp-kv3's two worker VMs | `../setup_sno.yaml`, as for hcp-kv2 |
+| sno | OpenShift Virtualization: hcp-kv3's two worker VMs | `../sno/setup_sno.yaml`, as for hcp-kv2 |
 
 ```
 hub1 (ACM) ── imports ──> sno3 (MCE)   hypershift-addon on sno3 reports its hosted
@@ -365,7 +365,7 @@ What that gives this lab, and why it matters here:
 - **Room on the hub.** Its three workers are 32 vCPU / 48 GiB each, and carry
   both the hosted control plane and the worker VMs (4 vCPU / 16 GiB each by
   default).
-- **For hcp-kv2 only, the SNO** (`../setup_sno.yaml`), with LVM Storage and
+- **For hcp-kv2 only, the SNO** (`../sno/setup_sno.yaml`), with LVM Storage and
   room for its workers - see
   [Workers on another cluster](#workers-on-another-cluster-hcp-kv2-on-the-sno).
   Without it a run builds hcp-kv1 alone and says hcp-kv2 was left out.
@@ -392,7 +392,7 @@ the KubeVirt builds:
 
 The trade-off: if the host itself crashes or loses power, hub1's disks can be
 corrupted - its etcd most of all - and hub1 has to be rebuilt. A clean
-shutdown (`hcp/dr/shutdown_hub_cluster.yaml`, or `virsh shutdown`) is safe.
+shutdown (`standard-cluster/shutdown_cluster.yaml`, or `virsh shutdown`) is safe.
 
 It applies to VMs as they are created. To switch a running hub1, restart its
 masters one at a time with the new mode - each comes back before the next goes,

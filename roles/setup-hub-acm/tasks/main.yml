@@ -138,7 +138,7 @@
   when: disconnected_install | bool
 
 # Both branches render to the same path, so the review-and-apply step below
-# (and the one in the README) is the same either way.
+# (and the one in acm/README.md) is the same either way.
 - name: Render AgentServiceConfig (connected)
   template:
     src: acm/05-agentserviceconfig.yaml.j2

@@ -1,7 +1,10 @@
 ---
 # Build a connected single-node OpenShift from an agent ISO.
 #
-#   ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass
+#   ansible-playbook -i ../inventory/hosts setup_sno.yaml --ask-vault-pass
+#
+# Run from inside sno/ (sno/ansible.cfg is what puts the shared ../roles on the
+# role search path).
 #
 # Runs on the hypervisor. --ask-vault-pass is not optional: this is a connected
 # install and the node pulls its release payload from quay.io with the pull
@@ -11,8 +14,8 @@
 # which runs on the HELPER, not on the hypervisor this play targets - so it is
 # reached through the playbook that already owns it:
 #
-#   ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns \
-#     --ask-vault-pass
+#   (cd .. && ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns \
+#     --ask-vault-pass)
 #
 # Run that first. Importing setup-dns from here as well would mean two
 # playbooks carrying the same delegate_to, and the failure mode when one of
@@ -32,8 +35,8 @@
   hosts: localhost
   become: true
   vars_files:
-    - vars.yaml
-    - vault.yaml
+    - ../vars.yaml
+    - ../vault.yaml
   tasks:
     - name: Install the SNO
       ansible.builtin.import_role:

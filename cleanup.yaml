@@ -22,7 +22,7 @@
 ##   --tags ceph     the Ceph VMs and their OSD disks - also the DR demo's
 ##                   deliberate storage-loss step
 ##   --tags sno      the single-node OpenShift cluster only
-##   --tags sno2     the second single-node cluster (setup_sno2.yaml) only
+##   --tags sno2     the second single-node cluster (sno/setup_sno2.yaml) only
 ##   --tags sno3     the extra single-node clusters (sno_extra_clusters: sno3,
 ##                   the MCE cluster of kubevirt/setup_sno3_mce.yaml), with
 ##                   what their hosted clusters left on hub1 and on the SNO
@@ -273,7 +273,7 @@
         - /var/lib/libvirt/images/ceph3_osd3.qcow2
 
   ## -------------------------------------------------------------------------
-  ## The single-node OpenShift cluster (setup_sno.yaml)
+  ## The single-node OpenShift cluster (sno/setup_sno.yaml)
   ## -------------------------------------------------------------------------
   ## The install folder goes with the VM, deliberately. It holds the agent ISO
   ## the domain boots from AND auth/kubeconfig - the only copy of the
@@ -291,7 +291,7 @@
       rm -rf {{ sno_vm_folder | default(download_dir ~ '/' ~ sno_name) }}
       rm -rf {{ sno_install_folder }}
 
-  ## sno2 (setup_sno2.yaml, sno2_enabled), the same way and for the same
+  ## sno2 (sno/setup_sno2.yaml, sno2_enabled), the same way and for the same
   ## reasons. Not conditional on sno2_enabled: a sno2 left behind after the
   ## flag was turned off is exactly what this has to find.
   - name: Destroy the second single-node OpenShift VM (sno2)

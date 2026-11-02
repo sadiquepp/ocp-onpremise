@@ -64,7 +64,7 @@
       hub2: "{{ hub2_install_folder }}"
       hubd: "{{ hub_disconnected_install_folder }}"
       ## The connected compact cluster as a management cluster (ACM/MCE from
-      ## ../compact-cluster/setup_compact_cluster.yaml --tags acm). Renders only
+      ## ../acm/setup_acm.yaml -e target_hub=compact). Renders only
       ## the clusters with a 'compact' MetalLB address - hcp-compact1.
       compact: "{{ compact_install_folder }}"
     ## Which hub this run talks to. A disconnected run goes to the disconnected

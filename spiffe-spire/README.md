@@ -107,8 +107,8 @@ cd /root/ocp-onpremise/spiffe-spire
 | Step | What | About |
 | --- | --- | --- |
 | `bmhost` | `../setup_bm_host.yaml` - skipped if the helper VM exists | 15 min |
-| `clusters` | `../standard-cluster/setup_cluster1.yaml` (no ACM) and `../setup_sno.yaml` in parallel - each skipped if its kubeconfig exists | 75 min |
-| `lvm` | per cluster: LVM Storage from the base playbooks (`../standard-cluster/setup_cluster1.yaml --tags lvm`, `../setup_sno.yaml --tags snostorage`) - a no-op on clusters the `clusters` step just built | 1-10 min |
+| `clusters` | `../standard-cluster/setup_cluster1.yaml` (no ACM) and `../sno/setup_sno.yaml` in parallel - each skipped if its kubeconfig exists | 75 min |
+| `lvm` | per cluster: LVM Storage from the base playbooks (`../standard-cluster/setup_cluster1.yaml --tags lvm`, `../sno/setup_sno.yaml --tags snostorage`) - a no-op on clusters the `clusters` step just built | 1-10 min |
 | `preflight` | per cluster: operator in the catalog? which channel? StorageClass? Changes nothing | 1 min |
 | `probe` | per cluster: one short-lived pod in its own namespace - every node name resolves (the agent dials its kubelet by name), both clusters' `*.apps` resolve and their routers answer, the demo images pull. Deletes the namespace after | 1-2 min |
 | `operator` | per cluster: Subscription, CSV, CRDs, API check | 5 min |
@@ -249,7 +249,7 @@ The class comes from the base lab, not from this one. With
 cluster builds themselves (`roles/setup-lvm-storage`): the hub's, on the
 500G `storage_worker<N>.qcow2` disk every worker is built with - ACM is a
 separate playbook (`acm/setup_acm.yaml`) this lab never runs - and the SNO's, on a second
-disk `setup_sno.yaml` hot-plugs after the install. Either way the cluster
+disk `sno/setup_sno.yaml` hot-plugs after the install. Either way the cluster
 comes up with `lvms-vg1` as its default StorageClass, and
 `spire_storage_class: auto` uses it: a thin LV on whichever node the SPIRE
 server is scheduled to, `Delete` reclaim, so `--tags cleanup` deleting the
@@ -258,7 +258,7 @@ PVC also deletes the CA keys - a rebuild is a genuinely new trust domain root.
 On a lab whose clusters were built before LVM Storage moved into the build,
 the `lvm` step (`./build-lab.sh --only lvm`) runs the base playbooks with just
 their storage tags - `../standard-cluster/setup_cluster1.yaml --tags lvm` and
-`../setup_sno.yaml --tags snostorage` - and touches nothing else.
+`../sno/setup_sno.yaml --tags snostorage` - and touches nothing else.
 
 **Fallback, a local PV.** A cluster with no default class at all (the SNO on
 the Ceph path, `use_lvm_storage: false`) gets this lab's own `spire-local`
@@ -581,7 +581,7 @@ oc -n spiffe-demo exec deploy/client -c app -- python3 /app/spiffe_client.py \
 | `SpireServer` never Ready, PVC `Pending` | `oc -n zero-trust-workload-identity-manager get pvc,pv` and `oc get sc` - no `lvms-vg1`? `./build-lab.sh --only lvm`; `oc -n openshift-storage get lvmcluster -o yaml` says why LVM Storage is not Ready |
 | agents fewer than workers | `oc -n zero-trust-workload-identity-manager logs ds/spire-agent`; node attestation errors name the cause |
 | ClusterSPIFFEID `.status` empty | missing or wrong `spec.className` |
-| SNO only: `no identity issued`; agent log `lookup sno on 172.30.0.10:53: no such host` | the agent reaches the kubelet by node name, and the SNO's (`sno`) was not in DNS - and the SNO's own dnsmasq cached the failure: `../setup_sno.yaml --tags snodns` (or `./build-lab.sh --only lvm`) adds the name and clears that cache. [troubleshooting.md](troubleshooting.md) case 2 |
+| SNO only: `no identity issued`; agent log `lookup sno on 172.30.0.10:53: no such host` | the agent reaches the kubelet by node name, and the SNO's (`sno`) was not in DNS - and the SNO's own dnsmasq cached the failure: `../sno/setup_sno.yaml --tags snodns` (or `./build-lab.sh --only lvm`) adds the name and clears that cache. [troubleshooting.md](troubleshooting.md) case 2 |
 | `SpireServer` `Ready=False` after federation, `RouteAvailable=False FederationRouteDisabled` | expected, not a fault: with `managedRoute: "false"` the operator's `Ready` roll-up counts that condition as a failure. Every other condition True means healthy - what the lab's `server-ready.yml` checks. [troubleshooting.md](troubleshooting.md) case 3 |
 | Part C: new paymentservice pod stuck `1/2`, ghostunnel log `client sent an HTTP request to an HTTPS server` | ghostunnel in server mode serves `--status` over TLS unless it is prefixed `http://`, and the probe is plain HTTP: `--status=http://0.0.0.0:8081`. [troubleshooting.md](troubleshooting.md) case 4 |
 | `executable file ... spire-server not found` | the server image keeps the binary neither on `$PATH` nor at upstream's `/opt/spire/bin`; it is the container's entrypoint, so call it as `/proc/1/exe` (`spire_server_cli`; the workshop's `spire` helper does) |

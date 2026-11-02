@@ -228,7 +228,7 @@ hosted_clusters:
   ## 'ingress: metallb' for MetalLB inside it. kubevirt/README.md.
   - name: hcp-kv1
     platform: kubevirt
-  ## The same, but its worker VMs run on the SNO (setup_sno.yaml) instead of
+  ## The same, but its worker VMs run on the SNO (sno/setup_sno.yaml) instead of
   ## the hub: the control plane stays on the hub, and the NodePool creates the
   ## VMs on the SNO's OpenShift Virtualization through a kubeconfig for it
   ## ('external infrastructure'). 'infra' names an entry in
@@ -570,7 +570,7 @@ ip_list:
   registry: 22
 
   # MinIO - local S3-compatible target for OADP backups during
-  # disconnected-install simulation (see setup_minio.yaml). Same
+  # disconnected-install simulation (see oadp/setup_minio.yaml). Same
   # connected-infrastructure treatment as mirror_registry.
   minio: 23
 
@@ -819,7 +819,7 @@ hub2_disconnected_vm_folder: "{{ download_dir }}/hub2d"
 hub2_disconnected_install_folder: "{{ download_dir }}/hub2d_install"
 
 ## ---------------------------------------------------------------------------
-## Single-node OpenShift (setup_sno.yaml, --tags sno)
+## Single-node OpenShift (sno/setup_sno.yaml, --tags sno)
 ## ---------------------------------------------------------------------------
 ## A connected SNO built from an agent ISO: the node pulls its release payload
 ## straight from quay.io with the pull secret in vault.yaml, so it needs no
@@ -856,7 +856,7 @@ sno_disk_gb: 200
 ## hot-plugged into the VM after the install and handed to LVMS, which makes
 ## lvms-vg1 the default StorageClass. Follows use_lvm_storage; set
 ## sno_lvm_storage: false to keep the SNO without storage.
-## Add it to a running SNO with: setup_sno.yaml --tags snostorage
+## Add it to a running SNO with: sno/setup_sno.yaml --tags snostorage
 ##
 ## Thin on the host (qcow2, metadata preallocated only), so the file takes
 ## space only as LVMS writes. 512: the worker VMs of hcp-kv2 and hcp-kv3 run
@@ -891,7 +891,7 @@ sno_extra_clusters:
 sno_fabric_nic: false
 
 ## ---------------------------------------------------------------------------
-## A second SNO in a second rack (setup_sno2.yaml) - optional
+## A second SNO in a second rack (sno/setup_sno2.yaml) - optional
 ## ---------------------------------------------------------------------------
 ## Off unless sno2_enabled is true. With it on, sno2 joins the EVPN lab on its
 ## own fabric segment: its fabric NIC is on virbr2 (clab_fabric_segments.rack2
@@ -1047,9 +1047,9 @@ compact_hosted_cluster_memory: 16384
 ##   hub2  - DR hub        (standard-cluster/setup_cluster2.yaml)
 ##   hubd  - disconnected hub (standard-cluster/setup_cluster1.yaml -e disconnected_install=true)
 ##   compact - the connected compact cluster as a management cluster
-##           (compact-cluster/setup_compact_cluster.yaml --tags acm)
+##           (acm/setup_acm.yaml -e target_hub=compact)
 ## At DR cutover the hosted cluster comes back on the hub2 address and DNS is
-## re-rendered to match - see the MetalLB section of the README.
+## re-rendered to match - see the MetalLB section of acm/README.md.
 ##
 ## There is deliberately no 'hub2d' key. The disconnected DR hub
 ## (standard-cluster/setup_cluster2.yaml with disconnected_install) is a separate cluster
@@ -1147,7 +1147,7 @@ hosted_cluster_metallb_pools:
       hubd: 169
 
   ## Managed by the compact cluster: its only address is under 'compact', the
-  ## metallb_hub value compact-cluster/setup_compact_cluster.yaml --tags acm
+  ## metallb_hub value acm/setup_acm.yaml -e target_hub=compact
   ## configures MetalLB with. No 'hub'/'hub2' address, so no hub ever renders
   ## a pool for it. .100 is outside every DHCP range and every MAC-reserved
   ## octet (those are all two digits or fewer).
@@ -1765,7 +1765,7 @@ mirror_catalog_index: "registry.redhat.io/redhat/redhat-operator-index:v{{ ocp_m
 mirror_release_repository: openshift/release-images
 
 ## setup-minio-vm / setup-minio: local S3-compatible OADP backup target
-## for disconnected-install simulation (see setup_minio.yaml). Also
+## for disconnected-install simulation (see oadp/setup_minio.yaml). Also
 ## gated behind disconnected_install (shared with mirror-registry above).
 ## minio_root_user / minio_root_password go in vault.yaml, not here.
 minio_name: minio
@@ -2339,7 +2339,7 @@ clab_clusters:
       - domain: hub2_worker3
         ip_key: hub2_worker3
 
-  ## The single-node cluster from setup_sno.yaml. One node, which is both
+  ## The single-node cluster from sno/setup_sno.yaml. One node, which is both
   ## master and worker, so it takes an NNCP and a VTEP exactly as a worker
   ## does - single-node OpenShift labels its one node with both roles, which
   ## is why the test workloads' `node-role.kubernetes.io/worker` selector
@@ -2430,7 +2430,7 @@ clab_clusters:
       - domain: "{{ sno_name }}"
         ip_key: sno
 
-  ## The second SNO, in the second rack (setup_sno2.yaml, sno2_enabled). Only
+  ## The second SNO, in the second rack (sno/setup_sno2.yaml, sno2_enabled). Only
   ## on the fabric when sno2_enabled is true - see clab_fabric_clusters below.
   ##
   ## fabric_segment puts its fabric NIC on rack2 rather than virbr1, so it

@@ -18,7 +18,7 @@
 ## Prerequisites, from the repository root: sno3's DNS zone and hcp-kv3's API
 ## name (setup_bm_host.yaml --tags dns - sno3 sits under hub.mylab.com, which
 ## the libvirt network already forwards, so no network rebuild), and the SNO
-## (setup_sno.yaml) for the import-infra phase and for hcp-kv3's VMs.
+## (sno/setup_sno.yaml) for the import-infra phase and for hcp-kv3's VMs.
 ##
 ## Phases - a plain run does all of them, in this order:
 ##   --tags sno           build sno3 (roles/setup-sno, with LVM Storage);
@@ -141,6 +141,6 @@
         msg: >-
           {{ kubevirt_infras[kubevirt_infra_import].kubeconfig }} does not exist, so
           {{ kubevirt_infra_import }} was not imported into hub1. Build it
-          (../setup_sno.yaml) and run --tags import-infra.
+          (../sno/setup_sno.yaml) and run --tags import-infra.
       when: not kubevirt_infra_kubeconfig_stat.stat.exists
       tags: [import-infra]

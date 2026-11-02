@@ -50,7 +50,6 @@ rebuilt in between, so the restored data can only have come from S3.
 | --- | --- |
 | `backup_hosted_cluster.yaml` | Back up a hosted cluster's control plane (Velero `Backup`, fs or csi) and wait for it |
 | `restore_hosted_cluster.yaml` | Restore it onto another hub (Velero `Restore`), optionally with its BareMetalHosts detached |
-| `shutdown_hub_cluster.yaml` | Shut cluster1's VMs down without deleting anything - the "primary hub is gone" step |
 | `templates/` | The Backup/Restore manifests the two playbooks render - one pair per backup method, plus the BareMetalHost detach modifier |
 | `steps.md` | The whole walkthrough as commands only |
 | `summary.md` | What the walkthrough proves, in one page |
@@ -85,7 +84,7 @@ clusters.
 | 3 | [`acm/`](../../acm/) | ACM/MCE, MetalLB, OADP operator on cluster1; AgentServiceConfig |
 | 4 | [`hcp/`](../) | InfraEnv, worker VMs, `hcp-cluster1`, a workload on it |
 | 5 | [`oadp/`](../../oadp/) | OADP wired to S3 on cluster1 |
-| 6 | here | exclude the import secret, back up, shut cluster1 down |
+| 6 | here, `standard-cluster/` | exclude the import secret, back up; shut cluster1 down (`shutdown_cluster.yaml`) |
 | 7 | `ceph/` | destroy and rebuild Ceph (Ceph path) |
 | 8 | `standard-cluster/`, `acm/`, `ceph/`, `oadp/` | cluster2, ACM on it, Ceph attached, AgentServiceConfig, OADP |
 | 9 | here | restore, then cut DNS over to cluster2 |
@@ -280,13 +279,15 @@ No `DataUpload` rows at all is the failure worth recognising - see
 ### Shut down the primary hub
 
 ```bash
-ansible-playbook -i ../../inventory/hosts shutdown_hub_cluster.yaml
-ansible-playbook -i ../../inventory/hosts shutdown_hub_cluster.yaml -e force_shutdown=true   # hard power-off instead of graceful
+(cd ../../standard-cluster && ansible-playbook -i ../inventory/hosts shutdown_cluster.yaml)
+(cd ../../standard-cluster && ansible-playbook -i ../inventory/hosts shutdown_cluster.yaml -e force_shutdown=true)   # hard power-off instead of graceful
 ```
 
-Unlike `cleanup.yaml --tags hub`, this does **not** undefine the domains or
-delete disks - the VMs and their DNS/LB records stay, so the old hub can still
-be inspected, or powered back on.
+`standard-cluster/shutdown_cluster.yaml` stops a standard cluster's VMs -
+cluster1 by default; it follows `target_hub` and `disconnected_install` like
+the other playbooks. Unlike `cleanup.yaml --tags hub`, it does **not** undefine
+the domains or delete disks - the VMs and their DNS/LB records stay, so the old
+hub can still be inspected, or powered back on.
 
 ### Destroy the Ceph cluster (Ceph/CSI DR demo)
 

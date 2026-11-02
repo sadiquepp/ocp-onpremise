@@ -9,6 +9,7 @@
 ##
 ##   ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass                     # cluster1 (hub)
 ##   ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass -e target_hub=hub2  # cluster2 (hub2)
+##   ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass -e target_hub=compact  # the compact cluster
 ##
 ## target_hub picks the cluster (default: target_hub in vars.yaml, normally
 ## hub); disconnected_install picks its disconnected build, the same way the
@@ -19,6 +20,13 @@
 ##   hub          true                   cluster1d/hubd   hub_disconnected_install_folder    hubd
 ##   hub2         false                  cluster2         hub2_install_folder                hub2
 ##   hub2         true                   cluster2d/hub2d  hub2_disconnected_install_folder   hub2
+##   compact      false (required)       compact cluster  compact_install_folder             compact
+##
+## The compact cluster (../compact-cluster, connected only) becomes the
+## management cluster of the hosted clusters whose hosted_cluster_metallb_pools
+## entry carries a 'compact' address (hcp-compact1) - see
+## ../compact-cluster/compact-cluster-hcp.md. Its oc comes from its own install
+## folder, which is put first on PATH for that run.
 ##
 ## metallb_hub picks each hosted cluster's address out of
 ## hosted_cluster_metallb_pools. cluster2 gets hub2 in BOTH modes: as the DR
@@ -47,10 +55,9 @@
 ## it by hand once the cluster has a default StorageClass (README.md here).
 ##
 ## LVM Storage is not part of this: the cluster playbooks install it
-## (use_lvm_storage). The compact cluster's ACM step is its own
-## (../compact-cluster/setup_compact_cluster.yaml --tags acm).
+## (use_lvm_storage), and the compact cluster's build does the same.
 
-- name: Install ACM/MCE, MetalLB and the OADP operator on a standard cluster
+- name: Install ACM/MCE, MetalLB and the OADP operator on a cluster
   hosts: localhost
   become: true
   vars_files:
@@ -68,21 +75,39 @@
       hub2:
         connected: "{{ hub2_install_folder }}"
         disconnected: "{{ hub2_disconnected_install_folder }}"
+      ## Connected only - the assert below refuses compact + disconnected.
+      compact:
+        connected: "{{ compact_install_folder }}"
     acm_mode: "{{ 'disconnected' if (disconnected_install | default(false) | bool) else 'connected' }}"
     acm_kubeconfig: "{{ acm_install_folders[acm_target_hub][acm_mode] }}/auth/kubeconfig"
     acm_metallb_hub: >-
-      {{ 'hub2' if acm_target_hub == 'hub2'
+      {{ acm_target_hub if acm_target_hub in ['hub2', 'compact']
          else ('hubd' if (disconnected_install | default(false) | bool) else 'hub') }}
+  ## The compact cluster's oc lives in its install folder (nothing installs one
+  ## in /usr/bin on a lab that only built the compact cluster), the same PATH
+  ## the compact playbook uses.
+  environment:
+    PATH: >-
+      {{ (compact_install_folder ~ ':') if (target_hub | default('hub')) == 'compact' else '' }}{{ lookup('env', 'PATH') }}
   tasks:
   - name: Fail fast on a target_hub this playbook does not install
     ansible.builtin.assert:
       that:
         - acm_target_hub in acm_install_folders
       fail_msg: >-
-        target_hub must be 'hub' (cluster1) or 'hub2' (cluster2), not
-        '{{ acm_target_hub }}'. For the disconnected builds keep target_hub at
-        hub/hub2 and add -e disconnected_install=true. The compact cluster has
-        its own ACM step: ../compact-cluster/setup_compact_cluster.yaml --tags acm.
+        target_hub must be 'hub' (cluster1), 'hub2' (cluster2) or 'compact'
+        (the compact cluster), not '{{ acm_target_hub }}'. For the disconnected
+        builds keep target_hub at hub/hub2 and add -e disconnected_install=true.
+    tags:
+      - always
+
+  - name: Fail fast on the compact cluster in disconnected mode
+    ansible.builtin.assert:
+      that:
+        - not (acm_target_hub == 'compact' and acm_mode == 'disconnected')
+      fail_msg: >-
+        The compact cluster is made a management cluster connected only
+        (compact-cluster-hcp.md). Run with -e disconnected_install=false.
     tags:
       - always
 
@@ -99,16 +124,18 @@
         - acm_kubeconfig_stat.stat.exists
       fail_msg: >-
         No kubeconfig at {{ acm_kubeconfig }}. Build the cluster first:
-        cd ../standard-cluster && ansible-playbook -i ../inventory/hosts
-        {{ 'setup_cluster2.yaml' if acm_target_hub == 'hub2' else 'setup_cluster1.yaml' }}
-        --ask-vault-pass{{ ' -e disconnected_install=true' if acm_mode == 'disconnected' else '' }}
+        {{ ('cd ../compact-cluster && ansible-playbook -i ../inventory/hosts setup_compact_cluster.yaml --ask-vault-pass')
+           if acm_target_hub == 'compact' else
+           ('cd ../standard-cluster && ansible-playbook -i ../inventory/hosts '
+            ~ ('setup_cluster2.yaml' if acm_target_hub == 'hub2' else 'setup_cluster1.yaml')
+            ~ ' --ask-vault-pass' ~ (' -e disconnected_install=true' if acm_mode == 'disconnected' else '')) }}
     tags:
       - always
 
   - name: Report which cluster ACM is being installed on
     ansible.builtin.debug:
       msg: >-
-        {{ 'cluster2' if acm_target_hub == 'hub2' else 'cluster1' }}
+        {{ {'hub': 'cluster1', 'hub2': 'cluster2', 'compact': 'the compact cluster'}[acm_target_hub] }}
         ({{ acm_mode }}, kubeconfig {{ acm_kubeconfig }}),
         MetalLB addresses from metallb_hub={{ acm_metallb_hub | trim }}
     tags:

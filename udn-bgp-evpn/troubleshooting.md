@@ -947,7 +947,7 @@ And `build-lab.sh` runs them at the same time:
 
 ```bash
 play_bg hub ../standard-cluster/setup_cluster1.yaml
-play_bg sno ../setup_sno.yaml
+play_bg sno ../sno/setup_sno.yaml
 wait_all
 ```
 

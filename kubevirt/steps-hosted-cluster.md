@@ -607,7 +607,7 @@ $SNO3PB --tags sno
 ```
 
 `roles/setup-sno` with sno3's values - the same build as the SNO's, by hand
-too: [../setup_sno.yaml](../setup_sno.yaml) and its role. Skipped once
+too: [../sno/setup_sno.yaml](../sno/setup_sno.yaml) and its role. Skipped once
 `$SNO3` exists. Check:
 
 ```bash

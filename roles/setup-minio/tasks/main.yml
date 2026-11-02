@@ -1,7 +1,7 @@
 ---
 # Tasks file for setup-minio
 #
-# Runs delegated to the minio VM (see setup_minio.yaml). Installs the
+# Runs delegated to the minio VM (see oadp/setup_minio.yaml). Installs the
 # MinIO server + mc client, runs it as a systemd service, and creates
 # the bucket OADP will use as its backup target when disconnected.
 #

@@ -256,7 +256,7 @@ Do not continue until every `DataUpload` is `Completed`.
 ## 14. Shut down hub1
 
 ```bash
-(cd hcp/dr && ansible-playbook -i ../../inventory/hosts shutdown_hub_cluster.yaml)
+(cd standard-cluster && ansible-playbook -i ../inventory/hosts shutdown_cluster.yaml)
 ```
 
 ## 15. Destroy Ceph

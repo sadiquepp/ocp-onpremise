@@ -10,7 +10,7 @@
 ##   ansible-playbook -i ../inventory/hosts setup_bminfra.yaml --ask-vault-pass -e target_hub=compact       # the connected compact cluster
 ##
 ## target_hub=compact puts the InfraEnv on the compact cluster (ACM/MCE from
-## ../compact-cluster/setup_compact_cluster.yaml --tags acm), caches its discovery
+## ../acm/setup_acm.yaml -e target_hub=compact), caches its discovery
 ## ISO under compact-* names and leaves the helper's PXE files alone - see
 ## discovery_file_prefix in vars.yaml.
 ##

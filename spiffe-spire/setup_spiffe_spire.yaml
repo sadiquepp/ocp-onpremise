@@ -122,7 +122,7 @@
         fail_msg: >-
           spire_cluster is '{{ spire_cluster }}', whose kubeconfig should be at
           {{ spire_c.kubeconfig }} - and there is no file there. Build the
-          cluster first (standard-cluster/setup_cluster1.yaml / setup_sno.yaml, or
+          cluster first (standard-cluster/setup_cluster1.yaml / sno/setup_sno.yaml, or
           ./build-lab.sh --only clusters).
         success_msg: "Cluster '{{ spire_cluster }}' -> {{ spire_c.kubeconfig }}"
       tags: *spire_phase_tags

@@ -93,23 +93,23 @@ sno2 resolves through the **helper**, not through libvirt's dnsmasq the way
 the SNO does. Adding a dnsmasq forwarder for a new zone means redefining the
 `default` network, which restarts `virbr0` under every VM in the lab. The
 helper forwards external names to the lab host's own resolvers, so it can
-serve a connected install. `setup_sno2.yaml` checks that before it builds
+serve a connected install. `sno/setup_sno2.yaml` checks that before it builds
 anything.
 
 ### 2. Build sno2
 
 ```bash
-ansible-playbook -i inventory/hosts setup_sno2.yaml --ask-vault-pass \
-  -e sno2_enabled=true
+(cd sno && ansible-playbook -i ../inventory/hosts setup_sno2.yaml --ask-vault-pass \
+  -e sno2_enabled=true)
 ```
 
-This uses the same role as `setup_sno.yaml`, with sno2's own name, install
+This uses the same role as `sno/setup_sno.yaml`, with sno2's own name, install
 folder (`sno2_install`) and VM folder. Expect about the same time as the
 SNO's install.
 
 The SNO's install folder holds its only kubeconfig. The role's pre-flight now
 refuses any install folder whose kubeconfig belongs to another cluster, so
-`setup_sno.yaml -e sno_name=sno2` fails instead of overwriting it.
+`sno/setup_sno.yaml -e sno_name=sno2` fails instead of overwriting it.
 
 ### 3. The rack: virbr2, leaf3, the spine link
 

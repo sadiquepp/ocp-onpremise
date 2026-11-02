@@ -42,12 +42,13 @@ High-Level-Arch
 
 | Directory | What it is | Start at |
 | --- | --- | --- |
-| *(root)* | The shared pieces: `vars.yaml`, `inventory/`, `roles/`, the bare-metal host and helper VM (`setup_bm_host.yaml`), the mirror registry, bastion, MinIO and SNO playbooks, `cleanup.yaml` | this page |
-| [`standard-cluster/`](standard-cluster/) | **cluster1** and **cluster2** - two independent OpenShift clusters (connected or disconnected), with LVM Storage when `use_lvm_storage: true`. cluster2 can be used for anything; the DR walkthrough uses it as the restore target | [standard-cluster/README.md](standard-cluster/README.md) |
-| [`acm/`](acm/) | Turns a standard cluster into a hosted-control-plane hub: ACM/MCE, MetalLB (with one API pool per hosted cluster) and the OADP operator; the AgentServiceConfig | [acm/README.md](acm/README.md) |
+| *(root)* | The shared pieces: `vars.yaml`, `inventory/`, `roles/`, the bare-metal host and helper VM (`setup_bm_host.yaml`), the mirror registry and bastion playbooks, `cleanup.yaml` | this page |
+| [`standard-cluster/`](standard-cluster/) | **cluster1** and **cluster2** - two independent OpenShift clusters (connected or disconnected), with LVM Storage when `use_lvm_storage: true`, and a playbook to shut either one down. cluster2 can be used for anything; the DR walkthrough uses it as the restore target | [standard-cluster/README.md](standard-cluster/README.md) |
+| [`sno/`](sno/) | Single-node OpenShift clusters `sno` and `sno2` - the second cluster of the UDN, SPIFFE and KubeVirt labs | [sno/README.md](sno/README.md) |
+| [`acm/`](acm/) | Turns a standard cluster (or the compact cluster) into a hosted-control-plane hub: ACM/MCE, MetalLB (with one API pool per hosted cluster) and the OADP operator; the AgentServiceConfig | [acm/README.md](acm/README.md) |
 | [`hcp/`](hcp/) | Agent-platform hosted clusters on a hub: InfraEnv, worker VMs (ISO, PXE or BareMetalHost), the HostedCluster bundle, connected and disconnected | [hcp/README.md](hcp/README.md) |
 | [`hcp/dr/`](hcp/dr/) | Back a hosted cluster up on cluster1 and restore it onto cluster2 with OADP - the DR walkthrough, its commands-only [steps.md](hcp/dr/steps.md) and [summary.md](hcp/dr/summary.md) | [hcp/dr/README.md](hcp/dr/README.md) |
-| [`oadp/`](oadp/) | Generic OADP: the S3 bucket and IAM user, `setup_oadp.yaml`, fs vs csi, a hello-openshift smoke test, troubleshooting | [oadp/README.md](oadp/README.md) |
+| [`oadp/`](oadp/) | Generic OADP: the S3 bucket and IAM user, `setup_oadp.yaml`, the local MinIO S3 target for the disconnected lab, fs vs csi, a hello-openshift smoke test, troubleshooting | [oadp/README.md](oadp/README.md) |
 | [`ceph/`](ceph/) | A standalone Ceph 9 cluster attached to a cluster through ODF external mode, instead of LVM Storage | [ceph/README.md](ceph/README.md) |
 | [`compact-cluster/`](compact-cluster/) | A three-node compact cluster from one agent ISO, in the lab or on physical servers | [compact-cluster/README.md](compact-cluster/README.md) |
 | [`kubevirt/`](kubevirt/) | Hosted clusters on the KubeVirt platform | [kubevirt/README.md](kubevirt/README.md) |
@@ -493,7 +494,7 @@ version, with Ceph storage and the CSI backup method, is
 | 4 | [`acm/`](acm/README.md) | ACM/MCE, MetalLB and the OADP operator on cluster1; review and apply the AgentServiceConfig | `setup_acm.yaml` |
 | 5 | [`hcp/`](hcp/README.md) | InfraEnv, worker VMs, hosted cluster(s), a sample workload | `setup_bminfra.yaml`, `setup_hosted_cluster_vm.yaml`, `create_hosted_cluster.yaml` |
 | 6 | [`oadp/`](oadp/README.md) | OADP wired to the S3 bucket | `setup_oadp.yaml` |
-| 7 | [`hcp/dr/`](hcp/dr/README.md) | Back the hosted cluster up, shut cluster1 down, build cluster2 (+ `acm/`, `oadp/` with `-e target_hub=hub2`), restore, cut DNS over | `backup_hosted_cluster.yaml`, `shutdown_hub_cluster.yaml`, `restore_hosted_cluster.yaml` |
+| 7 | [`hcp/dr/`](hcp/dr/README.md) | Back the hosted cluster up, shut cluster1 down, build cluster2 (+ `acm/`, `oadp/` with `-e target_hub=hub2`), restore, cut DNS over | `backup_hosted_cluster.yaml`, `standard-cluster/shutdown_cluster.yaml`, `restore_hosted_cluster.yaml` |
 
 ```bash
 cd standard-cluster && ansible-playbook -i ../inventory/hosts setup_cluster1.yaml --ask-vault-pass && cd ..
@@ -507,8 +508,13 @@ cd acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass
 > (`--tags acm` and `--tags metallb` runs become `acm/setup_acm.yaml` and
 > `acm/setup_acm.yaml --tags metallb`). The hosted-cluster playbooks moved to
 > `hcp/`, the backup/restore/shutdown playbooks and their templates to
-> `hcp/dr/`, `setup_oadp.yaml` to `oadp/`. Variable names, `target_hub` values
-> and rendered-file locations under `roles/` are unchanged.
+> `hcp/dr/`, `setup_oadp.yaml` and `setup_minio.yaml` to `oadp/`,
+> `setup_sno.yaml` and `setup_sno2.yaml` to `sno/`, and `shutdown_hub_cluster.yaml`
+> became `standard-cluster/shutdown_cluster.yaml` (any of the four clusters, by
+> `target_hub` / `disconnected_install`). The compact cluster's `--tags acm` is
+> `acm/setup_acm.yaml -e target_hub=compact`. The unused `gitops-manifests/`
+> and `roles/setup-gitops` are gone (see [`gitops/`](gitops/)). Variable names,
+> `target_hub` values and rendered-file locations under `roles/` are unchanged.
 
 ## Ceph 9 Storage for Hub PVs (ODF External Mode)
 
@@ -657,12 +663,12 @@ delegates.
 | `setup_bm_host.yaml` | Prepare bare metal, create helper VM (DNS/LB) |
 | `setup_mirror_registry.yaml` | Build the mirror registry VM and fill it with oc-mirror - required first when `disconnected_install: true`, refuses to run otherwise |
 | `setup_bastion.yaml` | Build the 256G bastion VM for container image builds and CVE scanning - optional, nothing else depends on it |
-| `setup_minio.yaml` | Build the MinIO VM, a local S3 target for the disconnected flow |
-| `setup_sno.yaml` / `setup_sno2.yaml` | Single-node OpenShift clusters (used by the UDN, SPIFFE and KubeVirt labs) |
+| `oadp/setup_minio.yaml` | Build the MinIO VM, a local S3 target for the disconnected flow |
+| `sno/setup_sno.yaml` / `sno/setup_sno2.yaml` | Single-node OpenShift clusters (used by the UDN, SPIFFE and KubeVirt labs) - see [sno/README.md](sno/README.md) |
 | `cleanup.yaml` | Destroy all VMs, or one piece with `--tags hub\|hub2\|hubd\|hub2d\|hosted\|helper\|minio\|ceph\|sno\|compact\|...` (see [Cleanup](#cleanup)). The mirror registry is only shut down; `--tags registry-destroy` really removes it |
 | `standard-cluster/setup_cluster1.yaml` | Deploy cluster1 (+ LVM Storage): hub1, or hubd when `disconnected_install: true` |
 | `standard-cluster/setup_cluster2.yaml` | Deploy cluster2 (+ LVM Storage): hub2, or hub2d when `disconnected_install: true` |
-| `acm/setup_acm.yaml` | Install ACM/MCE, MetalLB and the OADP operator on cluster1 (or cluster2 with `-e target_hub=hub2`), create the hosted clusters' MetalLB pools, render the AgentServiceConfig |
+| `acm/setup_acm.yaml` | Install ACM/MCE, MetalLB and the OADP operator on cluster1 (cluster2 with `-e target_hub=hub2`, the compact cluster with `-e target_hub=compact`), create the hosted clusters' MetalLB pools, render the AgentServiceConfig |
 | `hcp/setup_bminfra.yaml` | Create the InfraEnv (namespace, pull secret, RBAC) and download its discovery ISO |
 | `hcp/setup_hosted_cluster_vm.yaml` | Create a hosted cluster's worker VMs; builds the disconnected set when `disconnected_install: true`, BareMetalHosts with `hosted_cluster_worker_provisioning=bmh` |
 | `hcp/setup_hosted_cluster2_vm.yaml` | Create `hcp-cluster2`'s worker VMs, PXE-booted |
@@ -670,7 +676,7 @@ delegates.
 | `hcp/setup_sushy_emulator.yaml` / `hcp/cleanup-sushy-emulator.yaml` | Run / remove the Redfish BMCs for BareMetalHost workers |
 | `hcp/dr/backup_hosted_cluster.yaml` | Backup a hosted cluster control plane |
 | `hcp/dr/restore_hosted_cluster.yaml` | Restore a hosted cluster control plane |
-| `hcp/dr/shutdown_hub_cluster.yaml` | Gracefully stop cluster1's VMs (preserves disks) |
+| `standard-cluster/shutdown_cluster.yaml` | Gracefully stop a standard cluster's VMs - cluster1 by default (preserves disks) |
 | `oadp/setup_oadp.yaml` | Wire OADP to S3 (credentials + DPA) |
 | `ceph/setup_ceph.yaml` | Build the standalone Ceph 9 cluster (ceph1-3 + cephadmin) - see [ceph/README.md](ceph/README.md) |
 | `ceph/setup_ceph_odf.yaml` | Install ODF and attach that Ceph cluster to a cluster in external mode |

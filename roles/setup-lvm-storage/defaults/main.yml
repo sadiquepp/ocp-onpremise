@@ -5,7 +5,7 @@
 #
 # Run from the cluster builds themselves when use_lvm_storage is true:
 # standard-cluster/setup_cluster1.yaml and standard-cluster/setup_cluster2.yaml
-# (tag lvm) and setup_sno.yaml (tag snostorage). It used to be part of
+# (tag lvm) and sno/setup_sno.yaml (tag snostorage). It used to be part of
 # setup-hub-acm, which meant a cluster built without ACM had no storage at
 # all; ACM is now a separate playbook (acm/setup_acm.yaml) altogether.
 #

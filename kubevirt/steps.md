@@ -121,8 +121,8 @@ control planes without it. The cost is hub1's disks if the host crashes:
 >
 > ```bash
 > # the SNO - hcp-kv2's and hcp-kv3's worker VMs (hcp-kv2 section below)
-> ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass \
->   -e sno_lvm_storage=true -e sno_memory=98304 -e sno_vcpus=16
+> (cd sno && ansible-playbook -i ../inventory/hosts setup_sno.yaml --ask-vault-pass \
+>   -e sno_lvm_storage=true -e sno_memory=98304 -e sno_vcpus=16)
 >
 > # sno3 - hcp-kv3's control plane: build, MCE and MetalLB, all without hub1
 > cd kubevirt
@@ -136,7 +136,7 @@ control planes without it. The cost is hub1's disks if the host crashes:
 > sno3's import into hub1's ACM waits for hub1. The hcp-kv3 section below runs
 > the whole `setup_sno3_mce.yaml`: it skips the build, finds MCE and MetalLB
 > already there, and does the import. Likewise the hcp-kv2 section's
-> `setup_sno.yaml` is then already done.
+> `sno/setup_sno.yaml` is then already done.
 
 ## 6. Attach Ceph to hub1
 
@@ -263,8 +263,8 @@ host has it (`free -g`, "available"). For hcp-kv2 alone, 64 GiB
 [step 5](#5-hub1)? Then only the checks below are left:
 
 ```bash
-ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass \
-  -e sno_lvm_storage=true -e sno_memory=98304 -e sno_vcpus=16
+(cd sno && ansible-playbook -i ../inventory/hosts setup_sno.yaml --ask-vault-pass \
+  -e sno_lvm_storage=true -e sno_memory=98304 -e sno_vcpus=16)
 
 export KUBECONFIG=/var/lib/libvirt/images/sno_install/auth/kubeconfig
 oc get nodes                                  # sno Ready

@@ -142,7 +142,7 @@
   notify:
     -  Restart_Named
 
-# The single-node cluster (setup_sno.yaml), when vars.yaml carries one.
+# The single-node cluster (sno/setup_sno.yaml), when vars.yaml carries one.
 #
 # Rendered whether or not the cluster has been built: the agent installer needs
 # api.<zone> to resolve before it can watch its own install, so the zone has to
@@ -150,7 +150,7 @@
 # named.rfc1912.zones.j2 - a stanza without its file stops named from starting,
 # which would take every other zone down with it.
 #
-# sno2 (setup_sno2.yaml) gets one too, from the same template, when
+# sno2 (sno/setup_sno2.yaml) gets one too, from the same template, when
 # sno2_enabled is true - setup_dns_sno_names in defaults/main.yml.
 - name: Deploy the single-node clusters' forward zonefiles
   template:
