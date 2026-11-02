@@ -1,7 +1,7 @@
 ---
 # Tasks file for setup-mirror-registry
 #
-# Runs delegated to the mirror-registry VM (see setup_mirror_registry.yaml).
+# Runs delegated to the mirror-registry VM (see mirror-registry/setup_mirror_registry.yaml).
 # Adapted from sadiquepp/openshift's AWS bastion disconnected-install
 # playbook, translated to this repo's baremetal/libvirt conventions and
 # reusing vars already established here (pull_secret from vault.yaml,
@@ -175,10 +175,10 @@
           - "Repeat that command until it completes - each attempt picks up where the last left off."
           - "Logs: /root/mirror/oc-mirror-output/working-dir/logs/ (and /root/mirror/.oc-mirror.log)."
           - ""
-          - "Note: re-running 'ansible-playbook -i inventory/hosts setup_mirror_registry.yaml --ask-vault-pass --tags mirror'"
+          - "Note: re-running 'cd mirror-registry && ansible-playbook -i ../inventory/hosts setup_mirror_registry.yaml --ask-vault-pass --tags mirror'"
           - "will SKIP this task now that the registry answers 'podman login', which is why the manual"
           - "command above is the way to finish the mirror. Once it succeeds, carry on with the rest of"
-          - "the disconnected flow (setup_mirror_registry.yaml --tags mirror-trust, then the hub install)."
+          - "the disconnected flow (mirror-registry/setup_mirror_registry.yaml --tags mirror-trust, then the hub install)."
 
     - name: Fail after printing the manual re-run instructions
       ansible.builtin.fail:

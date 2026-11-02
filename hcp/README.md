@@ -64,7 +64,7 @@ default, `hub2` for cluster2, `compact` for the compact cluster), except that
   see [acm/README.md, Apply the AgentServiceConfig](../acm/README.md#apply-the-agentserviceconfig).
   `setup_bminfra.yaml` refuses to run without it, since an InfraEnv without
   assisted-service never produces a discovery ISO.
-- **Disconnected only:** `setup_mirror_registry.yaml` (repository root) has run
+- **Disconnected only:** `mirror-registry/setup_mirror_registry.yaml` has run
   - that is what leaves the registry's CA at
   `/etc/pki/ca-trust/source/anchors/mirror-registry-rootCA.pem` and logs the
   bare-metal host's podman into the registry, which the disconnected renderings
@@ -87,7 +87,7 @@ creates it on cluster2, `-e target_hub=compact` on the compact cluster
 
 On a disconnected run the rendered pull-secret carries only the
 mirror registry's credentials (read from `mirror_registry_authfile`, the
-authfile `setup_mirror_registry.yaml` logs podman into), not vault.yaml's
+authfile `mirror-registry/setup_mirror_registry.yaml` logs podman into), not vault.yaml's
 `pull_secret`. The discovery agent resolves its image through the mirror
 mappings in the ConfigMap `roles/setup-hub-acm` publishes, so the pull is
 against the mirror registry and is authenticated against that host - with the

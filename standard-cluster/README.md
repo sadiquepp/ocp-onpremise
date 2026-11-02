@@ -85,7 +85,7 @@ VM/install directories, so any combination can be up at once.
   are rendered from `ip_list`, so a cluster whose `ip_list` entries were added
   after the helper was built needs `setup_bm_host.yaml` (its `dns`/`lb` tags are
   enough) re-run first, or `api`/`api-int`/`*.apps` will not resolve.
-- **Disconnected only:** `setup_mirror_registry.yaml` (repository root) has run.
+- **Disconnected only:** `mirror-registry/setup_mirror_registry.yaml` has run.
   The play fails fast if the mirror registry CA has not been trusted on this
   host. See [Setup Mirror Registry](../README.md#setup-mirror-registry-disconnected-only).
 - `disconnected_install` and `use_lvm_storage` are set in `vars.yaml` the way

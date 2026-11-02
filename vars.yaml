@@ -565,7 +565,7 @@ ip_list:
   hub2dlb: 119
 
   # Mirror registry - shared connected infrastructure for disconnected-install
-  # simulation (see setup_mirror_registry.yaml). Stays reachable/connected
+  # simulation (see mirror-registry/setup_mirror_registry.yaml). Stays reachable/connected
   # even when master/worker IPs are cut off from the real internet.
   registry: 22
 
@@ -951,7 +951,7 @@ compact_ingress_vip_key: compact_ingress
 ## The disconnected compact cluster (compact-cluster/setup_compact_cluster_disconnected.yaml).
 ## Same role, same bonds, its own name, addresses and folders, so both can be
 ## up at once. Its images come only from the mirror registry
-## (setup_mirror_registry.yaml) and its nodes' egress past the lab subnet is
+## (mirror-registry/setup_mirror_registry.yaml) and its nodes' egress past the lab subnet is
 ## cut with iptables, exactly as for the disconnected hub (hubd).
 compactd_name: compactd
 compactd_install_folder: "{{ download_dir }}/compactd_install"
@@ -1700,12 +1700,12 @@ hosted_cluster_domains:
 ## kept only for older playbooks that still reference them.
 
 ## setup-mirror-registry-vm / setup-mirror-registry: the standalone VM
-## used to simulate a disconnected install (see setup_mirror_registry.yaml).
+## used to simulate a disconnected install (see mirror-registry/setup_mirror_registry.yaml).
 ## disconnected_install gates whether any of this is used at all - default
 ## false so connected installs are completely unaffected. It is set in the
 ## START HERE block at the top.
 ## ===========================================================================
-## Bastion VM (setup_bastion.yaml)
+## Bastion VM (bastion/setup_bastion.yaml)
 ##
 ## A big-disk guest for building and scanning container images, because the
 ## baremetal host does not have the room and filling its / takes the lab down.

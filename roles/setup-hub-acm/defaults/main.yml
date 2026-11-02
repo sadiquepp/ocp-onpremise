@@ -113,13 +113,13 @@ agent_service_os_images:
 ## separate set of templates rather than extra conditionals bolted onto the
 ## connected ones.
 ##
-## Everything below assumes the mirror registry from setup_mirror_registry.yaml
+## Everything below assumes the mirror registry from mirror-registry/setup_mirror_registry.yaml
 ## and the hub from a disconnected standard-cluster/setup_cluster1.yaml run, so it reads
 ## mirror_registry_* / mirror_release_repository / ip_list from vars.yaml.
 ## ---------------------------------------------------------------------------
 
 ## The one switch the whole disconnected path hangs off - the same
-## disconnected_install setup_mirror_registry.yaml and standard-cluster/setup_cluster1.yaml
+## disconnected_install mirror-registry/setup_mirror_registry.yaml and standard-cluster/setup_cluster1.yaml
 ## already gate on, not a second name for it. Set it in vars.yaml or pass
 ## -e disconnected_install=true. Repeated here only so the role still has a
 ## value if it is ever run without vars.yaml.

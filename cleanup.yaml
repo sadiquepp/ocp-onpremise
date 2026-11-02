@@ -571,7 +571,7 @@
 ## they next need to pull an image.
 ##
 ## Re-create it with:
-##   ansible-playbook -i inventory/hosts setup_mirror_registry.yaml \
+##   cd mirror-registry && ansible-playbook -i ../inventory/hosts setup_mirror_registry.yaml \
 ##     -e disconnected_install=true --ask-vault-pass
 - name: Remove the mirror registry
   hosts: localhost
@@ -658,5 +658,5 @@
         {{ 'The CA and podman login for it were removed from this host too.'
            if (mirror_registry_remove_local_trust | bool)
            else 'The CA and podman login for it were kept, and now point at a registry that no longer exists.' }}
-        Rebuild it with: ansible-playbook -i inventory/hosts
-        setup_mirror_registry.yaml -e disconnected_install=true --ask-vault-pass
+        Rebuild it with: cd mirror-registry && ansible-playbook -i
+        ../inventory/hosts setup_mirror_registry.yaml -e disconnected_install=true --ask-vault-pass

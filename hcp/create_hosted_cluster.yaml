@@ -30,7 +30,7 @@
 ## and a pull secret holding only the mirror registry's credentials:
 ##   ansible-playbook -i ../inventory/hosts create_hosted_cluster.yaml --ask-vault-pass \
 ##     -e disconnected_install=true
-## Requires ../setup_mirror_registry.yaml to have run (that is what puts the
+## Requires ../mirror-registry/setup_mirror_registry.yaml to have run (that is what puts the
 ## registry CA and a podman login on this host).
 ##
 ## A disconnected run renders hosted_clusters_disconnected (hcp-cluster1-d,

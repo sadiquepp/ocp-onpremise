@@ -206,8 +206,8 @@ reads `ansible.cfg` from the working directory, and the one in this folder
 adds `../roles` to `roles_path`. Run from the repository root, Ansible cannot
 find `setup-compact-cluster`. The Ceph playbooks run from inside `ceph/` for
 the same reason ([ceph/README.md](../ceph/README.md)). The shared playbooks
-(`setup_bm_host.yaml`, `setup_mirror_registry.yaml`, `cleanup.yaml`) stay at
-the repository root and run from there.
+run from their own places: `setup_bm_host.yaml` and `cleanup.yaml` from the
+repository root, `setup_mirror_registry.yaml` from inside `mirror-registry/`.
 
 | Tag | What it does | Role file |
 |---|---|---|

@@ -28,7 +28,7 @@
 ## installs roles/setup-hub-cluster-disconnected into
 ## hub_disconnected_install_folder instead, and the cluster is configured to
 ## pull every release/operator image solely from the local mirror registry
-## (see ../setup_mirror_registry.yaml). It also cuts the cluster's own nodes off
+## (see ../mirror-registry/setup_mirror_registry.yaml). It also cuts the cluster's own nodes off
 ## from the real internet first, so a "disconnected" install cannot quietly
 ## succeed for the wrong reason.
 ##
@@ -48,7 +48,7 @@
 ## in, otherwise api/api-int/*.apps for that cluster won't resolve.
 ##
 ## A disconnected run additionally requires the mirror registry to be stood up
-## already via ../setup_mirror_registry.yaml (mirror registry CA trusted +
+## already via ../mirror-registry/setup_mirror_registry.yaml (mirror registry CA trusted +
 ## credentials available locally, oc-mirror output present on the
 ## mirror-registry VM); the preflight below fails fast if it isn't.
 
@@ -80,7 +80,7 @@
         cluster1 install into {{ hub_install_folder_selected }}
 
   # Only the disconnected install has a prerequisite outside this playbook:
-  # ../setup_mirror_registry.yaml has to have stood the registry up and run
+  # ../mirror-registry/setup_mirror_registry.yaml has to have stood the registry up and run
   # setup-mirror-registry-trust here, or the install cannot pull anything.
   - name: Fail fast if the mirror registry CA has not been trusted locally yet
     ansible.builtin.stat:
@@ -92,7 +92,7 @@
       that:
         - mirror_ca_status.stat.exists
       fail_msg: >-
-        Mirror registry CA not found locally - run setup_mirror_registry.yaml
+        Mirror registry CA not found locally - run mirror-registry/setup_mirror_registry.yaml
         (repository root) first: it stands up the mirror registry and runs
         setup-mirror-registry-trust to trust its CA here.
     when: hub_disconnected | bool

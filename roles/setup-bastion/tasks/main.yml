@@ -1,7 +1,7 @@
 ---
 # Tasks file for setup-bastion
 #
-# Runs inside the bastion VM. Delegate it there (setup_bastion.yaml does), and
+# Runs inside the bastion VM. Delegate it there (bastion/setup_bastion.yaml does), and
 # only after roles/setup-rhsm has registered the guest -- every dnf task below
 # needs entitled repos, and an unregistered RHEL 9 guest fails them all with
 # "No match for argument" rather than anything about subscriptions.
@@ -141,7 +141,7 @@
 
 # podman and skopeo will not push to the lab's Quay until its self-signed CA is
 # trusted. Fetched from the registry VM rather than regenerated, so this needs
-# setup_mirror_registry.yaml to have run.
+# mirror-registry/setup_mirror_registry.yaml to have run.
 - name: Fetch the mirror registry CA from the registry VM
   ansible.builtin.slurp:
     src: /etc/pki/ca-trust/source/anchors/mirror-registry-rootCA.pem

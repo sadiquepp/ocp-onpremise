@@ -3,7 +3,7 @@
 ## out of reach. One instance, one bucket per consumer (minio_buckets in
 ## vars.yaml) - the OADP backup target today, Loki, Tempo or anything else
 ## that speaks S3 later.
-## Structured the same way as ../setup_mirror_registry.yaml: VM creation
+## Structured the same way as ../mirror-registry/setup_mirror_registry.yaml: VM creation
 ## happens on the baremetal host (localhost), then the actual in-guest
 ## setup is delegated into the new VM.
 ##

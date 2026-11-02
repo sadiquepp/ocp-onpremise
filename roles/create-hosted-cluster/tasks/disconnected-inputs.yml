@@ -11,7 +11,7 @@
 #      pull secret in place of vault's pull_secret.
 #
 # Both files are put there by roles/setup-mirror-registry-trust
-# (setup_mirror_registry.yaml), so that has to have run against this lab first.
+# (mirror-registry/setup_mirror_registry.yaml), so that has to have run against this lab first.
 #
 # Included from tasks/main.yml only when something in this run is disconnected.
 
@@ -58,7 +58,7 @@
       - hcp_mirror_ca_status.stat.exists
     fail_msg: >-
       {{ hosted_cluster_mirror_ca_path }} not found - run
-      setup_mirror_registry.yaml first (roles/setup-mirror-registry-trust is
+      mirror-registry/setup_mirror_registry.yaml first (roles/setup-mirror-registry-trust is
       what fetches the registry's CA back onto this host).
 
 - name: Read the mirror registry CA

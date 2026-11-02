@@ -1,5 +1,5 @@
 ## Creates the bastion VM and sets it up for building and scanning container
-## images. Structured the same way as setup_mirror_registry.yaml: VM creation
+## images. Structured the same way as ../mirror-registry/setup_mirror_registry.yaml: VM creation
 ## happens on the baremetal host (localhost), then the in-guest setup is
 ## delegated into the new VM.
 ##
@@ -17,17 +17,17 @@
 ## predictable address; it is where you run builds from, not something a
 ## cluster talks to.
 ##
-## Reuses the base image that setup_bm_host.yaml prepares (lab ssh key injected,
+## Reuses the base image that ../setup_bm_host.yaml prepares (lab ssh key injected,
 ## cloud-init removed), so run that first. Registry trust and login additionally
-## need setup_mirror_registry.yaml to have run -- turn them off with
+## need ../mirror-registry/setup_mirror_registry.yaml to have run -- turn them off with
 ## -e bastion_trust_mirror_registry=false -e bastion_registry_login=false if you
 ## only want the VM and the tooling.
 ##
 ## Nothing in the connected or disconnected install flow imports this playbook,
 ## so running it changes nothing about either.
 ##
-## Usage:
-##   ansible-playbook -i inventory/hosts setup_bastion.yaml --ask-vault-pass
+## Usage (from inside bastion/):
+##   ansible-playbook -i ../inventory/hosts setup_bastion.yaml --ask-vault-pass
 ##
 ## Useful tags: preflight, virt, packages, repos, scanners, clients,
 ## registry-trust, env.
@@ -45,8 +45,8 @@
   hosts: localhost
   become: true
   vars_files:
-    - vars.yaml
-    - vault.yaml
+    - ../vars.yaml
+    - ../vault.yaml
   tasks:
   - name: Fail fast if org_id/activation_key are missing from vault.yaml
     ansible.builtin.assert:
@@ -74,8 +74,8 @@
   gather_facts: false
   become: true
   vars_files:
-    - vars.yaml
-    - vault.yaml
+    - ../vars.yaml
+    - ../vault.yaml
   tasks:
   - ansible.builtin.import_role:
       name: setup-rhsm

@@ -9,7 +9,7 @@ over BGP/EVPN and SPIFFE/SPIRE.
 
 Each area lives in its own directory with its own README. This page covers what
 every one of them shares - the bare-metal host, `vars.yaml`/`vault.yaml`, the
-helper VM and the optional mirror registry - and points at the rest.
+helper VM - and points at the rest.
 
 High-Level-Arch
 
@@ -43,7 +43,8 @@ High-Level-Arch
 
 | Directory | What it is | Start at |
 | --- | --- | --- |
-| *(root)* | The shared pieces: `vars.yaml`, `inventory/`, `roles/`, the bare-metal host and helper VM (`setup_bm_host.yaml`), the mirror registry and bastion playbooks, `cleanup.yaml` | this page |
+| *(root)* | The shared pieces: `vars.yaml`, `inventory/`, `roles/`, the bare-metal host and helper VM (`setup_bm_host.yaml`), `cleanup.yaml` | this page |
+| [`mirror-registry/`](mirror-registry/) | The Quay mirror registry filled by oc-mirror - required first for anything disconnected | [mirror-registry/README.md](mirror-registry/README.md) |
 | [`standard-cluster/`](standard-cluster/) | **cluster1** and **cluster2** - two independent OpenShift clusters (connected or disconnected), with LVM Storage when `use_lvm_storage: true`, and a playbook to shut either one down. cluster2 can be used for anything; the DR walkthrough uses it as the restore target | [standard-cluster/README.md](standard-cluster/README.md) |
 | [`sno/`](sno/) | Single-node OpenShift clusters `sno` and `sno2` - the second cluster of the UDN, SPIFFE and KubeVirt labs | [sno/README.md](sno/README.md) |
 | [`acm/`](acm/) | Turns a standard cluster (or the compact cluster) into a hosted-control-plane hub: ACM/MCE, MetalLB (with one API pool per hosted cluster) and the OADP operator; the AgentServiceConfig | [acm/README.md](acm/README.md) |
@@ -51,6 +52,7 @@ High-Level-Arch
 | [`hcp/dr/`](hcp/dr/) | Back a hosted cluster up on cluster1 and restore it onto cluster2 with OADP - the DR walkthrough, its commands-only [steps.md](hcp/dr/steps.md) and [summary.md](hcp/dr/summary.md) | [hcp/dr/README.md](hcp/dr/README.md) |
 | [`oadp/`](oadp/) | Generic OADP: the S3 bucket and IAM user, `setup_oadp.yaml`, fs vs csi, a hello-openshift smoke test, troubleshooting | [oadp/README.md](oadp/README.md) |
 | [`minio/`](minio/) | MinIO, the disconnected lab's local S3-compatible store - one bucket per consumer: OADP backups now, Loki/Tempo later | [minio/README.md](minio/README.md) |
+| [`bastion/`](bastion/) | A 256G VM for building and scanning container images - optional | [bastion/README.md](bastion/README.md) |
 | [`ceph/`](ceph/) | A standalone Ceph 9 cluster attached to a cluster through ODF external mode, instead of LVM Storage | [ceph/README.md](ceph/README.md) |
 | [`compact-cluster/`](compact-cluster/) | A three-node compact cluster from one agent ISO, in the lab or on physical servers | [compact-cluster/README.md](compact-cluster/README.md) |
 | [`kubevirt/`](kubevirt/) | Hosted clusters on the KubeVirt platform | [kubevirt/README.md](kubevirt/README.md) |
@@ -180,7 +182,7 @@ Review and adjust lab-specific values:
  - `mirror_registry_password` is only needed for the disconnected flow
    (`disconnected_install: true`) - it is the password the Quay
    `mirror-registry` appliance is installed with, and the one every later
-   podman/oc-mirror login uses. `setup_mirror_registry.yaml` asserts it is
+   podman/oc-mirror login uses. `mirror-registry/setup_mirror_registry.yaml` asserts it is
    present before it creates anything.
 
 ```bash
@@ -313,89 +315,19 @@ configured locally.
 
 ### Setup Mirror Registry (disconnected only)
 
-**Skip this section entirely when `disconnected_install: false`.**
-
-With `disconnected_install: true` this is a prerequisite for everything that
-follows. Run it **after** `setup_bm_host.yaml` - it needs the helper's DNS to
-resolve `registry.<hub_domain>` - and **before** any cluster is built, since a
-disconnected install pulls every image from it:
+**Skip this when `disconnected_install: false`.** With `disconnected_install:
+true` it is a prerequisite for everything that follows: run it **after**
+`setup_bm_host.yaml` and **before** any cluster is built, since a disconnected
+install pulls every image from it.
 
 ```bash
-ansible-playbook -i inventory/hosts setup_mirror_registry.yaml --ask-vault-pass
+cd mirror-registry && ansible-playbook -i ../inventory/hosts setup_mirror_registry.yaml --ask-vault-pass && cd ..
 ```
 
-The playbook refuses to run unless `disconnected_install: true`, so it is the
-one step that cannot be reached by accident from a connected lab.
-
-It builds a standalone `registry` VM (`.22`), which stays connected to the
-internet - it is the thing that holds the images - installs the Quay
-`mirror-registry` appliance on it, and fills it with `oc-mirror` v2:
-
-| Tag | Step |
-| --- | --- |
-| `mirror-vm` | creates the `registry` VM - a 500G sparse disk expanded from the RHEL9 base image with `virt-resize`, then defined and booted |
-| `rhsm` | registers it with subscription-manager (hence `org_id` / `activation_key`) |
-| `mirror` | installs `mirror-registry` (Quay + its root CA), logs podman in, renders `/root/mirror/imageset-config.yaml` and runs `oc mirror ... --v2` into the registry |
-| `mirror-trust` | copies the registry's root CA into **this** host's trust store and logs the bare-metal host's podman in, writing `mirror_registry_authfile` (`/root/.docker/config.json`) |
-
-Before running it:
-
-- `mirror_registry_password`, `org_id` and `activation_key` must be in
-  `vault.yaml` - the playbook asserts all three.
-- Review the mirror block in `vars.yaml`: `mirror_registry_disk_size` (500G,
-  sparse), `mirror_registry_memory` / `mirror_registry_vcpus`,
-  `mirror_ocp_version` (defaults to
-  `<ocp_major_version>.<ocp_minor_version>`, i.e. what the rest of the lab
-  installs) and `mirror_catalog_operator_packages`. That last list is what gets
-  mirrored beyond the release payload; it already covers the operators
-  the clusters and `acm/` install (ACM, MCE, LVM Storage, MetalLB, OADP, cincinnati),
-  so add anything else your lab needs **before** the mirror runs rather than
-  after.
-- Mirroring the release payload plus those catalogs pulls thousands of images -
-  budget the disk and the time.
-
-The `mirror-trust` step is what the rest of the flow actually reads: the cluster
-install asserts the CA is at
-`/etc/pki/ca-trust/source/anchors/mirror-registry-rootCA.pem` before it starts,
-and `setup-bminfra` / `create-hosted-cluster` build their mirror-only pull
-secrets from the authfile.
-
-**If `oc-mirror` fails, do not rebuild the VM.** The registry, the tools, the
-pull secret and the ImageSetConfiguration are all in place by then, and
-oc-mirror v2 resumes from its workspace, so each attempt only pulls what is
-still missing. Finish it by hand on the VM - the playbook prints this same
-command when it fails:
-
-```bash
-ssh root@192.168.122.22
-cd /root/mirror
-oc mirror -c imageset-config.yaml --workspace file://oc-mirror-output/ \
-  docker://registry.hub.mylab.com:8443 --v2
-# logs: /root/mirror/oc-mirror-output/working-dir/logs/ and /root/mirror/.oc-mirror.log
-```
-
-Re-running the playbook's `mirror` tag will **skip** the mirror once the
-registry answers `podman login`, which is why finishing it by hand is the way
-out. When it completes, run the trust step and carry on:
-
-```bash
-ansible-playbook -i inventory/hosts setup_mirror_registry.yaml --ask-vault-pass --tags mirror-trust
-```
-
-Verify before building a cluster:
-
-```bash
-# on the bare-metal host - the two things every later step reads
-ls -l /etc/pki/ca-trust/source/anchors/mirror-registry-rootCA.pem
-grep -o 'registry[^"]*:8443' /root/.docker/config.json
-
-# on the mirror-registry VM - what oc-mirror published for the cluster to apply
-ssh root@192.168.122.22 'find /root/mirror/oc-mirror-output -type d -name cluster-resources'
-```
-
-That last directory holds the `ImageDigestMirrorSet` / `ImageTagMirrorSet` /
-`CatalogSource` the cluster install stages and applies as day-2 resources; the
-cluster install fails with a clear message if it is not there yet.
+It builds the `registry` VM (`.22`), installs the Quay `mirror-registry`
+appliance, fills it with `oc-mirror` v2, and trusts its CA on this host. What
+it mirrors, what to do when `oc-mirror` fails partway, and how to verify it
+before building a cluster: [mirror-registry/README.md](mirror-registry/README.md).
 
 ### Setup MinIO (disconnected, optional)
 
@@ -412,87 +344,14 @@ Endpoint, buckets (`minio_buckets`) and vault entries: [minio/README.md](minio/R
 
 ### Setup Bastion VM (optional)
 
-A big-disk guest for building and scanning container images. Nothing else in the
-lab depends on it, and nothing in the install flow imports it — run it when you
-need it, skip it otherwise.
-
-It exists because the bare-metal host does not have the room. Building container
-images is disk-hungry: the hardened-vs-UBI image comparison in
-[`sadiquepp/openshift`](https://github.com/sadiquepp/openshift/tree/main/test-workloads/online-boutique/hardened)
-pulls a dozen base images, produces two full stacks of twelve service images,
-and saves each one to a tar in order to scan it. On a host whose `/` is nearly
-full that either fails partway or fills `/` — and filling `/` on the hypervisor
-takes the whole lab with it.
+A 256G guest for building and scanning container images - the bare-metal host
+does not have the room. Nothing else depends on it:
 
 ```bash
-ansible-playbook -i inventory/hosts setup_bastion.yaml --ask-vault-pass
+cd bastion && ansible-playbook -i ../inventory/hosts setup_bastion.yaml --ask-vault-pass && cd ..
 ```
 
-256G disk, 8 vCPU, 16G RAM by default (`bastion_*` in `vars.yaml`). It reuses the
-base image `setup_bm_host.yaml` prepared, so run that first. Registry trust and
-login additionally need `setup_mirror_registry.yaml`; without it, run:
-
-```bash
-ansible-playbook -i inventory/hosts setup_bastion.yaml --ask-vault-pass \
-  -e bastion_trust_mirror_registry=false -e bastion_registry_login=false
-```
-
-**If `/var/lib/libvirt/images` is itself on a small `/`,** point the disk
-somewhere with room — that is the whole point of the exercise:
-
-```bash
-ansible-playbook -i inventory/hosts setup_bastion.yaml --ask-vault-pass \
-  -e bastion_disk_dir=/data/libvirt/images
-```
-
-The role refuses to create the disk if the filesystem holding `bastion_disk_dir`
-has less free space than `bastion_disk_size`, and names the filesystem and the
-shortfall when it does. Pass `-e bastion_require_free_space=false` to overcommit
-the sparse qcow2 on purpose.
-
-**Tags can be used on their own.** Address discovery and the ssh wait are tagged
-`always`, so the in-memory `bastion` group is rebuilt on every run regardless of
-what else is selected — `--tags repos,scanners` works without recreating the VM.
-That matters because the group is built by `add_host` and exists only for the
-duration of a run; nothing is written to `inventory/hosts`.
-
-**This VM has no address reservation.** Unlike helper and mirror-registry there
-is no `ip_list` entry and no `ip-dhcp-host` entry on the `default` network — it
-takes whatever libvirt's DHCP gives it, which is fine because nothing in the lab
-needs to reach it at a predictable address. The playbook prints the address and
-adds the host to the in-memory inventory for its own later plays. To find it
-again:
-
-```bash
-virsh domifaddr bastion
-```
-
-**The clone is pinned to a branch.** `main` in `sadiquepp/openshift` does not yet
-carry `test-workloads/online-boutique/hardened` — the build and scan tooling this
-bastion exists to run — so `bastion_git_repos` pins that entry to the branch that
-does. Drop the `version:` line once it merges, otherwise the paths in
-`/root/.bastion-env` point at a directory that is not there.
-
-What it installs: podman, buildah, skopeo, git, jq and friends; `grype` with its
-vulnerability database primed (~1GB, pre-pulled so the first scan does not pay
-for it, and so a database that downloads but cannot unpack fails here rather
-than mid-comparison); `oc` and `kubectl`; the mirror registry's CA in the trust
-bundle plus a `podman login` to it; and a clone of `sadiquepp/openshift` under
-`/root/work`. `trivy` is available but off by default (`bastion_install_trivy`)
-— the two scanners use different databases, so the second is a cross-check
-rather than a requirement.
-
-Then, on the bastion:
-
-```bash
-source /root/.bastion-env     # sets REGISTRY and NAMESPACE
-cd /root/work/openshift/test-workloads/online-boutique/hardened
-./preflight.sh --build-check
-```
-
-Extra dnf repositories, if the packages you want are not in the subscription's,
-go in `bastion_extra_dnf_repos` (passed through to `yum_repository`); extra RHSM
-repository IDs go in `bastion_rhsm_repos`.
+Sizing, tags, registry trust and what it installs: [bastion/README.md](bastion/README.md).
 
 ## Hosted control planes, end to end
 
@@ -504,7 +363,7 @@ version, with Ceph storage and the CSI backup method, is
 | # | Directory | What | Playbook |
 | --- | --- | --- | --- |
 | 1 | root | Bare-metal host and helper VM (DNS, DHCP, haproxy) | `setup_bm_host.yaml` |
-| 2 | root | Mirror registry - disconnected only | `setup_mirror_registry.yaml` |
+| 2 | [`mirror-registry/`](mirror-registry/README.md) | Mirror registry - disconnected only | `setup_mirror_registry.yaml` |
 | 3 | [`standard-cluster/`](standard-cluster/README.md) | cluster1, with LVM Storage (or `use_lvm_storage: false` and [`ceph/`](ceph/README.md) for Ceph) | `setup_cluster1.yaml` |
 | 4 | [`acm/`](acm/README.md) | ACM/MCE, MetalLB and the OADP operator on cluster1; review and apply the AgentServiceConfig | `setup_acm.yaml` |
 | 5 | [`hcp/`](hcp/README.md) | InfraEnv, worker VMs, hosted cluster(s), a sample workload | `setup_bminfra.yaml`, `setup_hosted_cluster_vm.yaml`, `create_hosted_cluster.yaml` |
@@ -524,6 +383,7 @@ cd acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass
 > `acm/setup_acm.yaml --tags metallb`). The hosted-cluster playbooks moved to
 > `hcp/`, the backup/restore/shutdown playbooks and their templates to
 > `hcp/dr/`, `setup_oadp.yaml` to `oadp/`, `setup_minio.yaml` to `minio/`,
+> `setup_mirror_registry.yaml` to `mirror-registry/`, `setup_bastion.yaml` to `bastion/`,
 > `setup_sno.yaml` and `setup_sno2.yaml` to `sno/`, and `shutdown_hub_cluster.yaml`
 > became `standard-cluster/shutdown_cluster.yaml` (any of the four clusters, by
 > `target_hub` / `disconnected_install`). The compact cluster's `--tags acm` is
@@ -676,8 +536,8 @@ delegates.
 | Playbook | Description |
 | --- | --- |
 | `setup_bm_host.yaml` | Prepare bare metal, create helper VM (DNS/LB) |
-| `setup_mirror_registry.yaml` | Build the mirror registry VM and fill it with oc-mirror - required first when `disconnected_install: true`, refuses to run otherwise |
-| `setup_bastion.yaml` | Build the 256G bastion VM for container image builds and CVE scanning - optional, nothing else depends on it |
+| `mirror-registry/setup_mirror_registry.yaml` | Build the mirror registry VM and fill it with oc-mirror - required first when `disconnected_install: true`, refuses to run otherwise |
+| `bastion/setup_bastion.yaml` | Build the 256G bastion VM for container image builds and CVE scanning - optional, nothing else depends on it |
 | `minio/setup_minio.yaml` | Build the MinIO VM, the disconnected lab's local S3 store (buckets in `minio_buckets`) - see [minio/README.md](minio/README.md) |
 | `sno/setup_sno.yaml` / `sno/setup_sno2.yaml` | Single-node OpenShift clusters (used by the UDN, SPIFFE and KubeVirt labs) - see [sno/README.md](sno/README.md) |
 | `cleanup.yaml` | Destroy all VMs, or one piece with `--tags hub\|hub2\|hubd\|hub2d\|hosted\|helper\|minio\|ceph\|sno\|compact\|...` (see [Cleanup](#cleanup)). The mirror registry is only shut down; `--tags registry-destroy` really removes it |
