@@ -119,6 +119,12 @@ ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass --tags oa
 
 # both operators, ACM untouched - for a cluster whose ACM was installed by hand
 ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass --tags metallb,oadp
+
+# render the AgentServiceConfig (and apply its prerequisites: the Provisioning
+# config, and disconnected the mirror config / osImages / ClusterImageSets),
+# ACM Subscription and MultiClusterHub untouched - the MultiClusterHub must
+# already be running
+ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass --tags asc
 ```
 
 Add `-e target_hub=hub2` (and/or `-e disconnected_install=true`) to point any
@@ -194,7 +200,9 @@ The AgentServiceConfig configures the Central Infrastructure Management (CIM)
 service that the Agent-platform hosted clusters in [`hcp/`](../hcp/) need. The
 role renders it to `roles/setup-hub-acm/files/.rendered-05-agentserviceconfig.yaml`
 and stops there: review it (customise the `osImages` to the ones you want for
-the hosted clusters) and apply it yourself.
+the hosted clusters) and apply it yourself. On a cluster whose ACM was
+installed by hand, `--tags asc` renders it (and applies its prerequisites)
+without the rest of the playbook.
 
 - Make sure ACM and the `MultiClusterHub` are fully operational first.
 - The hub also needs a **default StorageClass** by this point. The

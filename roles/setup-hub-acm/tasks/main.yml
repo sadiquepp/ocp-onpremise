@@ -123,6 +123,11 @@
   shell: |
     oc apply -f "{{ role_path }}/files/acm/04-multicluster-hub.yaml"
 
+# --tags asc: the AgentServiceConfig and what it needs (the Provisioning
+# config, and on a disconnected hub the mirror config, the staged osImages and
+# the ClusterImageSets), without the ACM Subscription or the MultiClusterHub -
+# for a cluster whose ACM was installed or pinned by hand. The MultiClusterHub
+# has to be up already.
 - name: Wait for the Provisioning CRD to be established
   shell: |
     oc wait --for=condition=Established crd/provisionings.metal3.io --timeout=300s
@@ -130,10 +135,14 @@
   retries: 3
   delay: 20
   until: provisioning_crd_wait.rc == 0
+  tags:
+    - asc
 
 - name: Apply Provisioning configuration (required by metal3/baremetal-operator before AgentServiceConfig)
   shell: |
     oc apply -f "{{ role_path }}/files/acm/04b-provisioning.yaml"
+  tags:
+    - asc
 
 # MetalLB: one single-address pool per hosted cluster. In its own file so
 # --tags metallb re-runs just this on a hub that is already up.
@@ -150,16 +159,34 @@
 # and the osImage urls the second one stages. Connected runs skip all of it and
 # render exactly what they always did.
 - name: Set up the mirror registry trust and mirror mappings (disconnected)
-  ansible.builtin.include_tasks: disconnected-mirror-config.yml
+  ansible.builtin.include_tasks:
+    file: disconnected-mirror-config.yml
+    apply:
+      tags:
+        - asc
   when: disconnected_install | bool
+  tags:
+    - asc
 
 - name: Stage the RHCOS live ISOs on the helper's web server (disconnected)
-  ansible.builtin.include_tasks: disconnected-os-images.yml
+  ansible.builtin.include_tasks:
+    file: disconnected-os-images.yml
+    apply:
+      tags:
+        - asc
   when: disconnected_install | bool
+  tags:
+    - asc
 
 - name: Create the ClusterImageSets for the mirrored releases (disconnected)
-  ansible.builtin.include_tasks: disconnected-cluster-image-sets.yml
+  ansible.builtin.include_tasks:
+    file: disconnected-cluster-image-sets.yml
+    apply:
+      tags:
+        - asc
   when: disconnected_install | bool
+  tags:
+    - asc
 
 # Both branches render to the same path, so the review-and-apply step below
 # (and the one in acm/README.md) is the same either way.
@@ -168,12 +195,16 @@
     src: acm/05-agentserviceconfig.yaml.j2
     dest: "{{ role_path }}/files/.rendered-05-agentserviceconfig.yaml"
   when: not (disconnected_install | bool)
+  tags:
+    - asc
 
 - name: Render AgentServiceConfig (disconnected)
   template:
     src: acm/05-agentserviceconfig-disconnected.yaml.j2
     dest: "{{ role_path }}/files/.rendered-05-agentserviceconfig.yaml"
   when: disconnected_install | bool
+  tags:
+    - asc
 
 #- name: Wait for the AgentServiceConfig CRD to be established
 #  shell: |
@@ -198,6 +229,8 @@
       ({{ 'disconnected' if disconnected_install | bool else 'connected' }} rendering)
       then re-enable the 'Apply AgentServiceConfig' task in
       roles/setup-hub-acm/tasks/main.yml.
+  tags:
+    - asc
 
 # Cleanup is also disabled while apply is disabled, so the rendered
 # file above survives for you to inspect. Re-enable this alongside the
