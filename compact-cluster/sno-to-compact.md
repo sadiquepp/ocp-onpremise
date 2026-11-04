@@ -29,7 +29,7 @@ cd .. && ansible-playbook -i inventory/hosts cleanup.yaml --tags sno --ask-vault
 |---|---|---|
 | `controlPlane.replicas` / `compute.replicas` | 1 / 0 | 3 / 0 (masters schedulable) |
 | `platform` | `none: {}` | `baremetal` with `apiVIPs` + `ingressVIPs` |
-| Addresses | node `.20` | nodes `.64-.66`, VIPs `.17` / `.18` |
+| Addresses | node `.20` | nodes `.64-.66`, VIPs `.117` / `.118` |
 | `api`, `api-int`, `*.apps` | all A records point at `.20` | `api`/`api-int` -> API VIP, `*.apps` -> ingress VIP |
 | DNS zone template | `roles/setup-dns/templates/sno_domain.j2` | `compact_domain.j2` |
 | etcd | one member; the node is the cluster | three members; survives one node |
@@ -49,8 +49,8 @@ machine:
 
 | VIP | Names | Carries |
 |---|---|---|
-| **API VIP** (`.17`) | `api.<zone>`, `api-int.<zone>` | kube-apiserver `:6443`, machine-config `:22623` |
-| **Ingress VIP** (`.18`) | `*.apps.<zone>` | router traffic, `:80` / `:443` |
+| **API VIP** (`.117`) | `api.<zone>`, `api-int.<zone>` | kube-apiserver `:6443`, machine-config `:22623` |
+| **Ingress VIP** (`.118`) | `*.apps.<zone>` | router traffic, `:80` / `:443` |
 
 `platform: baremetal` runs **keepalived** on the nodes. One node holds each
 VIP at a time; keepalived announces it with VRRP and gratuitous ARP, and when
@@ -58,7 +58,9 @@ that node fails a surviving node takes the address over - the API VIP wherever
 an apiserver answers, the ingress VIP wherever a router pod runs. An
 in-cluster **haproxy** then spreads what arrives on the API VIP across all
 three apiservers. That is why this lab needs no external load balancer, where
-the hub's `platform: none` clusters do.
+the hub's `platform: none` clusters do. The full traffic path for each VIP,
+keepalived's priorities and the haproxy redirect are in
+[README.md, How the API and ingress VIPs work](README.md#how-the-api-and-ingress-vips-work).
 
 Three rules for picking them:
 
@@ -74,7 +76,7 @@ Check who holds them:
 
 ```bash
 for n in 64 65 66; do
-  ssh -i ~/.ssh/lab_rsa core@192.168.122.$n "ip -br addr | grep -E '\.17|\.18'" \
+  ssh -i ~/.ssh/lab_rsa core@192.168.122.$n "ip -br addr | grep -E '\.117|\.118'" \
     && echo "  ^ on .$n"
 done
 ```
