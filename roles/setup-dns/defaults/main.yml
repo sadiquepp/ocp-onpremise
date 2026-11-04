@@ -63,7 +63,7 @@ setup_dns_forwarders_file: /root/.lab-dns-forwarders
 dns_dnssec_validation: "no"
 
 # The single-node clusters this helper serves a zone for: the SNO
-# (setup_sno.yaml) when ip_list has it, and sno2 (setup_sno2.yaml) only when
+# (sno/setup_sno.yaml) when ip_list has it, and sno2 (sno/setup_sno2.yaml) only when
 # sno2_enabled is true. The zone stanza, its file and the PTR are all driven
 # from this one list, because a stanza naming a file that was not rendered
 # stops named from starting.

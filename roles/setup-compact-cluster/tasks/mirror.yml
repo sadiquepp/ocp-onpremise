@@ -33,7 +33,7 @@
     that: compact_cr_remote.stdout | trim | length > 0
     fail_msg: >-
       No cluster-resources directory under /root/mirror/oc-mirror-output on the
-      mirror-registry VM - setup_mirror_registry.yaml has not finished mirroring.
+      mirror-registry VM - mirror-registry/setup_mirror_registry.yaml has not finished mirroring.
 
 - name: Archive the cluster-resources on the mirror-registry VM
   ansible.builtin.command:
@@ -100,7 +100,7 @@
       No ImageDigestMirrorSet in {{ compact_cluster_resources_dir }}. Without
       one, `oc adm release extract` cannot find the installer image in
       {{ mirror_registry_domain }}:{{ mirror_registry_port }} and would go to
-      quay.io for it. Check that setup_mirror_registry.yaml mirrored a platform
+      quay.io for it. Check that mirror-registry/setup_mirror_registry.yaml mirrored a platform
       release.
 
 - name: Read every ImageDigestMirrorSet
@@ -266,7 +266,7 @@
       {{ mirror_registry_authfile }} has no credentials for {{ compact_mirror_host }}
       (it has [{{ compact_mirror_auths.keys() | list | join(', ') }}]).
       setup-mirror-registry-trust logs podman in there - run
-      setup_mirror_registry.yaml first.
+      mirror-registry/setup_mirror_registry.yaml first.
 
 # Only the mirror's own credentials: with imageDigestSources the cluster never
 # needs quay.io or registry.redhat.io, and giving it those credentials would

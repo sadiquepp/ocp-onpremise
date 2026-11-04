@@ -15,7 +15,7 @@
 # at once, with no reboot of the network or the node, and keeps answering
 # after a host reboot. On a running SNO the node's own dnsmasq cache is then
 # cleared too (below). Safe to run against a live SNO on its own:
-#   ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass --tags snodns
+#   cd sno && ansible-playbook -i ../inventory/hosts setup_sno.yaml --ask-vault-pass --tags snodns
 
 - name: Read the default network's DNS host entries
   ansible.builtin.command:

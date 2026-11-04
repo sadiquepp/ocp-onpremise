@@ -3,7 +3,7 @@
 # the hub. Runs after the install when use_lvm_storage is true
 # (sno_lvm_storage), or on its own against a running SNO:
 #
-#   ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass --tags snostorage
+#   cd sno && ansible-playbook -i ../inventory/hosts setup_sno.yaml --ask-vault-pass --tags snostorage
 #
 # LVMS needs an EMPTY disk, and the SNO is built with exactly one - RHCOS is
 # on it. So a second one is created and hot-plugged into the running VM,
@@ -23,7 +23,7 @@
     that: sno_storage_kubeconfig.stat.exists
     fail_msg: >-
       No {{ sno_install_folder }}/auth/kubeconfig, so there is no SNO to add
-      storage to yet. Build it first (setup_sno.yaml), then run --tags snostorage.
+      storage to yet. Build it first (sno/setup_sno.yaml), then run --tags snostorage.
 
 # auth/kubeconfig exists from the moment the ISO is built, so it says
 # nothing about whether the install finished. The API does.

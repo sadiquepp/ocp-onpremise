@@ -6,14 +6,14 @@
 #
 # Rendering the override into templates/03-infraenv.yaml.j2 covers an InfraEnv
 # created from scratch. This file covers the case that actually bites: an
-# InfraEnv applied before the override existed. setup_hosted_cluster_vm.yaml
+# InfraEnv applied before the override existed. hcp/setup_hosted_cluster_vm.yaml
 # does not create the InfraEnv - it downloads that InfraEnv's ISO and boots VMs
 # off it - so without this the workers keep booting the old ISO and keep failing
 # to pull the agent image.
 #
 # Requires KUBECONFIG in the task environment (set by the calling playbook), and
 # is only meaningful when disconnected_install is true. Included by path from
-# setup_hosted_cluster_vm.yaml as well as from this role, so nothing here may
+# hcp/setup_hosted_cluster_vm.yaml as well as from this role, so nothing here may
 # use role_path.
 #
 # Sets discovery_iso_force_download when it patched anything, which is what makes
@@ -21,7 +21,7 @@
 # one already on disk.
 
 #
-# WHY THE BLOCK BELOW: setup_hosted_cluster_vm.yaml tags its include of this
+# WHY THE BLOCK BELOW: hcp/setup_hosted_cluster_vm.yaml tags its include of this
 # file with 'discovery-ignition'. A dynamic include_tasks does NOT pass its tags
 # down to the tasks it brings in - inheritance covers import_tasks, roles and
 # blocks, not dynamic includes. Untagged, every task here was filtered out of a
@@ -50,7 +50,7 @@
           - bminfra_live_override.rc == 0
         fail_msg: >-
           InfraEnv {{ oadp_bminfra_namespace }} not found in namespace
-          {{ oadp_bminfra_namespace }} on this hub - run setup_bminfra.yaml
+          {{ oadp_bminfra_namespace }} on this hub - run hcp/setup_bminfra.yaml
           (with -e disconnected_install=true) and apply its rendered manifests
           first. The discovery ISO comes from that InfraEnv.
 

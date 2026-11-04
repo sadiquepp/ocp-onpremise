@@ -1,0 +1,52 @@
+## Configures OADP (cloud-credentials secret + DataProtectionApplication)
+## against a cluster. The operator itself is already installed by
+## ../acm/setup_acm.yaml (roles/setup-hub-acm), so this just wires it up to
+## your S3 bucket. Idempotent - run it against cluster1 (hub) to prepare for a
+## backup, and again against cluster2 (hub2) for the hosted-cluster DR
+## walkthrough (../hcp/dr) so its Velero can see the same S3 bucket/prefix and
+## restore from it.
+##
+## Usage (from inside oadp/):
+##   ansible-playbook -i ../inventory/hosts setup_oadp.yaml --ask-vault-pass                       # targets hub1 (default)
+##   ansible-playbook -i ../inventory/hosts setup_oadp.yaml --ask-vault-pass -e target_hub=hub2    # targets hub2
+
+- name: Configure OADP on a hub cluster
+  hosts: localhost
+  become: true
+  vars_files:
+    - ../vars.yaml
+    - ../vault.yaml
+  vars:
+    hub_kubeconfig: >-
+      {{ (target_hub == 'hub2') | ternary(hub2_install_folder, hub_install_folder) }}/auth/kubeconfig
+  tasks:
+  - name: Fail fast if AWS credentials are missing from vault.yaml
+    ansible.builtin.assert:
+      that:
+        - oadp_aws_access_key_id is defined
+        - oadp_aws_secret_access_key is defined
+      fail_msg: >-
+        Add oadp_aws_access_key_id / oadp_aws_secret_access_key to vault.yaml
+        (ansible-vault edit vault.yaml) before running this playbook. See
+        oadp/README.md for how to create the IAM user and access key.
+
+  ## Only catches values that cannot be a key - an example left in place
+  ## ('AKIA...', '<access key>', 'changeme'). A well-formed but wrong
+  ## key gets past this; the BackupStorageLocation check in setup-oadp
+  ## is what proves the key works. The message never echoes the values.
+  - name: Fail fast if the AWS credentials are still placeholders
+    ansible.builtin.assert:
+      that:
+        - oadp_aws_access_key_id | trim is match('^[A-Z0-9]{16,128}$')
+        - oadp_aws_secret_access_key | trim | length >= 16
+        - oadp_aws_secret_access_key is not search('[.][.][.]|[<> ]|(?i:changeme)')
+      fail_msg: >-
+        oadp_aws_access_key_id / oadp_aws_secret_access_key in vault.yaml
+        look like placeholders, not a real key. An access key id is 20
+        upper-case letters and digits (AKIA...), a secret access key is 40
+        characters. Set the real values with ansible-vault edit vault.yaml.
+
+  - ansible.builtin.import_role:
+      name: setup-oadp
+    environment:
+      KUBECONFIG: "{{ hub_kubeconfig }}"

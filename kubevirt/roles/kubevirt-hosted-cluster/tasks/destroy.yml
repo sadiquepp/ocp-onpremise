@@ -6,7 +6,7 @@
 # With 'infra' it also removes the VM namespace and ServiceAccount on the
 # infrastructure cluster.
 #
-# Left in place on purpose: the API pool (setup_hub_cluster.yaml owns it, and
+# Left in place on purpose: the API pool (acm/setup_acm.yaml owns it, and
 # it holds nothing once the Service is gone), and the management-cluster
 # prerequisites - OpenShift Virtualization, the wildcard route policy and the
 # localnet bridge mapping - which other clusters may use.

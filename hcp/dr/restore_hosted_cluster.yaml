@@ -1,0 +1,168 @@
+## Restores a hosted cluster's control plane via OADP/Velero.
+## Run this against the target hub - normally cluster2 (hub2), after
+## ../../standard-cluster/setup_cluster2.yaml, ../../acm/setup_acm.yaml
+## -e target_hub=hub2 and ../../oadp/setup_oadp.yaml -e target_hub=hub2 have
+## already been run, the last against the same S3 bucket/prefix the backup
+## used.
+##
+## Usage (from inside hcp/dr/):
+##   ansible-playbook -i ../../inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
+##     -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2
+##
+## oadp_backup_method must match the method the backup was taken with
+## (vars.yaml, default 'fs'), because it selects both the Restore
+## template and the name of the Backup being restored:
+##
+##   fs   restore-hcp-cluster.yaml.j2     <- "<cluster>-backup"
+##   csi  restore-hcp-cluster-csi.yaml.j2 <- "<cluster>-backup-csi"
+##
+##   ansible-playbook -i ../../inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
+##     -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2 \
+##     -e oadp_backup_method=csi
+##
+## Workers built as BareMetalHosts (hosted_cluster_worker_provisioning=bmh):
+## add -e oadp_restore_detach_bmh=true to restore them detached, so this hub
+## does not power-cycle or reprovision them. See BMH-DR-test.md.
+
+- name: Restore Hosted Cluster Control Plane
+  hosts: localhost
+  become: true
+  vars_files:
+    - ../../vars.yaml
+    - ../../vault.yaml
+  vars:
+    hub_kubeconfig: >-
+      {{ (target_hub == 'hub2') | ternary(hub2_install_folder, hub_install_folder) }}/auth/kubeconfig
+    ## Must resolve to the same names backup_hosted_cluster.yaml used.
+    oadp_backup_name: >-
+      {{ hcp_cluster_name }}-backup{{ '-csi' if oadp_backup_method == 'csi' else '' }}
+    oadp_restore_name: >-
+      {{ hcp_cluster_name }}-restore{{ '-csi' if oadp_backup_method == 'csi' else '' }}
+    oadp_restore_template: >-
+      restore-hcp-cluster{{ '-csi' if oadp_backup_method == 'csi' else '' }}.yaml.j2
+  tasks:
+  - ansible.builtin.assert:
+      that:
+        - hcp_cluster_name is defined
+      fail_msg: "Pass -e hcp_cluster_name=<name> (e.g. hcp-cluster1)"
+
+  - name: Fail fast on an unknown backup method
+    ansible.builtin.assert:
+      that:
+        - oadp_backup_method in ['fs', 'csi']
+      fail_msg: >-
+        oadp_backup_method must be 'fs' or 'csi' (and must match the
+        method the backup was taken with), not
+        '{{ oadp_backup_method }}'. See vars.yaml.
+
+  ## A Backup or Restore against an Unavailable location fails only
+  ## after Velero tries the bucket; say why up front instead.
+  ## ../../oadp/setup_oadp.yaml is what makes it Available.
+  - name: Check the BackupStorageLocation is Available
+    shell: >
+      oc get backupstoragelocation.velero.io "{{ oadp_storage_location }}" -n openshift-adp
+      -o jsonpath='{.status.phase}{"|"}{.status.message}'
+    register: bsl_status
+    changed_when: false
+    failed_when: false
+    environment:
+      KUBECONFIG: "{{ hub_kubeconfig }}"
+
+  - name: Fail with a clear message if it is not
+    ansible.builtin.fail:
+      msg: >-
+        BackupStorageLocation '{{ oadp_storage_location }}' on this hub is
+        '{{ bsl_status.stdout.split('|', 1)[0] or 'missing' }}', not 'Available'.
+        {{ bsl_status.stdout.split('|', 1)[1] | default('') }}
+        Run oadp/setup_oadp.yaml against this hub (-e target_hub={{ target_hub }})
+        and fix what it reports - usually the AWS key in vault.yaml.
+    when: bsl_status.stdout.split('|', 1)[0] != 'Available'
+
+  ## A Restore naming a Backup this hub cannot see fails with a terse
+  ## "backup not found"; checking first says which name was expected.
+  ##
+  ## backup.velero.io, never a bare "backup": more than one operator
+  ## here defines a Backup kind - ODF brings CloudNativePG's
+  ## backups.postgresql.cnpg.noobaa.io - so kubectl resolves the
+  ## ambiguous short name to one of the others, and `oc get backup`
+  ## silently queries the wrong CRD and reports every Velero backup as
+  ## missing. Same for restore.velero.io below.
+  - name: Check the Backup being restored is visible on this hub
+    shell: >
+      oc get backup.velero.io "{{ oadp_backup_name | trim }}" -n openshift-adp
+      -o jsonpath='{.status.phase}'
+    register: source_backup
+    changed_when: false
+    failed_when: false
+    environment:
+      KUBECONFIG: "{{ hub_kubeconfig }}"
+
+  - name: Fail with a clear message if it is missing
+    ansible.builtin.fail:
+      msg: >-
+        Backup '{{ oadp_backup_name | trim }}' is not present in
+        openshift-adp on this hub. Velero syncs backups from the
+        BackupStorageLocation, so run oadp/setup_oadp.yaml against this hub
+        and give it a minute, and check oadp_backup_method
+        ('{{ oadp_backup_method }}') matches the method the backup was
+        taken with - the csi method names its backup '<cluster>-backup-csi'.
+    when: source_backup.stdout | default('') | trim == ''
+
+  ## oadp_restore_detach_bmh: the Restore references this ConfigMap, which
+  ## makes Velero add baremetalhost.metal3.io/detached to each BareMetalHost
+  ## it restores. It must exist before the Restore does.
+  - name: Render the BareMetalHost detach modifier (oadp_restore_detach_bmh)
+    template:
+      src: templates/restore-bmh-detached-modifier.yaml.j2
+      dest: "/tmp/{{ oadp_restore_bmh_modifier_name }}.yaml"
+    when: oadp_restore_detach_bmh | bool
+
+  - name: Apply the BareMetalHost detach modifier (oadp_restore_detach_bmh)
+    shell: "oc apply -f /tmp/{{ oadp_restore_bmh_modifier_name }}.yaml"
+    environment:
+      KUBECONFIG: "{{ hub_kubeconfig }}"
+    when: oadp_restore_detach_bmh | bool
+
+  - name: Render Restore manifest
+    template:
+      src: "templates/{{ oadp_restore_template | trim }}"
+      dest: "/tmp/{{ oadp_restore_name | trim }}.yaml"
+
+  - name: Apply Restore
+    shell: "oc apply -f /tmp/{{ oadp_restore_name | trim }}.yaml"
+    environment:
+      KUBECONFIG: "{{ hub_kubeconfig }}"
+
+  - name: Wait for Restore to complete (checked every 15s, up to 30 min)
+    shell: >
+      oc get restore.velero.io "{{ oadp_restore_name | trim }}" -n openshift-adp
+      -o jsonpath='{.status.phase}'
+    register: restore_phase
+    until: restore_phase.stdout in ['Completed', 'PartiallyFailed', 'Failed']
+    retries: 120
+    delay: 15
+    environment:
+      KUBECONFIG: "{{ hub_kubeconfig }}"
+
+  ## Counterpart to the backup's DataUploads - this is where the volume
+  ## data actually comes back from S3 on a csi restore.
+  - name: Show the DataDownloads the data mover created
+    shell: >
+      oc get datadownloads.velero.io -n openshift-adp
+      -l velero.io/restore-name="{{ oadp_restore_name | trim }}"
+      --no-headers 2>/dev/null || true
+    register: restore_datadownloads
+    changed_when: false
+    environment:
+      KUBECONFIG: "{{ hub_kubeconfig }}"
+    when: oadp_backup_method == 'csi'
+
+  - name: Report Restore status
+    debug:
+      msg: >-
+        Restore {{ oadp_restore_name | trim }}
+        ({{ oadp_backup_method }} method, from
+        {{ oadp_backup_name | trim }}) finished with phase:
+        {{ restore_phase.stdout }}
+        {{ ('| DataDownloads: ' + (restore_datadownloads.stdout_lines | default([]) | join(' ; ')))
+           if oadp_backup_method == 'csi' else '' }}

@@ -5,7 +5,7 @@
 # Manager, so dnf can install packages. Delegate this to whichever VM
 # needs it, before any dnf/package task runs against that VM. Shared
 # by helper (setup_bm_host.yaml) and mirror-registry
-# (setup_mirror_registry.yaml) rather than duplicated in each.
+# (mirror-registry/setup_mirror_registry.yaml) rather than duplicated in each.
 #
 # org_id / activation_key live in vault.yaml, not vars.yaml.
 

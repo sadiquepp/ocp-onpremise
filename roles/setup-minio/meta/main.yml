@@ -1,6 +1,6 @@
 galaxy_info:
   author: sadiquepp
-  description: Installs and configures MinIO as the disconnected-install OADP backup target
+  description: Installs and configures MinIO, the lab's local S3-compatible store for disconnected deployments
   license: MIT
   min_ansible_version: "2.9"
 

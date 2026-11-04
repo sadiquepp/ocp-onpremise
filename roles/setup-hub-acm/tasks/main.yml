@@ -38,8 +38,8 @@
 
 
 # LVM Storage is not installed here any more: roles/setup-lvm-storage does it
-# as part of the cluster build itself (tag lvm), so a hub built with
-# --skip-tags acm still has a default StorageClass.
+# as part of the cluster build itself (standard-cluster/, tag lvm), so a
+# cluster that never gets ACM still has a default StorageClass.
 
 - name: Deploy MetalLB Operator  
   shell: |
@@ -138,7 +138,7 @@
   when: disconnected_install | bool
 
 # Both branches render to the same path, so the review-and-apply step below
-# (and the one in the README) is the same either way.
+# (and the one in acm/README.md) is the same either way.
 - name: Render AgentServiceConfig (connected)
   template:
     src: acm/05-agentserviceconfig.yaml.j2

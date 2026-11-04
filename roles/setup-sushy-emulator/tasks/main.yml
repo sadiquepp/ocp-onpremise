@@ -12,7 +12,7 @@
 # config or unit changed.
 #
 # Sets sushy_emulator_systems (name, uuid, address) for the caller -
-# setup_hosted_cluster_vm.yaml renders the BareMetalHosts from it.
+# hcp/setup_hosted_cluster_vm.yaml renders the BareMetalHosts from it.
 
 - name: Bring sushy-emulator up
   ansible.builtin.include_tasks: present.yml

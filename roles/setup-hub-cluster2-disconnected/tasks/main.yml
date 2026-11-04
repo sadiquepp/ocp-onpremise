@@ -32,7 +32,7 @@
 #
 # Requires roles/setup-mirror-registry-trust to have already run, so the
 # mirror registry's CA is trusted locally and its credentials are in
-# mirror_registry_authfile (see setup_mirror_registry.yaml).
+# mirror_registry_authfile (see mirror-registry/setup_mirror_registry.yaml).
 #
 # CO-EXISTENCE: this hub is fully independent of hub1 (roles/setup-hub-cluster),
 # hub2 (roles/setup-hub-cluster2) and hubd
@@ -56,7 +56,7 @@
 # The rules themselves (and why it takes two of them) are in
 # tasks/block-node-nat.yml - a copy of the file that
 # roles/setup-hub-cluster-disconnected carries (and that
-# setup_hosted_cluster_vm.yaml includes by path), so every disconnected thing in
+# hcp/setup_hosted_cluster_vm.yaml includes by path), so every disconnected thing in
 # this lab cuts egress exactly the same way. The
 # rules are appended per-IP and tagged with disconnected_nat_label, and the
 # LAB_NO_NAT/LAB_NO_EGRESS chains are created but never flushed, so hubd's
@@ -177,7 +177,7 @@
       - cluster_resources_dir.stdout | trim | length > 0
     fail_msg: >-
       No cluster-resources directory found under /root/mirror/oc-mirror-output on
-      the mirror-registry VM - run setup_mirror_registry.yaml first.
+      the mirror-registry VM - run mirror-registry/setup_mirror_registry.yaml first.
 
 - name: Archive the oc-mirror cluster-resources manifests (ImageDigestMirrorSet/ImageTagMirrorSet/CatalogSource)
   ansible.builtin.shell: |
@@ -259,7 +259,7 @@
       {{ mirror_registry_domain }}:{{ mirror_registry_port }} and will try to
       pull the installer image from quay.io. Check that the ImageSetConfiguration
       actually mirrored a platform release, then re-run
-      setup_mirror_registry.yaml.
+      mirror-registry/setup_mirror_registry.yaml.
 
 - name: Read every ImageDigestMirrorSet oc-mirror produced
   ansible.builtin.slurp:
@@ -359,7 +359,7 @@
 # `oc adm release extract` writes into the current working directory, hence the
 # chdir. It needs the mirror registry's CA in the system trust store and a pull
 # secret holding that registry's credentials - roles/setup-mirror-registry-trust
-# sets up both, and setup_hub_cluster2.yaml asserts the CA is there before it
+# sets up both, and standard-cluster/setup_cluster2.yaml asserts the CA is there before it
 # imports this role.
 - name: Extract openshift-install from the release image in the mirror registry
   ansible.builtin.shell: |
@@ -514,7 +514,7 @@
       {{ hub2d_mirror_registry_host }} - it holds entries for
       [{{ hub2d_authfile_auths.keys() | list | join(', ') }}].
       roles/setup-mirror-registry-trust is what logs podman in there, so run
-      setup_mirror_registry.yaml first.
+      mirror-registry/setup_mirror_registry.yaml first.
 
 - name: Reduce the pull secret to the mirror registry's own credentials
   ansible.builtin.set_fact:

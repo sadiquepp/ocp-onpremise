@@ -1,7 +1,7 @@
 # From the SNO to the compact cluster
 
 What changes when you go from the single node of
-[`setup_sno.yaml`](../setup_sno.yaml) to the three nodes of
+[`sno/setup_sno.yaml`](../sno/setup_sno.yaml) to the three nodes of
 [compact-cluster.md](compact-cluster.md) - and why the move is a **new
 install**, not an expansion.
 

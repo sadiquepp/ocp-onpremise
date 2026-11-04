@@ -11,7 +11,7 @@
 
 # A PXE-booted node never touches the ISO - it gets the same agent as kernel,
 # initrd and rootfs, which the three tasks below stage on the helper. So a
-# caller that only PXE-boots (setup_hosted_cluster2_vm.yaml) sets
+# caller that only PXE-boots (hcp/setup_hosted_cluster2_vm.yaml) sets
 # discovery_download_iso false and skips a ~1G download it would not use.
 - name: Wait for InfraEnv discovery ISO URL
   when: discovery_download_iso | default(true) | bool

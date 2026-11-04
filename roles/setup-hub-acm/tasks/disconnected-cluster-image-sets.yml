@@ -37,7 +37,7 @@
     msg: >-
       ClusterImageSet(s) are being created for
       {{ acm_disconnected_cluster_image_set_versions | difference([mirror_ocp_version]) | join(', ') }},
-      but setup_mirror_registry.yaml mirrored {{ mirror_ocp_version }}. Mirror
+      but mirror-registry/setup_mirror_registry.yaml mirrored {{ mirror_ocp_version }}. Mirror
       those releases too, or set acm_disconnected_cluster_image_set_versions to
       what is actually in {{ mirror_registry_domain }}:{{ mirror_registry_port }}.
   when:

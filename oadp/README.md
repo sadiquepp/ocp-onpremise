@@ -1,49 +1,51 @@
-# OADP: HCP control-plane backup/restore, including restore-to-new-hub
+# OADP: wiring Velero to S3, and checking it works
 
-This directory used to hold static, hub1-only manifests. It's now driven
-by `roles/setup-oadp/` plus three top-level playbooks, so the same flow
-works for any hosted cluster (`hcp-cluster1`, `hcp-cluster2`, ...) and for
-restoring onto a replacement hub (`hub2`) after a DR cutover
-(`shutdown_hub_cluster.yaml` / `setup_hub_cluster2.yaml`).
+Generic OADP for any cluster this repository builds: the one-time S3 bucket and
+IAM user, the `cloud-credentials` secret and `DataProtectionApplication`
+(`setup_oadp.yaml`), the choice between file-system and CSI-snapshot backups,
+a small hello-openshift backup/restore smoke test, and the OADP problems worth
+recognising.
 
-The OADP operator itself is installed as part of hub bring-up, by
-`roles/setup-hub-acm` (right alongside ACM/LVM-Storage/MetalLB) - see
-`roles/setup-hub-acm/files/oadp/`. So it's already present on both hub1
-and hub2 by the time you get here; `roles/setup-oadp/` only wires up the
-cloud-credentials secret and the DataProtectionApplication, which need
-AWS credentials/a bucket that don't exist at first hub bring-up.
+The **OADP operator** itself is installed by
+[`acm/setup_acm.yaml`](../acm/README.md) (`roles/setup-hub-acm`, alongside
+ACM/MCE and MetalLB). `roles/setup-oadp` only wires it up to a bucket, which
+needs AWS credentials that do not exist when the cluster is first built.
 
-`hello-openshift*.yaml` are left as-is - a small, self-contained
-smoke-test app + Backup/Restore pair to sanity-check OADP itself before
-you run it against a real hosted cluster. They use the `fs` method; there
-is no CSI equivalent, for a reason worth reading before debugging a CSI
-backup - see [Why there is no CSI smoke test](#why-there-is-no-csi-smoke-test).
-
-Control-plane volumes can be captured two ways, selected by
-`oadp_backup_method` - see [Backup methods: fs vs csi](#backup-methods-fs-vs-csi).
-
-Commands only, end to end: [steps.md](../steps.md).
+Backing up a **hosted cluster** and restoring it onto another hub - the
+Backup/Restore playbooks, their templates and the DR cutover - is in
+[`hcp/dr/`](../hcp/dr/README.md), which builds on this directory.
 
 ## Contents
 
+- [What lives here](#what-lives-here)
 - [One-time AWS setup (per bucket, not per hub)](#one-time-aws-setup-per-bucket-not-per-hub)
+- [Configure OADP on a cluster](#configure-oadp-on-a-cluster)
+- [A local S3 target for the disconnected lab](#a-local-s3-target-for-the-disconnected-lab)
+- [OADP configuration](#oadp-configuration)
 - [Backup methods: fs vs csi](#backup-methods-fs-vs-csi)
   - [What `csi` needs](#what-csi-needs)
-- [Primary Hub](#primary-hub)
-  - [Configure OADP (credentials + DPA)](#configure-oadp-credentials--dpa)
-  - [Deploy a hello-openshift application with a PVC to Hub Cluster and backup it using OADP](#deploy-a-hello-openshift-application-with-a-pvc-to-hub-cluster-and-backup-it-using-oadp)
-  - [Why there is no CSI smoke test](#why-there-is-no-csi-smoke-test)
-  - [Backup a hosted cluster using OADP](#backup-a-hosted-cluster-using-oadp)
-  - [Shutdown Primary Hub](#shutdown-primary-hub)
-  - [Destroy the Ceph cluster (Ceph/CSI DR demo)](#destroy-the-ceph-cluster-cephcsi-dr-demo)
-- [DR Hub](#dr-hub)
-  - [Rebuild Ceph for the DR hub (Ceph/CSI DR demo)](#rebuild-ceph-for-the-dr-hub-cephcsi-dr-demo)
-  - [Build DR Hub](#build-dr-hub)
-  - [Configure OADP on DR Hub](#configure-oadp-on-dr-hub)
-  - [Restore hello-openshift application with a PVC to DR Hub](#restore-hello-openshift-application-with-a-pvc-to-dr-hub)
-  - [Restore the hosted cluster to the DR Hub using OADP. This will restore the hosted cluster to the DR Hub using OADP](#restore-the-hosted-cluster-to-the-dr-hub-using-oadp-this-will-restore-the-hosted-cluster-to-the-dr-hub-using-oadp)
-  - [Point DNS at the DR hub](#point-dns-at-the-dr-hub)
-  - [Verify the hosted cluster came back](#verify-the-hosted-cluster-came-back)
+- [Smoke test: hello-openshift with a PVC](#smoke-test-hello-openshift-with-a-pvc)
+- [Why there is no CSI smoke test](#why-there-is-no-csi-smoke-test)
+- [Troubleshooting](#troubleshooting)
+  - [If no `DataUpload` is created at all](#if-no-dataupload-is-created-at-all)
+  - [`oc get backup` shows nothing, `oc get backup.velero.io` does](#oc-get-backup-shows-nothing-oc-get-backupveleroio-does)
+  - [Recovering from `backup already exists in object storage`](#recovering-from-backup-already-exists-in-object-storage)
+  - [If a backup reports thousands of items](#if-a-backup-reports-thousands-of-items)
+
+## What lives here
+
+| File | Purpose |
+| --- | --- |
+| `setup_oadp.yaml` | Create the `cloud-credentials` secret and the `DataProtectionApplication` on a cluster (`roles/setup-oadp`); with `oadp_backup_method=csi`, also label the VolumeSnapshotClass Velero uses |
+| `hello-openshift-oadp.yaml` | Smoke-test app: a namespace, a Deployment and a PVC |
+| `hello-openshift-oadp-backup.yaml` / `hello-openshift-oadp-restore.yaml` | Velero `Backup` and `Restore` of that namespace (fs method) |
+| `ansible.cfg` | Mirrors the root `ansible.cfg` and adds `../roles` to `roles_path` |
+
+`setup_oadp.yaml` shares `vars.yaml`, `vault.yaml` and `inventory/hosts` with
+the rest of the repository; the role stays in the shared [`roles/`](../roles/)
+directory. **Run it from inside this directory** - the `ansible.cfg` here is
+what puts `../roles` on the role search path. The `oc apply` commands below
+assume the same working directory.
 
 ## One-time AWS setup (per bucket, not per hub)
 
@@ -110,8 +112,69 @@ oadp_aws_access_key_id: 'AKIA...'
 oadp_aws_secret_access_key: '...'
 ```
 
-This bucket and IAM user are reused by both hub1 and hub2 - you only do
-this section once per lab, not once per hub.
+This bucket and IAM user are reused by every cluster you point OADP at -
+cluster1 and cluster2 in the DR walkthrough - so you only do this section once
+per lab, not once per cluster.
+
+## Configure OADP on a cluster
+
+The cluster needs the OADP operator first ([`acm/setup_acm.yaml`](../acm/README.md)).
+Then point it at your bucket:
+
+```bash
+cd oadp
+ansible-playbook -i ../inventory/hosts setup_oadp.yaml --ask-vault-pass                       # cluster1 (hub)
+ansible-playbook -i ../inventory/hosts setup_oadp.yaml --ask-vault-pass -e target_hub=hub2    # cluster2 (hub2)
+```
+
+For CSI snapshot backups, add the method so the role also labels the
+VolumeSnapshotClass Velero needs (it fails with a clear message if ODF
+has not created one yet):
+
+```bash
+ansible-playbook -i ../inventory/hosts setup_oadp.yaml --ask-vault-pass -e oadp_backup_method=csi
+oc get volumesnapshotclass -L velero.io/csi-volumesnapshot-class
+```
+
+The playbook refuses to start if `oadp_aws_access_key_id` /
+`oadp_aws_secret_access_key` are missing from `vault.yaml` or still look like
+placeholders, and the role waits for the `BackupStorageLocation` to report
+`Available` - that is the check that proves the key actually works.
+
+Idempotent - re-running against the same cluster just reconciles the
+secret/DPA. Every cluster points at the same bucket/prefix, so a second
+cluster's Velero can see backups the first one created; run it there with the
+same `oadp_backup_method` you backed up with, so the snapshot class is
+labelled there too before a restore.
+
+`target_hub` selects the kubeconfig: `hub2` means cluster2, anything else
+cluster1. The disconnected builds (`hubd`, `hub2d`) are not selectable yet -
+name the kubeconfig with `-e hub_kubeconfig=<install folder>/auth/kubeconfig`
+(see [hcp/dr/README.md](../hcp/dr/README.md#build-the-dr-hub-cluster2)).
+
+## A local S3 target for the disconnected lab
+
+A disconnected lab cannot reach AWS. [`minio/`](../minio/README.md) builds the
+lab's own S3-compatible store, with a bucket for OADP (`minio_bucket_name`,
+deliberately distinct from `oadp_bucket_name`). `setup_oadp.yaml` still renders
+the DataProtectionApplication against AWS S3 - pointing it at MinIO (an
+`s3Url`, `s3ForcePathStyle` and the MinIO credentials) is not automated yet.
+
+## OADP configuration
+
+The `DataProtectionApplication` (`roles/setup-oadp/templates/dpa.yaml.j2`)
+uses:
+
+- **Velero plugins**: `openshift`, `aws`, `csi`, `hypershift`
+- **Uploader**: Kopia (node-agent), used both for filesystem backup and as the
+  data mover behind CSI snapshots
+- **Storage**: AWS S3 with a shared bucket/prefix (`oadp_bucket_name`,
+  `oadp_backup_prefix`) across clusters
+- **Volume method**: `oadp_backup_method` - `fs` (default) or `csi`, see below
+
+`oadp_hypershift_plugin_image` replaces the hypershift plugin image for testing
+a plugin fix ahead of an OADP release - see
+[hcp/dr/OCPBUGS-121709-test.md](../hcp/dr/OCPBUGS-121709-test.md).
 
 ## Backup methods: fs vs csi
 
@@ -126,8 +189,8 @@ makes it:
 | How the data moves | node-agent mounts the volume and streams the files to S3 with Kopia | CSI driver snapshots the volume; the data mover copies the snapshot to S3 |
 | Consistency | file-by-file while etcd keeps writing | point-in-time, taken atomically by the storage layer |
 | Runs on | any StorageClass, CSI or not - including LVM Storage (`lvms-vg1`) | only a CSI StorageClass with a VolumeSnapshotClass - here, Ceph via ODF external mode |
-| Use for a control-plane restore | no - a file-level copy of a live etcd volume is not point-in-time | yes - this is the method the DR walkthrough uses |
-| Templates | `templates/backup-hcp-cluster.yaml.j2`, `templates/restore-hcp-cluster.yaml.j2` | `templates/backup-hcp-cluster-csi.yaml.j2`, `templates/restore-hcp-cluster-csi.yaml.j2` |
+| Use for a control-plane restore | no - a file-level copy of a live etcd volume is not point-in-time | yes - this is the method the [DR walkthrough](../hcp/dr/README.md) uses |
+| Hosted-cluster templates ([`hcp/dr/templates/`](../hcp/dr/templates/)) | `backup-hcp-cluster.yaml.j2`, `restore-hcp-cluster.yaml.j2` | `backup-hcp-cluster-csi.yaml.j2`, `restore-hcp-cluster-csi.yaml.j2` |
 | Object names | `<cluster>-backup` / `<cluster>-restore` | `<cluster>-backup-csi` / `<cluster>-restore-csi` |
 
 Both write to the same bucket, prefix and `DataProtectionApplication`;
@@ -151,7 +214,7 @@ attaching it with `ceph/setup_ceph_odf.yaml`.
   naming one - it looks the class up by that label, per driver, and if
   no class carries it **the volume is skipped and the Backup still
   reports `Completed`**. `setup_oadp.yaml` applies the label when run
-  with `-e oadp_backup_method=csi`; `backup_hosted_cluster.yaml`
+  with `-e oadp_backup_method=csi`; `hcp/dr/backup_hosted_cluster.yaml`
   refuses to run a csi backup if nothing carries it.
 - The `csi` plugin and the node-agent in the DPA. Both are already
   there (`roles/setup-oadp/templates/dpa.yaml.j2`) - the data mover
@@ -161,59 +224,46 @@ attaching it with `ceph/setup_ceph_odf.yaml`.
 Everything else - the bucket, the credentials, the resource list, the
 DR cutover - is identical.
 
-## Primary Hub
-### Configure OADP (credentials + DPA)
-The operator is already there (installed during hub bring-up). This
-step just points it at your bucket:
+## Smoke test: hello-openshift with a PVC
+
+A small, self-contained app plus a Backup/Restore pair to sanity-check OADP
+itself - bucket, credentials, node-agent - before running it against a real
+hosted cluster. It uses the `fs` method; there is no CSI equivalent, for a
+reason worth reading before debugging a CSI backup - see
+[Why there is no CSI smoke test](#why-there-is-no-csi-smoke-test).
+
+On the cluster being backed up (cluster1 in the DR walkthrough):
 
 ```bash
-ansible-playbook -i inventory/hosts setup_oadp.yaml --ask-vault-pass
+oc apply -f hello-openshift-oadp.yaml
 ```
 
-For CSI snapshot backups, add the method so the role also labels the
-VolumeSnapshotClass Velero needs (it fails with a clear message if ODF
-has not created one yet):
-
-```bash
-ansible-playbook -i inventory/hosts setup_oadp.yaml --ask-vault-pass -e oadp_backup_method=csi
-```
-
-Idempotent - re-running against the same hub just reconciles the
-secret/DPA. Both hubs point at the same bucket/prefix, so hub2's Velero
-can see backups hub1 created. Run it on the DR hub with the same
-`oadp_backup_method` you backed up with, so the snapshot class is
-labelled there too before the restore.
-
-### Deploy a hello-openshift application with a PVC to Hub Cluster and backup it using OADP.
-This will be helpful to verify that the backup and restore process is working before running it against a hosted cluster.
-
-```bash
-oc apply -f oadp/hello-openshift-oadp.yaml
-```
-
-Write some persistent data to the PVC.
+Write some persistent data to the PVC, and check it is there:
 
 ```bash
 POD=`oc get pod -n hello-openshift-oadp -o jsonpath='{.items[0].metadata.name}'`
 oc exec -it $POD -n hello-openshift-oadp -- sh -c 'echo "Hello, World!" > /var/data/hello.txt'
-```
-
-Verify that the data is written to the PVC.
-
-```bash
 oc exec -it $POD -n hello-openshift-oadp -- sh -c 'cat /var/data/hello.txt'
 ```
 
-Backup the hello-openshift application with a PVC using OADP.
+Back it up, and check the backup status periodically until it shows as
+completed:
+
 ```bash
-oc apply -f oadp/hello-openshift-oadp-backup.yaml
-```
-- Check the backup status periodically until it shows as completed.
-```bash
+oc apply -f hello-openshift-oadp-backup.yaml
 oc get backup.velero.io -n openshift-adp hello-openshift-oadp-backup -o yaml
 ```
 
-### Why there is no CSI smoke test
+Then, on a second cluster configured against the same bucket (cluster2, after
+`setup_oadp.yaml -e target_hub=hub2`), restore it and check the data came back:
+
+```bash
+oc apply -f hello-openshift-oadp-restore.yaml
+POD=`oc get pod -n hello-openshift-oadp -o jsonpath='{.items[0].metadata.name}'`
+oc exec -it $POD -n hello-openshift-oadp -- sh -c 'cat /var/data/hello.txt'
+```
+
+## Why there is no CSI smoke test
 
 There is deliberately no CSI equivalent of the hello-openshift smoke test
 above. On any hub this repo builds it cannot work, and the reason is
@@ -265,15 +315,17 @@ control plane's namespace the plugin resolves the HCP, returns success,
 and the CSI action runs normally:
 
 ```bash
-ansible-playbook -i inventory/hosts backup_hosted_cluster.yaml --ask-vault-pass \
-  -e hcp_cluster_name=hcp-cluster1 -e oadp_backup_method=csi
+(cd ../hcp/dr && ansible-playbook -i ../../inventory/hosts backup_hosted_cluster.yaml --ask-vault-pass \
+  -e hcp_cluster_name=hcp-cluster1 -e oadp_backup_method=csi)
 oc get datauploads.velero.io -n openshift-adp -w
 ```
 
 A `DataUpload` reaching phase `Completed` is the proof that CSI snapshot
 plus data mover works; the Backup's own phase is the weaker signal.
 
-#### If no `DataUpload` is created at all
+## Troubleshooting
+
+### If no `DataUpload` is created at all
 
 `oc get datauploads.velero.io -n openshift-adp` returning nothing means Velero
 never attempted the volume. Check, in this order:
@@ -298,7 +350,7 @@ velero backup logs <backup-name> -n openshift-adp | grep 'level=error' | head -3
 `no HostedControlPlane found` error on the PVC means the CSI action was
 never reached, and the storage configuration is not at fault.
 
-#### `oc get backup` shows nothing, `oc get backup.velero.io` does
+### `oc get backup` shows nothing, `oc get backup.velero.io` does
 
 Always qualify the group. More than one installed operator defines a
 `Backup` kind, so the short name is ambiguous and kubectl resolves it to
@@ -319,7 +371,7 @@ oc get backup.velero.io -n openshift-adp    # what you meant
 The same care applies to `restore.velero.io`, `datauploads.velero.io` and
 `datadownloads.velero.io`. Everything in this repo qualifies them.
 
-#### Recovering from `backup already exists in object storage`
+### Recovering from `backup already exists in object storage`
 
 A Backup that fails immediately with
 
@@ -356,7 +408,7 @@ bucket: `backuprepositories.velero.io` indexes what is under it, and
 rearranging the folder structure means recreating the DPA, backups and
 restores.
 
-#### If a backup reports thousands of items
+### If a backup reports thousands of items
 
 A one-namespace backup collecting 4000+ items is backing up the whole
 cluster: `includeClusterResources: true` does not mean "the
@@ -365,414 +417,3 @@ cluster-scoped object there is. On an ACM hub that is thousands of
 `AppliedManifestWork`s, each one erroring through the hypershift plugin.
 Leave the field unset and Velero includes only what is associated with
 the namespace's own objects - above all the PV behind the PVC.
-
-
-### Backup a hosted cluster using OADP.
-
-```bash
-ansible-playbook -i inventory/hosts backup_hosted_cluster.yaml --ask-vault-pass \
-  -e hcp_cluster_name=hcp-cluster1
-```
-
-`hcp_cluster_name` must match the HostedCluster's name/namespace - it's
-used to derive both the hosting namespace and the HyperShift
-control-plane namespace (`<name>-<name>`). Works unchanged for
-`hcp-cluster2` or any future hosted cluster.
-
-To take the same backup through CSI snapshots instead (Backup named
-`hcp-cluster1-backup-csi`):
-
-```bash
-ansible-playbook -i inventory/hosts backup_hosted_cluster.yaml --ask-vault-pass \
-  -e hcp_cluster_name=hcp-cluster1 -e oadp_backup_method=csi
-```
-
-The playbook checks a labelled VolumeSnapshotClass exists before it
-applies anything, then reports the `DataUpload` objects alongside the
-final phase. Watch the volume transfer while it runs:
-
-```bash
-oc get datauploads.velero.io -n openshift-adp -w
-```
-
-- Get the status of the backup and wait till it finishes before proceeding to the next step.
-```bash
-oc get backup.velero.io -n openshift-adp hcp-cluster1-backup -o yaml
-```
-It should show the backup as completed. Example output: `phase: Completed`. `itemsBackedUp:` should be equal to `totalItems`.
-```yaml
-status:
-  expiration: "2026-09-28T04:52:01Z"
-  formatVersion: 1.1.0
-  phase: Completed
-  progress:
-    itemsBackedUp: 363
-    totalItems: 363
-  startTimestamp: "2026-08-17T13:52:01Z"
-  version: 1
-```
-
-#### What a good `csi` run looks like
-
-A known-good run of `hcp-cluster1` on this lab, for comparison when
-something looks off:
-
-```yaml
-status:
-  backupItemOperationsAttempted: 3
-  backupItemOperationsCompleted: 3
-  completionTimestamp: "2026-09-08T03:47:54Z"
-  formatVersion: 1.1.0
-  phase: Completed
-  progress:
-    itemsBackedUp: 374
-    totalItems: 374
-  startTimestamp: "2026-09-08T03:42:30Z"
-  version: 1
-```
-
-```
-$ oc get datauploads.velero.io -n openshift-adp
-NAME                            STATUS      STARTED   BYTES DONE   TOTAL BYTES   STORAGE LOCATION   AGE     NODE
-hcp-cluster1-backup-csi-nnb2t   Completed   8m42s     371423568    371423568     default            9m12s   worker1
-hcp-cluster1-backup-csi-x76zq   Completed   8m35s     370738865    370738865     default            9m7s    worker3
-hcp-cluster1-backup-csi-xdctc   Completed   8m31s     370678113    370678113     default            9m2s    worker2
-```
-
-What to check, in order of how much it tells you:
-
-- **One `DataUpload` per etcd member**, three for a standard hosted
-  control plane, each on a different worker. Their sizes should be close
-  to each other - the members hold the same data - and `BYTES DONE` must
-  equal `TOTAL BYTES`.
-- **`backupItemOperationsCompleted` equal to `...Attempted`**, and equal
-  to the number of volumes. These are the asynchronous CSI operations;
-  this is the field that says the data actually moved, where
-  `itemsBackedUp` only counts objects written to the archive.
-- **`phase: Completed`** last. It is the weakest of the three signals:
-  a backup can reach `Completed` having snapshotted nothing (if Velero
-  skipped the volumes), and can read `PartiallyFailed` while the volume
-  data is perfectly fine (if an unrelated item action errored).
-
-Roughly five minutes wall clock for ~1.1G of etcd across three members,
-against the Ceph cluster on the same bare-metal host.
-
-No `DataUpload` rows at all is the failure worth recognising - see
-[If no `DataUpload` is created at all](#if-no-dataupload-is-created-at-all).
-
-### Shutdown Primary Hub
-
-```bash
-ansible-playbook -i inventory/hosts shutdown_hub_cluster.yaml --ask-vault-pass
-```
-
-### Destroy the Ceph cluster (Ceph/CSI DR demo)
-
-Only on the Ceph path, and only deliberately: **this destroys the storage
-the backup was taken from.** Take the backup and confirm its `DataUpload`s
-completed first; there is no going back to hub1's storage afterwards.
-
-With `oadp_backup_method=csi` the etcd data is no longer on Ceph - the
-snapshot was taken, copied to S3 by the data mover, and released. So the
-bucket already holds everything the restore needs, and leaving the
-original cluster running makes that impossible to show: an observer
-cannot tell whether the hosted cluster came back from object storage or
-from storage that never went away.
-
-Production puts the DR site on its own storage cluster of the same type.
-Rebuilding gets the same evidence on one bare-metal host without standing
-up a second 80G Ceph cluster.
-
-```bash
-ansible-playbook -i inventory/hosts cleanup.yaml --tags ceph
-
-# a partial teardown leaves stale OSD disks the rebuilt cluster cannot
-# claim - you get a cluster with no OSDs. Check before rebuilding:
-virsh list --all | grep -E 'ceph[123]|cephadmin'          # expect no rows
-ls /var/lib/libvirt/images/ | grep -E '^ceph|^cephadmin'  # expect nothing
-```
-
-## DR Hub
-### Rebuild Ceph for the DR hub (Ceph/CSI DR demo)
-
-A brand-new cluster on the same four VMs - no pool, no image and no CSI
-user survives from hub1's:
-
-```bash
-(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass)
-ssh root@192.168.122.27 ceph -s     # HEALTH_OK, 3 mons, 9 OSDs
-```
-
-The StorageClass name comes from `ceph_odf_storagecluster_name`, so the
-rebuilt cluster presents `ocs-external-storagecluster-ceph-rbd` again.
-That matters: Velero restores each PVC with its original
-`spec.storageClassName`, and a DR hub with no class of that exact name
-leaves the restored PVCs `Pending` indefinitely, with nothing in the
-Restore status to explain why.
-
-### Build DR Hub
-Once the primary hub is shutdown, you can build the DR hub.
-```bash
-ansible-playbook -i inventory/hosts setup_hub_cluster2.yaml --ask-vault-pass
-```
-
-On the Ceph path, build hub2 with `use_lvm_storage: false` and attach it to
-the rebuilt Ceph cluster **now**, before the AgentServiceConfig below - this
-creates hub2's own ODF external StorageCluster and its own CSI credentials:
-
-```bash
-(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass -e target_hub=hub2)
-```
-
-The AgentServiceConfig provisions three PVCs - `databaseStorage` (10Gi),
-`filesystemStorage` (100Gi) and `imageStorage` (50Gi) - and none of them
-names a `storageClassName`, so they bind against whatever StorageClass the
-cluster marks **default**. Until that exists they sit `Pending` and
-assisted-service never starts. On the LVM path `lvms-vg1` is the default;
-on the Ceph path it is `ocs-external-storagecluster-ceph-rbd`, which is
-why `ceph_odf_rbd_default_sc` defaults to true. Check before continuing:
-
-```bash
-oc get sc      # exactly one class marked (default)
-```
-
-Note that AgentServiceConfigs are not restored by OADP. You need to apply the rendered manifests manually before proceeding to the next step. Watch the ansible debug output for the location of the rendered manifests to apply.
-```bash
-oc apply -f /home/images/ocp-onpremise/roles/setup-hub-acm/files/.rendered-05-agentserviceconfig.yaml
-oc get pvc -n multicluster-engine    # the three should reach Bound
-```
-There is no need to create InfraEnv, HostedCluster and discover nodes. OADP will do that automatically.
-
-### Configure OADP on DR Hub
-
-```bash
-ansible-playbook -i inventory/hosts setup_oadp.yaml --ask-vault-pass -e target_hub=hub2
-```
-### Restore hello-openshift application with a PVC to DR Hub.
-This will validate that the restore is working before restoring the hosted cluster.
-
-```bash
-oc apply -f oadp/hello-openshift-oadp-restore.yaml
-```
-Verify that the data persisted in the PVC is visible in the DR hub pod after restore.
-
-```bash
-POD=`oc get pod -n hello-openshift-oadp -o jsonpath='{.items[0].metadata.name}'`
-oc exec -it $POD -n hello-openshift-oadp -- sh -c 'cat /var/data/hello.txt'
-```
-
-### Restore the hosted cluster to the DR Hub using OADP. This will restore the hosted cluster to the DR Hub using OADP.
-
-```bash
-ansible-playbook -i inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2
-```
-
-Pass the same `oadp_backup_method` the backup was taken with - it picks
-both the Restore template and the name of the Backup to restore from,
-and the playbook stops with a clear message if that Backup is not
-visible on this hub yet:
-
-```bash
-ansible-playbook -i inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
-  -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2 -e oadp_backup_method=csi
-```
-
-On a csi restore the volume data comes back through `DataDownload`
-objects, which is where to look if the Restore seems to stall:
-
-```bash
-oc get datadownloads.velero.io -n openshift-adp -w
-```
-
-#### What a good `csi` restore looks like
-
-The counterpart to
-[What a good `csi` run looks like](#what-a-good-csi-run-looks-like) - a
-verified restore of `hcp-cluster1` onto the DR hub, from the backup
-recorded there:
-
-```yaml
-status:
-  phase: Completed
-  progress:
-    itemsRestored: 379
-    totalItems: 379
-  restoreItemOperationsAttempted: 3
-  restoreItemOperationsCompleted: 3
-  startTimestamp: "2026-09-08T08:12:30Z"
-  completionTimestamp: "2026-09-08T08:18:11Z"
-  warnings: 1
-```
-
-```
-$ oc get datadownloads.velero.io -n openshift-adp
-NAME                             STATUS      STARTED   BYTES DONE   TOTAL BYTES   STORAGE LOCATION   AGE     NODE
-hcp-cluster1-restore-csi-76kvd   Completed   5m18s     371423568    371423568     default            5m23s   worker2
-hcp-cluster1-restore-csi-l82hx   Completed   5m18s     370678113    370678113     default            5m23s   worker1
-hcp-cluster1-restore-csi-qxxlj   Completed   5m18s     370738865    370738865     default            5m23s   worker3
-```
-
-The strongest single check is that **the byte counts match the backup's
-`DataUpload`s exactly** - 371423568, 370738865 and 370678113 in both
-tables. Same three etcd volumes, round-tripped through S3. Which worker
-each lands on differs from the backup and does not matter; the data mover
-provisions a fresh PVC wherever the pod is scheduled.
-
-Also worth noting what this proves: the Ceph cluster the backup was taken
-from had been destroyed and rebuilt in between (see
-[Destroy the Ceph cluster](../README.md#destroy-the-ceph-cluster-cephcsi-dr-demo)),
-so none of these bytes could have come from the original storage.
-
-A non-zero `warnings` count is normal - `itemsRestored == totalItems` and
-three completed operations are what matter. Read them rather than guessing:
-
-```bash
-alias velero='oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero'
-velero restore describe hcp-cluster1-restore-csi --details
-velero restore logs hcp-cluster1-restore-csi | grep -i 'level=warning'
-```
-
-Two appear on every run here, both benign:
-
-- `No annotations found for <ns>/<secret>, using restore spec setting: false`
-  - Velero deciding whether to restore the object's `status` subresource.
-  An object with no annotations at all logs this at warn, one with any
-  annotation logs the same decision at debug. Secrets have no `status`,
-  and it is never counted in `status.warnings`.
-- `item not found when patching managed fields .../token-nodepool-...`
-  - Velero created the Secret, then found it gone when patching
-  `managedFields` back. HyperShift's NodePool controller rotates those
-  token secrets and had already collected the stale one. This is the
-  warning the count refers to.
-
-#### Restored cluster stuck in `Importing`
-
-If the restored HostedCluster reaches `Completed` but its ManagedCluster
-sits at `Available=Unknown` / `ManagedClusterLeaseUpdateStopped`, and the
-klusterlet registration agent logs
-
-```
-failed to list *v1.ManagedCluster: Unauthorized
-failed to list *v1.CertificateSigningRequest: Unauthorized
-```
-
-then the agent is presenting a ServiceAccount token minted by the
-**original** hub. `Unauthorized` is a 401 - the credential itself was
-rejected - so this is not a missing Role or ClusterRole, which would be a
-403 `Forbidden`.
-
-The path in: this repo's Backup includes `secrets` from the
-`<cluster>` namespace, and for an ACM-imported hosted cluster that is
-*also* the ManagedCluster's namespace, so `<cluster>-import` - carrying
-the bootstrap SA token - is inside backup scope. Restoring it hands the
-DR hub a token signed by the old hub's key, referencing an SA uid the DR
-hub regenerated.
-
-Confirm by decoding the token and comparing with the live ServiceAccount:
-
-```bash
-oc get secret bootstrap-hub-kubeconfig -n klusterlet-<cluster> -o jsonpath='{.data.kubeconfig}' \
-  | base64 -d | grep 'token:' | awk '{print $2}' | cut -d. -f2 \
-  | tr '_-' '/+' | base64 -d | python3 -m json.tool
-oc get sa <cluster>-bootstrap-sa -n <cluster> -o jsonpath='{.metadata.uid}{"\n"}'
-```
-
-An `iat` predating the restore, or a uid that differs from the live SA,
-is the confirmation. Fix by deleting the transplanted import secret so
-MCE regenerates it against this hub:
-
-```bash
-oc delete secret <cluster>-import -n <cluster>
-```
-
-MCE mints a new token, rebuilds the `<cluster>-hosted-klusterlet`
-ManifestWork from it, and the work agent re-applies
-`bootstrap-hub-kubeconfig`; the agent then files a CSR which auto-approves
-if `hubAcceptsClient` is already true.
-
-Deleting `bootstrap-hub-kubeconfig` directly does **not** help - it is
-owned by that ManifestWork and gets re-applied with the same stale
-content. Refresh the import secret and let MCE rebuild the chain.
-
-To stop this recurring, exclude the import secret from the backup using
-Velero's object-level opt-out, so the artifact never carries another
-hub's credentials (it is a 360-day token otherwise sitting in S3):
-
-```bash
-oc label secret <cluster>-import -n <cluster> velero.io/exclude-from-backup=true
-```
-
-This is not a deviation from the upstream guide's resource list - keep
-`sa` and `secrets` as documented. The collision exists only because the
-HostedCluster's namespace shares its name with the ManagedCluster;
-upstream's example puts the HostedCluster in `clusters`, so ACM's
-namespace falls outside the backup.
-
-The label is a workaround, not the fix - MCE reconciles the secret, so it
-has to be re-applied before every backup. Filed as
-[OCPBUGS-121709](https://redhat.atlassian.net/browse/OCPBUGS-121709);
-**that JIRA is where the current status lives**. Check it before a run: if
-it is resolved in the ACM/MCE version you are on, the exclusion is no longer
-needed.
-
-
-### Point DNS at the DR hub
-
-The DR hub is on its own network segment, so the restored hosted clusters come
-up on its MetalLB addresses (`.190`/`.191`/`.192`) rather than hub1's - the pool
-names are the same, the addresses are not. Re-render the zone files so
-`api`/`api-int` follow them:
-
-```bash
-ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns \
-  --ask-vault-pass -e target_hub=hub2
-```
-
-Verify DNS and the restored kube-apiserver Service agree:
-
-```bash
-dig +short api.hcp-cluster1.mylab.com @192.168.122.21
-oc get svc kube-apiserver -n hcp-cluster1-hcp-cluster1 \
-  -o jsonpath='{.status.loadBalancer.ingress[0].ip}{"\n"}'
-```
-
-**Then check a worker node, not just the helper.** The VMs get
-`192.168.122.1` from DHCP - libvirt's dnsmasq - which forwards the lab
-zones to the helper and caches the answers. A correct zone on the helper
-with a stale answer on the nodes is the normal state after a cutover, and
-the symptom is both hosted-cluster workers going `NotReady` while
-`oc get co` falls apart: the kubelets are still dialling the hub that
-just went away.
-
-```bash
-ssh core@192.168.122.41 'getent hosts api.hcp-cluster1.mylab.com'   # want the DR address
-```
-
-If it still shows the old address, flush dnsmasq's cache on the
-bare-metal host - this clears cached records without touching DHCP leases
-or disturbing any VM:
-
-```bash
-sudo kill -HUP $(cat /var/run/libvirt/network/default.pid 2>/dev/null \
-                 || cat /var/run/libvirt/dnsmasq/default.pid)
-```
-
-Kubelets re-resolve and rejoin within a minute or two;
-`systemctl restart kubelet` on each worker forces it.
-
-Set `target_hub: hub2` in `vars.yaml` to make the cutover permanent. See
-[MetalLB Address Pools for Hosted Clusters](../README.md#metallb-address-pools-for-hosted-clusters)
-for how the per-hub addresses are defined.
-
-### Verify the hosted cluster came back
-
-```bash
-export KUBECONFIG=<hosted cluster kubeconfig>
-oc get nodes                     # both workers Ready
-oc get co | grep -v 'True.*False.*False'
-oc get pods -A | grep -vE 'Running|Completed'
-```
-
-Nodes stay `NotReady` until DNS points at the DR hub and the kubelets
-reconnect, so do the step above first. `metrics.k8s.io` errors and
-Pending/Terminating pods are downstream of that and clear on their own.

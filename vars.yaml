@@ -194,8 +194,9 @@ disconnected_install: false
 ## LVM Storage (true) or Ceph (ceph_version, below) via ODF external mode
 ## (false) for the hub's PVs.
 ## Has to be decided before the hub is built. true installs LVM Storage as part
-## of the cluster build itself (roles/setup-lvm-storage, tag lvm - not part of
-## --tags acm), so every hub, and the SNO (sno_lvm_storage), comes up with
+## of the cluster build itself (roles/setup-lvm-storage, tag lvm, in
+## standard-cluster/ - not part of acm/setup_acm.yaml), so every standard
+## cluster, and the SNO (sno_lvm_storage), comes up with
 ## lvms-vg1 as its default StorageClass. Pick Ceph for the backup/restore
 ## demo: LVM Storage ships no VolumeSnapshotClass, so oadp_backup_method=csi -
 ## the only trustworthy control-plane restore - is not available on it.
@@ -228,7 +229,7 @@ hosted_clusters:
   ## 'ingress: metallb' for MetalLB inside it. kubevirt/README.md.
   - name: hcp-kv1
     platform: kubevirt
-  ## The same, but its worker VMs run on the SNO (setup_sno.yaml) instead of
+  ## The same, but its worker VMs run on the SNO (sno/setup_sno.yaml) instead of
   ## the hub: the control plane stays on the hub, and the NodePool creates the
   ## VMs on the SNO's OpenShift Virtualization through a kubeconfig for it
   ## ('external infrastructure'). 'infra' names an entry in
@@ -333,12 +334,12 @@ oadp_backup_method: fs
 ## Which ACM and OADP the hubs install (roles/setup-hub-acm). The defaults suit
 ## the 4.22 build above. An OLM catalog only offers what supports that
 ## OpenShift version, so on another version read the catalog first. Build the
-## hub with --skip-tags acm, then on it:
+## cluster (standard-cluster/), then on it:
 ##   oc get packagemanifest advanced-cluster-management -n openshift-marketplace \
 ##     -o jsonpath='{range .status.channels[*]}{.name}{"  "}{.currentCSV}{"\n"}{end}'
 ##   oc get packagemanifest redhat-oadp-operator -n openshift-marketplace \
 ##     -o jsonpath='{range .status.channels[*]}{.name}{": "}{.entries[*].name}{"\n"}{end}'
-## set these, and run the same playbook with --tags acm.
+## set these, and run acm/setup_acm.yaml.
 acm_operator_channel: release-2.17
 oadp_operator_channel: stable
 ## Empty: install the channel head and keep upgrading (automatic approval).
@@ -543,7 +544,7 @@ ip_list:
   hub2lb: 189
 
   # Hub-disconnected - a third, fully independent hub cluster installed
-  # entirely from the local mirror registry (setup_hub_cluster.yaml with
+  # entirely from the local mirror registry (standard-cluster/setup_cluster1.yaml with
   # disconnected_install set). Deliberately given its own IP block, its own
   # subdomain (hub_disconnected_domain) and its own
   # install/VM directories so it can be built and run *alongside* hub1
@@ -560,7 +561,7 @@ ip_list:
   hubdlb: 179
 
   # Hub2-disconnected - the DR hub built from the local mirror registry
-  # (setup_hub_cluster2.yaml with disconnected_install set). Same relationship
+  # (standard-cluster/setup_cluster2.yaml with disconnected_install set). Same relationship
   # to hub2 that hubd has to hub1: its own IP block, its own subdomain
   # (hub2_disconnected_domain) and its own install/VM directories, so it is a
   # separate cluster rather than a differently-built hub2, and all four hubs
@@ -581,12 +582,12 @@ ip_list:
   hub2dlb: 119
 
   # Mirror registry - shared connected infrastructure for disconnected-install
-  # simulation (see setup_mirror_registry.yaml). Stays reachable/connected
+  # simulation (see mirror-registry/setup_mirror_registry.yaml). Stays reachable/connected
   # even when master/worker IPs are cut off from the real internet.
   registry: 22
 
-  # MinIO - local S3-compatible target for OADP backups during
-  # disconnected-install simulation (see setup_minio.yaml). Same
+  # MinIO - local S3-compatible object store for the disconnected lab (OADP
+  # backups, later Loki/Tempo; see minio/setup_minio.yaml). Same
   # connected-infrastructure treatment as mirror_registry.
   minio: 23
 
@@ -835,7 +836,7 @@ hub2_disconnected_vm_folder: "{{ download_dir }}/hub2d"
 hub2_disconnected_install_folder: "{{ download_dir }}/hub2d_install"
 
 ## ---------------------------------------------------------------------------
-## Single-node OpenShift (setup_sno.yaml, --tags sno)
+## Single-node OpenShift (sno/setup_sno.yaml, --tags sno)
 ## ---------------------------------------------------------------------------
 ## A connected SNO built from an agent ISO: the node pulls its release payload
 ## straight from quay.io with the pull secret in vault.yaml, so it needs no
@@ -872,7 +873,7 @@ sno_disk_gb: 200
 ## hot-plugged into the VM after the install and handed to LVMS, which makes
 ## lvms-vg1 the default StorageClass. Follows use_lvm_storage; set
 ## sno_lvm_storage: false to keep the SNO without storage.
-## Add it to a running SNO with: setup_sno.yaml --tags snostorage
+## Add it to a running SNO with: sno/setup_sno.yaml --tags snostorage
 ##
 ## Thin on the host (qcow2, metadata preallocated only), so the file takes
 ## space only as LVMS writes. 512: the worker VMs of hcp-kv2 and hcp-kv3 run
@@ -907,7 +908,7 @@ sno_extra_clusters:
 sno_fabric_nic: false
 
 ## ---------------------------------------------------------------------------
-## A second SNO in a second rack (setup_sno2.yaml) - optional
+## A second SNO in a second rack (sno/setup_sno2.yaml) - optional
 ## ---------------------------------------------------------------------------
 ## Off unless sno2_enabled is true. With it on, sno2 joins the EVPN lab on its
 ## own fabric segment: its fabric NIC is on virbr2 (clab_fabric_segments.rack2
@@ -967,7 +968,7 @@ compact_ingress_vip_key: compact_ingress
 ## The disconnected compact cluster (compact-cluster/setup_compact_cluster_disconnected.yaml).
 ## Same role, same bonds, its own name, addresses and folders, so both can be
 ## up at once. Its images come only from the mirror registry
-## (setup_mirror_registry.yaml) and its nodes' egress past the lab subnet is
+## (mirror-registry/setup_mirror_registry.yaml) and its nodes' egress past the lab subnet is
 ## cut with iptables, exactly as for the disconnected hub (hubd).
 compactd_name: compactd
 compactd_install_folder: "{{ download_dir }}/compactd_install"
@@ -1007,10 +1008,10 @@ compact_vcpus: 8
 compact_disk_gb: 150
 
 ## The hosted cluster the compact cluster manages (hcp-compact1, connected):
-## the worker VMs setup_hosted_cluster_vm.yaml builds with -e target_hub=compact.
+## the worker VMs hcp/setup_hosted_cluster_vm.yaml builds with -e target_hub=compact.
 ## Same shape as hosted_cluster_workers; sizing as for the hub's hosted
 ## clusters. Their NodePool takes these two as Agents from the compact
-## cluster's InfraEnv (setup_bminfra.yaml -e target_hub=compact).
+## cluster's InfraEnv (hcp/setup_bminfra.yaml -e target_hub=compact).
 compact_hosted_cluster_workers:
   - name: hcp_compact1_worker1
     ip_key: hcpc1worker1
@@ -1059,16 +1060,16 @@ compact_hosted_cluster_memory: 16384
 ## 'ip' IS per hub, because the DR hub sits on a different network segment
 ## and hub1's addresses are not routable there. Each key is a hub name (the
 ## value passed as metallb_hub / target_hub):
-##   hub   - primary hub   (setup_hub_cluster.yaml)
-##   hub2  - DR hub        (setup_hub_cluster2.yaml)
-##   hubd  - disconnected hub (setup_hub_cluster.yaml -e disconnected_install=true)
+##   hub   - primary hub   (standard-cluster/setup_cluster1.yaml)
+##   hub2  - DR hub        (standard-cluster/setup_cluster2.yaml)
+##   hubd  - disconnected hub (standard-cluster/setup_cluster1.yaml -e disconnected_install=true)
 ##   compact - the connected compact cluster as a management cluster
-##           (compact-cluster/setup_compact_cluster.yaml --tags acm)
+##           (acm/setup_acm.yaml -e target_hub=compact)
 ## At DR cutover the hosted cluster comes back on the hub2 address and DNS is
-## re-rendered to match - see the MetalLB section of the README.
+## re-rendered to match - see the MetalLB section of acm/README.md.
 ##
 ## There is deliberately no 'hub2d' key. The disconnected DR hub
-## (setup_hub_cluster2.yaml with disconnected_install) is a separate cluster
+## (standard-cluster/setup_cluster2.yaml with disconnected_install) is a separate cluster
 ## from hub2, but it plays the same part in the topology, so it configures
 ## MetalLB as metallb_hub=hub2 and a cluster restored onto it comes up on the
 ## hub2 address DNS already publishes at cutover. Adding hub2d addresses here
@@ -1141,7 +1142,7 @@ hosted_cluster_metallb_pools:
   ## Add a 'hub' entry here if you ever do want one on hub1.
   ##
   ## These hub2 addresses are a reservation, not something an ordinary hub2
-  ## build renders: setup_hub_cluster2.yaml without disconnected_install
+  ## build renders: standard-cluster/setup_cluster2.yaml without disconnected_install
   ## renders only the connected three (see the install-mode note above), so
   ## `oc get IPAddressPool -n metallb-system` on a connected hub2 shows three
   ## pools. Re-run its 'acm' tag with -e disconnected_install=true to create
@@ -1163,7 +1164,7 @@ hosted_cluster_metallb_pools:
       hubd: 169
 
   ## Managed by the compact cluster: its only address is under 'compact', the
-  ## metallb_hub value compact-cluster/setup_compact_cluster.yaml --tags acm
+  ## metallb_hub value acm/setup_acm.yaml -e target_hub=compact
   ## configures MetalLB with. No 'hub'/'hub2' address, so no hub ever renders
   ## a pool for it. .100 is outside every DHCP range and every MAC-reserved
   ## octet (those are all two digits or fewer).
@@ -1210,7 +1211,7 @@ hosted_cluster_cpu: 4
 hosted_cluster_memory: 8512
 hosted_cluster_vm_folder: "{{ download_dir }}/hosted_cluster"
 
-## The worker VMs setup_hosted_cluster_vm.yaml creates for hcp-cluster1.
+## The worker VMs hcp/setup_hosted_cluster_vm.yaml creates for hcp-cluster1.
 ## 'name' is the libvirt domain name (and the qcow2 basename); 'ip_key' is
 ## the ip_list key that gives the VM its address, via the MAC scheme
 ## 52:54:00:e2:54:<last octet> the libvirt network reserves it under.
@@ -1225,7 +1226,7 @@ hosted_cluster_workers:
 ## How those workers join the hub's InfraEnv. Same VMs, same names, MACs and
 ## addresses either way:
 ##
-##   agent - setup_hosted_cluster_vm.yaml boots them straight off the discovery
+##   agent - hcp/setup_hosted_cluster_vm.yaml boots them straight off the discovery
 ##           ISO; they register as Agents, which you approve. The hub has no
 ##           way to power or reboot them. Default, and how this lab has always
 ##           worked.
@@ -1235,7 +1236,7 @@ hosted_cluster_workers:
 ##           VMs on and boots them from virtual media; the BareMetalAgent
 ##           controller approves the resulting Agents. This is how bare-metal
 ##           workers with real BMCs are managed, and what
-##           oadp/BMH-DR-test.md tests across a DR restore.
+##           hcp/dr/BMH-DR-test.md tests across a DR restore.
 ##
 ## Override per run: -e hosted_cluster_worker_provisioning=bmh. bmh applies to
 ## the hub's connected hosted cluster workers only (hosted_cluster_workers);
@@ -1266,7 +1267,7 @@ hosted_cluster2_vm_folder: "{{ download_dir }}/hosted_cluster2"
 ##
 ## With disconnected_install true these clusters REPLACE hosted_clusters in
 ## roles/create-hosted-cluster, the same way disconnected_install wins over
-## target_hub in setup_bminfra.yaml - a disconnected run renders the
+## target_hub in hcp/setup_bminfra.yaml - a disconnected run renders the
 ## disconnected bundle onto hubd and nothing else. Every name here needs an
 ## entry in hosted_cluster_metallb_pools above, exactly like hosted_clusters.
 ##
@@ -1304,8 +1305,8 @@ hosted_cluster_disconnected_workers:
 hosted_cluster_disconnected_block_node_nat: true
 
 ## Variables required by the OADP backup/restore flow
-## (roles/setup-oadp, oadp/templates/*, setup_oadp.yaml,
-##  backup_hosted_cluster.yaml, restore_hosted_cluster.yaml)
+## (roles/setup-oadp, hcp/dr/templates/*, oadp/setup_oadp.yaml,
+##  hcp/dr/backup_hosted_cluster.yaml, hcp/dr/restore_hosted_cluster.yaml)
 ##
 ## AWS access key id/secret go in vault.yaml as
 ## oadp_aws_access_key_id / oadp_aws_secret_access_key - never here.
@@ -1320,14 +1321,14 @@ oadp_storage_location: default
 ## remove the annotation. Only matters for workers built with
 ## hosted_cluster_worker_provisioning=bmh. Override per run:
 ##   -e oadp_restore_detach_bmh=true
-## See oadp/BMH-DR-test.md.
+## See hcp/dr/BMH-DR-test.md.
 oadp_restore_detach_bmh: false
 oadp_restore_bmh_modifier_name: hcp-restore-bmh-detached
 
 ## How the control-plane PVs (the hosted cluster's etcd volumes) are
 ## backed up. Both methods use the same S3 bucket and the same
 ## DataProtectionApplication - only the Backup/Restore CRs differ, and
-## each method has its own pair of templates in oadp/templates/ so
+## each method has its own pair of templates in hcp/dr/templates/ so
 ## either can be demonstrated without editing the other.
 ##
 ##   fs  - Kopia file-system backup (defaultVolumesToFsBackup: true).
@@ -1366,10 +1367,10 @@ oadp_csi_snapshot_class: "{{ ceph_odf_storagecluster_name }}-rbdplugin-snapclass
 oadp_csi_driver: openshift-storage.rbd.csi.ceph.com
 
 ## Which hub is currently authoritative. It selects the kubeconfig
-## setup_oadp.yaml / backup_hosted_cluster.yaml / restore_hosted_cluster.yaml
+## oadp/setup_oadp.yaml / hcp/dr/backup_hosted_cluster.yaml / hcp/dr/restore_hosted_cluster.yaml
 ## use, and the hub whose hosted_cluster_metallb_pools addresses roles/setup-dns
 ## publishes as api/api-int. Override per-run with -e target_hub=hub2 once
-## you've cut over (see oadp/README.md), and re-run the dns tag of
+## you've cut over (see hcp/dr/README.md), and re-run the dns tag of
 ## setup_bm_host.yaml with the same override so DNS follows the hosted
 ## clusters to the DR hub.
 ## (target_hub itself is set in the START HERE block at the top.)
@@ -1440,7 +1441,7 @@ agent_service_image_storage: 50Gi
 ## the InfraEnv on a different version than the hub.
 bminfra_ocp_version: "{{ ocp_major_version }}"
 ## The discovery ISO and PXE artifacts are cached in download_dir under these
-## names. The compact cluster has its OWN InfraEnv (setup_bminfra.yaml
+## names. The compact cluster has its OWN InfraEnv (hcp/setup_bminfra.yaml
 ## -e target_hub=compact), whose ISO must not land on the hub's file - the
 ## download is skipped when the file exists, so the next hub worker would boot
 ## the compact cluster's ISO, or the other way round. Hence the prefix; every
@@ -1459,7 +1460,7 @@ discovery_copy_pxe_to_helper: "{{ (target_hub | default('hub')) != 'compact' }}"
 ## ---------------------------------------------------------------------------
 ## Discovery host ignition (disconnected only)
 ##
-## setup_hosted_cluster_vm.yaml and setup_bminfra.yaml include
+## hcp/setup_hosted_cluster_vm.yaml and hcp/setup_bminfra.yaml include
 ## roles/setup-bminfra/tasks/*.yml by path rather than running the role, so the
 ## role's defaults are not loaded for them - these have to live here.
 ##
@@ -1716,12 +1717,12 @@ hosted_cluster_domains:
 ## kept only for older playbooks that still reference them.
 
 ## setup-mirror-registry-vm / setup-mirror-registry: the standalone VM
-## used to simulate a disconnected install (see setup_mirror_registry.yaml).
+## used to simulate a disconnected install (see mirror-registry/setup_mirror_registry.yaml).
 ## disconnected_install gates whether any of this is used at all - default
 ## false so connected installs are completely unaffected. It is set in the
 ## START HERE block at the top.
 ## ===========================================================================
-## Bastion VM (setup_bastion.yaml)
+## Bastion VM (bastion/setup_bastion.yaml)
 ##
 ## A big-disk guest for building and scanning container images, because the
 ## baremetal host does not have the room and filling its / takes the lab down.
@@ -1780,8 +1781,8 @@ mirror_catalog_index: "registry.redhat.io/redhat/redhat-operator-index:v{{ ocp_m
 ## destination layout, change this to match or the extract will 404.
 mirror_release_repository: openshift/release-images
 
-## setup-minio-vm / setup-minio: local S3-compatible OADP backup target
-## for disconnected-install simulation (see setup_minio.yaml). Also
+## setup-minio-vm / setup-minio: the lab's local S3-compatible object store
+## for a disconnected deployment (see minio/README.md). Also
 ## gated behind disconnected_install (shared with mirror-registry above).
 ## minio_root_user / minio_root_password go in vault.yaml, not here.
 minio_name: minio
@@ -1800,6 +1801,12 @@ minio_data_dir: /data/minio
 ## AWS S3 - kept distinct from oadp_bucket_name so switching between
 ## connected/disconnected DPA config is an explicit, visible choice.
 ## (minio_bucket_name itself is set in the START HERE block at the top.)
+##
+## Every bucket setup-minio creates, one per consumer of the store. Add one
+## here for each new S3 user (e.g. loki-chunks, tempo-traces) and re-run
+## minio/setup_minio.yaml --tags minio; existing buckets are left alone.
+minio_buckets:
+  - "{{ minio_bucket_name }}"
 
 # -----------------------------------------------------------------------
 # ADD to vars.yaml:
@@ -2390,7 +2397,7 @@ clab_clusters:
       - domain: hub2_worker3
         ip_key: hub2_worker3
 
-  ## The single-node cluster from setup_sno.yaml. One node, which is both
+  ## The single-node cluster from sno/setup_sno.yaml. One node, which is both
   ## master and worker, so it takes an NNCP and a VTEP exactly as a worker
   ## does - single-node OpenShift labels its one node with both roles, which
   ## is why the test workloads' `node-role.kubernetes.io/worker` selector
@@ -2481,7 +2488,7 @@ clab_clusters:
       - domain: "{{ sno_name }}"
         ip_key: sno
 
-  ## The second SNO, in the second rack (setup_sno2.yaml, sno2_enabled). Only
+  ## The second SNO, in the second rack (sno/setup_sno2.yaml, sno2_enabled). Only
   ## on the fabric when sno2_enabled is true - see clab_fabric_clusters below.
   ##
   ## fabric_segment puts its fabric NIC on rack2 rather than virbr1, so it

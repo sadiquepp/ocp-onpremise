@@ -1,2 +1,6 @@
 ---
 # defaults file for setup-minio
+
+## Buckets to create - the real list is minio_buckets in vars.yaml; this is the
+## fallback when the role is used without it.
+minio_buckets: ["{{ minio_bucket_name | default('adp-backup-disconnected') }}"]

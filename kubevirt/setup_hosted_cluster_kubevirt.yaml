@@ -11,9 +11,10 @@
 ## working directory, and the one here adds ../roles to roles_path.
 ##
 ## The host, Ceph and the hub come first, from the backup/restore flow
-## unchanged - steps 1-7 of ../steps.md; steps.md in this directory lists them.
-## That flow also gives every hosted cluster in the root vars.yaml its API name
-## (setup_bm_host.yaml) and its MetalLB API pool (setup_hub_cluster.yaml), and
+## unchanged - steps 1-7 of ../hcp/dr/steps.md; steps.md in this directory
+## lists them. That flow also gives every hosted cluster in the root vars.yaml
+## its API name (setup_bm_host.yaml) and its MetalLB API pool
+## (acm/setup_acm.yaml), and
 ## the clusters this playbook builds are the 'platform: kubevirt' entries in
 ## that same hosted_clusters list (hcp-kv1 out of the box). This playbook does
 ## only what that flow does not.

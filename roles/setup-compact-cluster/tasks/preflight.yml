@@ -66,8 +66,8 @@
       (/etc/pki/ca-trust/source/anchors/mirror-registry-rootCA.pem is missing),
       so the mirror registry has not been set up. Run
       compact-cluster/setup_compact_cluster_disconnected.yaml without --tags
-      (it runs setup_mirror_registry.yaml first), or run
-      setup_mirror_registry.yaml -e disconnected_install=true on its own from
+      (it runs mirror-registry/setup_mirror_registry.yaml first), or run
+      mirror-registry/setup_mirror_registry.yaml -e disconnected_install=true on its own from
       the repository root.
     success_msg: "Mirror registry CA is trusted on this host."
   when: compact_disconnected | bool

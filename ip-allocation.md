@@ -85,7 +85,7 @@ rebuild.
 | `.20` | VM | sno, single-node OpenShift: node, API and *.apps | `ip_list.sno` |  |
 | `.21` | VM | helper VM: DNS (named), haproxy, PXE/HTTP | `ip_list.helper_server` |  |
 | `.22` | VM | mirror registry VM (registry.hub.mylab.com:8443) | `ip_list.registry` |  |
-| `.23` | VM | MinIO VM, S3 target for OADP backups | `ip_list.minio` |  |
+| `.23` | VM | MinIO VM, the disconnected lab's S3 store (OADP backups, ...) | `ip_list.minio` |  |
 | `.24` | VM | Ceph node 1 | `ip_list.ceph1` |  |
 | `.25` | VM | Ceph node 2 | `ip_list.ceph2` |  |
 | `.26` | VM | Ceph node 3 | `ip_list.ceph3` |  |
@@ -125,7 +125,7 @@ rebuild.
 | `.66` | VM | compact (three-node compact cluster) master3 | `ip_list.compact_master3` |  |
 | `.67`–`.69` |  |  |  |  |
 | `.70` | VM | UDN lab tenant client VM: orange and green | `ip_list.udnclient-og` |  |
-| `.71` | Reserved | reserved for a virtual BMC for hcp-cluster2 (only referenced in commented-out lines of setup_hosted_cluster2_vm.yaml) | `ip_list.c2vbmc` |  |
+| `.71` | Reserved | reserved for a virtual BMC for hcp-cluster2 (only referenced in commented-out lines of hcp/setup_hosted_cluster2_vm.yaml) | `ip_list.c2vbmc` |  |
 | `.72` | VM | hubd (disconnected hub) bootstrap | `ip_list.hubd_bootstrap` |  |
 | `.73` | VM | hubd (disconnected hub) master1 | `ip_list.hubd_master1` |  |
 | `.74` | VM | hubd (disconnected hub) master2 | `ip_list.hubd_master2` |  |

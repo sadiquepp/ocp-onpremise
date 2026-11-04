@@ -123,7 +123,7 @@
     msg: >-
       Leaving out {{ item.name }}: its worker VMs go on '{{ item.infra }}', and
       {{ kubevirt_infras[item.infra].kubeconfig }} does not exist yet. Build that
-      cluster first ({{ (item.infra == 'sno') | ternary('setup_sno.yaml - kubevirt/README.md, "Workers on another cluster"', 'see kubevirt_infras') }}),
+      cluster first ({{ (item.infra == 'sno') | ternary('sno/setup_sno.yaml - kubevirt/README.md, "Workers on another cluster"', 'see kubevirt_infras') }}),
       or name it with -e kubevirt_cluster={{ item.name }} to see the preflight.
   loop: "{{ kubevirt_entries | selectattr('infra', 'defined') | selectattr('infra', 'in', kubevirt_infras_missing) | list }}"
   loop_control:

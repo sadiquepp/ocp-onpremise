@@ -23,10 +23,10 @@
 ##
 ## IMPORTANT - read before running: by default the consumer plays
 ## target the same hub cluster every other *.yaml in this repo does
-## (hub_kubeconfig, same target_hub switch as setup_oadp.yaml). But
+## (hub_kubeconfig, same target_hub switch as oadp/setup_oadp.yaml). But
 ## the hub already runs the LVM Storage operator in the
-## openshift-storage namespace (roles/setup-lvm-storage, part of hub
-## bring-up) - and ODF external mode wants that exact same namespace.
+## openshift-storage namespace (roles/setup-lvm-storage, part of the
+## standard-cluster/ build) - and ODF external mode wants that exact same namespace.
 ## Running both on the same cluster is not something this repo has
 ## tested and may conflict. Pick one:
 ##   - remove LVM Storage from the hub first, or

@@ -146,7 +146,7 @@ compact_require_dns: true
 ## ---------------------------------------------------------------------------
 ## Disconnected mode (compact-cluster/setup_compact_cluster_disconnected.yaml sets these).
 ## ---------------------------------------------------------------------------
-## Install from the mirror registry (setup_mirror_registry.yaml) instead of
+## Install from the mirror registry (mirror-registry/setup_mirror_registry.yaml) instead of
 ## quay.io: openshift-install is extracted from the mirrored release with
 ## `oc adm release extract --idms-file`, install-config.yaml carries the mirror
 ## as imageDigestSources plus its CA and a mirror-only pull secret, and the

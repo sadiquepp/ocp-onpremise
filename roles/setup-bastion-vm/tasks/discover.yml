@@ -30,7 +30,7 @@
       No libvirt domain named {{ bastion_name }}, so there is no address to
       discover and the `bastion` group stays empty -- the second play will
       report "no hosts matched". Create the VM first:
-      ansible-playbook -i inventory/hosts setup_bastion.yaml --tags bastion-vm
+      cd bastion && ansible-playbook -i ../inventory/hosts setup_bastion.yaml --tags bastion-vm
   when: bastion_discover_state.stdout | trim | length == 0
 
 - name: Wait for the bastion to take a DHCP address
