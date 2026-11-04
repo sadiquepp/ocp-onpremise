@@ -7,9 +7,11 @@
 ## tags to remove everything, or narrow it to one or more pieces with
 ## --tags a,b:
 ##
-##   --tags hub      hub1 - VMs, VM folder and install folder
-##   --tags hub2     the DR hub (setup_hub_cluster2.yaml), the same way
-##   --tags hubd     the disconnected hub (setup_hub_cluster.yaml
+##   --tags hub      cluster1/hub1 (standard-cluster/setup_cluster1.yaml) - VMs,
+##                   VM folder and install folder
+##   --tags hub2     cluster2/hub2, the DR hub (standard-cluster/setup_cluster2.yaml),
+##                   the same way
+##   --tags hubd     the disconnected cluster1 (standard-cluster/setup_cluster1.yaml
 ##                   -e disconnected_install=true) - VMs, folders, staged
 ##                   oc-mirror manifests and its egress-blocking iptables rules
 ##   --tags hub2d    the disconnected DR hub, the same way
@@ -20,7 +22,7 @@
 ##   --tags ceph     the Ceph VMs and their OSD disks - also the DR demo's
 ##                   deliberate storage-loss step
 ##   --tags sno      the single-node OpenShift cluster only
-##   --tags sno2     the second single-node cluster (setup_sno2.yaml) only
+##   --tags sno2     the second single-node cluster (sno/setup_sno2.yaml) only
 ##   --tags sno3     the extra single-node clusters (sno_extra_clusters: sno3,
 ##                   the MCE cluster of kubevirt/setup_sno3_mce.yaml), with
 ##                   what their hosted clusters left on hub1 and on the SNO
@@ -271,7 +273,7 @@
         - /var/lib/libvirt/images/ceph3_osd3.qcow2
 
   ## -------------------------------------------------------------------------
-  ## The single-node OpenShift cluster (setup_sno.yaml)
+  ## The single-node OpenShift cluster (sno/setup_sno.yaml)
   ## -------------------------------------------------------------------------
   ## The install folder goes with the VM, deliberately. It holds the agent ISO
   ## the domain boots from AND auth/kubeconfig - the only copy of the
@@ -289,7 +291,7 @@
       rm -rf {{ sno_vm_folder | default(download_dir ~ '/' ~ sno_name) }}
       rm -rf {{ sno_install_folder }}
 
-  ## sno2 (setup_sno2.yaml, sno2_enabled), the same way and for the same
+  ## sno2 (sno/setup_sno2.yaml, sno2_enabled), the same way and for the same
   ## reasons. Not conditional on sno2_enabled: a sno2 left behind after the
   ## flag was turned off is exactly what this has to find.
   - name: Destroy the second single-node OpenShift VM (sno2)
@@ -402,7 +404,7 @@
       rm -rf {{ compact_install_folder | default(download_dir ~ '/compact_install') }}
 
   ## The worker VMs of the hosted cluster the compact cluster manages
-  ## (setup_hosted_cluster_vm.yaml -e target_hub=compact). Its control plane is
+  ## (hcp/setup_hosted_cluster_vm.yaml -e target_hub=compact). Its control plane is
   ## pods on the compact cluster, so it goes with it; --tags compacthcp removes
   ## only the workers, e.g. to rebuild them. To retire the hosted cluster
   ## while keeping the compact cluster, delete its HostedCluster/NodePool on
@@ -551,7 +553,7 @@
 ##
 ## The trust goes by default because a rebuilt registry generates a NEW CA, and
 ## a stale one is worse than none: it is what roles/setup-compact-cluster and
-## setup_hub_cluster.yaml check to decide the mirror registry "has been set up",
+## standard-cluster/setup_cluster1.yaml check to decide the mirror registry "has been set up",
 ## so leaving it behind makes a disconnected run start and then fail on a TLS
 ## error instead of stopping with a clear message. Keep it with:
 ##
@@ -569,7 +571,7 @@
 ## they next need to pull an image.
 ##
 ## Re-create it with:
-##   ansible-playbook -i inventory/hosts setup_mirror_registry.yaml \
+##   cd mirror-registry && ansible-playbook -i ../inventory/hosts setup_mirror_registry.yaml \
 ##     -e disconnected_install=true --ask-vault-pass
 - name: Remove the mirror registry
   hosts: localhost
@@ -656,5 +658,5 @@
         {{ 'The CA and podman login for it were removed from this host too.'
            if (mirror_registry_remove_local_trust | bool)
            else 'The CA and podman login for it were kept, and now point at a registry that no longer exists.' }}
-        Rebuild it with: ansible-playbook -i inventory/hosts
-        setup_mirror_registry.yaml -e disconnected_install=true --ask-vault-pass
+        Rebuild it with: cd mirror-registry && ansible-playbook -i
+        ../inventory/hosts setup_mirror_registry.yaml -e disconnected_install=true --ask-vault-pass

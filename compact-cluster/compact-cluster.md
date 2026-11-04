@@ -88,7 +88,7 @@ new addresses, which the old cluster does not answer on.
 scheme, and `52:54:00:e2:55:<octet>` is already taken by the containerlab
 fabric NIC. The backup port of the bond takes the next prefix.
 
-**How it differs from the SNO** (`setup_sno.yaml`). The structure is the same:
+**How it differs from the SNO** (`sno/setup_sno.yaml`). The structure is the same:
 connected install, static addressing, one agent ISO, four stages. Two things
 change:
 
@@ -114,7 +114,7 @@ built, not only what is installed on them afterwards.
 | Other classes | none | `ocs-external-storagecluster-cephfs` (RWX) |
 | CSI volume snapshots | No VolumeSnapshotClass | Yes, RBD and CephFS |
 | A rebuild of the compact cluster | Deletes the data with the disks | Leaves the data on Ceph |
-| Extra load on the hypervisor | 3 x 500 GB thin disks | About 80 GiB RAM, 52 vCPUs and 1.1 TB of thin disks for the four Ceph VMs ([README](../README.md#what-gets-built)) |
+| Extra load on the hypervisor | 3 x 500 GB thin disks | About 80 GiB RAM, 52 vCPUs and 1.1 TB of thin disks for the four Ceph VMs ([ceph/README.md](../ceph/README.md#what-gets-built)) |
 
 Pick **Ceph** when a pod must not be tied to one node's disk. The usual case
 is a hosted control plane's etcd ([compact-cluster-hcp.md](compact-cluster-hcp.md)).
@@ -154,7 +154,7 @@ To move a cluster that already has LVM Storage, see
 
 - **OCP 4.22 or later** on the compact cluster. Below 4.22, a Ceph 9 RBD
   volume binds but never mounts
-  ([README, Requirements](../README.md#requirements)). `ocp_major_version` in
+  ([README, Requirements](../ceph/README.md#requirements)). `ocp_major_version` in
   `vars.yaml` is `"4.22"`.
 - **`ceph_dashboard_password`** in `vault.yaml`, next to `org_id`,
   `activation_key` and `pull_secret`.
@@ -206,8 +206,8 @@ reads `ansible.cfg` from the working directory, and the one in this folder
 adds `../roles` to `roles_path`. Run from the repository root, Ansible cannot
 find `setup-compact-cluster`. The Ceph playbooks run from inside `ceph/` for
 the same reason ([ceph/README.md](../ceph/README.md)). The shared playbooks
-(`setup_bm_host.yaml`, `setup_mirror_registry.yaml`, `cleanup.yaml`) stay at
-the repository root and run from there.
+run from their own places: `setup_bm_host.yaml` and `cleanup.yaml` from the
+repository root, `setup_mirror_registry.yaml` from inside `mirror-registry/`.
 
 | Tag | What it does | Role file |
 |---|---|---|
@@ -1065,7 +1065,7 @@ Each run overwrites `ceph/ceph-odf/external-cluster-details.json`. That is
 harmless: the cluster from the earlier run already holds its copy as a Secret.
 
 A Ceph cluster shared with a hub also shares the hub's lifecycle. The DR
-walkthrough in [steps.md](../steps.md) destroys and rebuilds Ceph with
+walkthrough in [hcp/dr/steps.md](../hcp/dr/steps.md) destroys and rebuilds Ceph with
 `cleanup.yaml --tags ceph`. Doing that takes the compact cluster's volumes with it,
 etcd included.
 
@@ -1169,5 +1169,5 @@ virsh list --all | grep -E 'ceph[123]|cephadmin'     # nothing
 | Ceph: `setup_ceph_odf.yaml` fails with `oc: command not found` | No `oc` in `/usr/bin` on a hypervisor that has never built a hub | `cp $WORK/oc /usr/bin/oc` (Step 12b) |
 | Ceph: the ODF CSV is `Failed` with reason `TooManyOperatorGroups` | LVM Storage's OperatorGroup is still in `openshift-storage` | `oc -n openshift-storage get operatorgroup`. Delete `openshift-storage-operatorgroup`, as in Step 12b. |
 | Ceph: the StorageCluster stays `Progressing` | Ceph is not `HEALTH_OK`, or the compact nodes cannot reach the mons on `.24`-`.26` | `ssh root@192.168.122.27 ceph -s`. `oc -n openshift-storage get storagecluster ocs-external-storagecluster -o yaml` shows the conditions. |
-| Ceph: the PVC is `Bound` but the pod stays `ContainerCreating` with `failed to add secret to kernel` or error 524 | The node kernel cannot map a Ceph 9 RBD image: seen on OCP 4.20 | Build with OCP 4.21 or later. See [README, Requirements](../README.md#requirements). |
+| Ceph: the PVC is `Bound` but the pod stays `ContainerCreating` with `failed to add secret to kernel` or error 524 | The node kernel cannot map a Ceph 9 RBD image: seen on OCP 4.20 | Build with OCP 4.21 or later. See [README, Requirements](../ceph/README.md#requirements). |
 | Ceph: hosted cluster etcd or AgentServiceConfig PVCs are on `lvms-vg1` | They were created while `lvms-vg1` was the default StorageClass | Bound PVCs do not move. Remove LVM Storage, attach Ceph, then recreate them (Step 12b). |

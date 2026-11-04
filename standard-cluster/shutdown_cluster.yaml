@@ -1,0 +1,112 @@
+## Shuts down a standard cluster's VMs - cluster1 by default - without
+## deleting anything. Unlike `cleanup.yaml --tags hub`, this does NOT undefine
+## the domains or delete disks: the VMs and their DNS/LB records are left in
+## place, so the cluster can still be inspected, or powered back on with
+## `virsh start`.
+##
+## The hosted-cluster DR walkthrough (../hcp/dr) uses it as the "primary hub
+## is gone" step, before cluster2 is built and the backup restored onto it.
+##
+## Run from inside standard-cluster/. The cluster is picked the same way as
+## ../acm/setup_acm.yaml picks it - target_hub, then disconnected_install:
+##
+##   ansible-playbook -i ../inventory/hosts shutdown_cluster.yaml                          # cluster1 (hub)
+##   ansible-playbook -i ../inventory/hosts shutdown_cluster.yaml -e target_hub=hub2       # cluster2 (hub2)
+##   ansible-playbook -i ../inventory/hosts shutdown_cluster.yaml -e disconnected_install=true                    # hubd
+##   ansible-playbook -i ../inventory/hosts shutdown_cluster.yaml -e target_hub=hub2 -e disconnected_install=true # hub2d
+##   ... -e force_shutdown=true    # hard power-off instead of graceful
+##
+## Both default from vars.yaml (target_hub: hub, disconnected_install: false),
+## so check them there if you set either one permanently.
+
+- name: Shut down a standard cluster's VMs
+  hosts: localhost
+  become: true
+  vars_files:
+    - ../vars.yaml
+  vars:
+    force_shutdown: false
+    shutdown_target_hub: "{{ target_hub | default('hub') }}"
+    ## hub -> hub_*, hubd_*, hub2 -> hub2_*, hub2d_* - the VM names the
+    ## setup-hub-cluster* roles create.
+    shutdown_vm_prefix: >-
+      {{ shutdown_target_hub ~ ('d' if (disconnected_install | default(false) | bool) else '') }}
+    shutdown_vms: >-
+      {{ ['worker1', 'worker2', 'worker3', 'master1', 'master2', 'master3', 'bootstrap']
+         | map('regex_replace', '^', (shutdown_vm_prefix | trim) ~ '_') | list }}
+  tasks:
+  - name: Fail fast on a target_hub this playbook does not know
+    ansible.builtin.assert:
+      that:
+        - shutdown_target_hub in ['hub', 'hub2']
+      fail_msg: >-
+        target_hub must be 'hub' (cluster1) or 'hub2' (cluster2), not
+        '{{ shutdown_target_hub }}'. For the disconnected builds keep target_hub
+        at hub/hub2 and add -e disconnected_install=true.
+
+  - name: Report which cluster is being shut down
+    ansible.builtin.debug:
+      msg: >-
+        Shutting down {{ 'cluster2' if shutdown_target_hub == 'hub2' else 'cluster1' }}
+        ({{ shutdown_vm_prefix | trim }}): {{ shutdown_vms | join(', ') }}
+        ({{ 'hard power-off' if force_shutdown | bool else 'graceful' }})
+
+  - name: Get current state of the cluster's VMs
+    community.libvirt.virt:
+      command: status
+      name: "{{ item }}"
+    loop: "{{ shutdown_vms }}"
+    register: shutdown_vm_status
+    ignore_errors: true
+
+  - name: Gracefully shut down running VMs
+    ansible.builtin.command: "virsh shutdown {{ item.item }}"
+    loop: "{{ shutdown_vm_status.results }}"
+    loop_control:
+      label: "{{ item.item }}"
+    when:
+      - not (force_shutdown | bool)
+      - item.status is defined
+      - item.status == "running"
+
+  # Only the VMs that were running: a VM that is not defined (a cluster built
+  # without one of them) would otherwise burn the full three minutes and fail.
+  - name: Wait for graceful shutdown to complete (up to 3 minutes per node)
+    ansible.builtin.command: "virsh domstate {{ item.item }}"
+    register: domstate
+    until: domstate.stdout is search('shut off')
+    retries: 18
+    delay: 10
+    changed_when: false
+    loop: "{{ shutdown_vm_status.results }}"
+    loop_control:
+      label: "{{ item.item }}"
+    when:
+      - not (force_shutdown | bool)
+      - item.status is defined
+      - item.status == "running"
+
+  - name: Force power off any VMs still running
+    community.libvirt.virt:
+      name: "{{ item.item }}"
+      state: destroyed
+    loop: "{{ shutdown_vm_status.results }}"
+    loop_control:
+      label: "{{ item.item }}"
+    when: item.status is defined
+    ignore_errors: true
+
+  - name: Confirm the VMs are stopped
+    community.libvirt.virt:
+      command: status
+      name: "{{ item }}"
+    loop: "{{ shutdown_vms }}"
+    register: final_status
+    ignore_errors: true
+
+  - name: Report final state
+    ansible.builtin.debug:
+      msg: "{{ item.item }} -> {{ item.status | default('not defined') }}"
+    loop: "{{ final_status.results }}"
+    loop_control:
+      label: "{{ item.item }}"

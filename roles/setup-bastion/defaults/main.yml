@@ -72,7 +72,7 @@ bastion_git_repos:
 
 ## Trust the lab's mirror registry so podman and skopeo can push to it. The CA
 ## is fetched from the registry VM, which means this only works once
-## setup_mirror_registry.yaml has run. Set false on a bastion that only talks
+## mirror-registry/setup_mirror_registry.yaml has run. Set false on a bastion that only talks
 ## to registries with publicly-signed certs.
 bastion_trust_mirror_registry: true
 

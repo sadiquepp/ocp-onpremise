@@ -4,7 +4,7 @@
 # Shared by everything that builds a disconnected thing on this hypervisor:
 #   - roles/setup-hub-cluster2-disconnected (tasks/main.yml) - the disconnected
 #     hub's bootstrap/master/worker IPs
-#   - setup_hosted_cluster_vm.yaml, when disconnected_install is true - the
+#   - hcp/setup_hosted_cluster_vm.yaml, when disconnected_install is true - the
 #     disconnected hosted cluster's worker IPs
 # Both need exactly the same treatment, so it lives here once.
 #

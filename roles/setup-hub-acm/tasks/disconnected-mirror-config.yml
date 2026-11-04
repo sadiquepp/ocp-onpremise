@@ -39,7 +39,7 @@
       - acm_mirror_ca_status.stat.exists
     fail_msg: >-
       {{ acm_disconnected_mirror_ca_path }} not found - run
-      setup_mirror_registry.yaml first (roles/setup-mirror-registry-trust is
+      mirror-registry/setup_mirror_registry.yaml first (roles/setup-mirror-registry-trust is
       what fetches the registry's CA back onto this host).
 
 - name: Read the mirror registry CA

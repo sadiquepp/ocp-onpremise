@@ -1,9 +1,9 @@
 ---
 # Tasks file for setup-oadp
 #
-# The OADP operator itself is installed as part of hub bring-up by
-# roles/setup-hub-acm (alongside ACM/LVM-Storage/MetalLB), so it's
-# already present on both hub1 and hub2 by the time this role runs.
+# The OADP operator itself is installed by acm/setup_acm.yaml
+# (roles/setup-hub-acm, alongside ACM/MCE and MetalLB), so it's already
+# present on any cluster that has been made a hub by the time this role runs.
 #
 # This role only handles the parts that need AWS credentials/a bucket
 # to already exist, which isn't true the moment a hub is first created:
@@ -116,5 +116,5 @@
       oadp_aws_secret_access_key (ansible-vault edit vault.yaml).
       NoSuchBucket / AccessDenied / a region error: check oadp_bucket_name,
       oadp_aws_region and the IAM user's policy (oadp/README.md).
-      Then re-run setup_oadp.yaml against this hub.
+      Then re-run oadp/setup_oadp.yaml against this hub.
   when: bsl_phase.stdout != 'Available'

@@ -1,8 +1,8 @@
 # Ceph 9 Storage for Hub PVs (ODF External Mode)
 
 The hub's PVs come from **LVM Storage** by default - one `LVMCluster` over the
-hub nodes' own spare disks, installed by `roles/setup-hub-acm` as part of hub
-bring-up. The alternative in this directory builds a **standalone Red Hat Ceph
+hub nodes' own spare disks, installed by `roles/setup-lvm-storage` as part of
+the cluster build (`standard-cluster/`, `use_lvm_storage: true`). The alternative in this directory builds a **standalone Red Hat Ceph
 Storage 9 cluster** on the same bare-metal host and hands it to the hub through
 **OpenShift Data Foundation (ODF) in external mode**: ODF is installed on the
 hub, but no Ceph daemon runs there - ceph-csi simply talks to the external

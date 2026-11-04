@@ -1,75 +1,72 @@
-# HCP Backup & Restore with OADP
+# OpenShift On-Premise Lab
 
-End-to-end automation for backing up and restoring Hosted Control Plane (HCP) clusters using OADP/Velero, including a full disaster-recovery cutover from one management hub to another.
+Ansible automation for an OpenShift lab on a single bare-metal RHEL 9 host,
+using KVM/libvirt for every VM: two standard OpenShift clusters, ACM/MCE
+hosted control planes on them, backup and restore of a hosted cluster from one
+hub to the other with OADP, and a set of self-contained labs on top - Ceph/ODF
+storage, a three-node compact cluster, KubeVirt hosted clusters, GitOps, UDN
+over BGP/EVPN and SPIFFE/SPIRE.
 
-The lab runs on a single bare-metal RHEL 9 node using KVM/libvirt to simulate the management hub(s) and hosted clusters.
+Each area lives in its own directory with its own README. This page covers what
+every one of them shares - the bare-metal host, `vars.yaml`/`vault.yaml`, the
+helper VM - and points at the rest.
 
 High-Level-Arch
 
-What this lab proves, in one page: [summary.md](summary.md).
-In a hurry? [steps.md](steps.md) is the same end-to-end run as commands only.
-
 ## Contents
 
+- [Repository layout](#repository-layout)
 - [Architecture Overview](#architecture-overview)
 - [Prerequisites](#prerequisites)
   - [Setup Bare Metal Host](#setup-bare-metal-host)
-  - [Configure OADP Pre-requisites](#configure-oadp-pre-requisites)
   - [vars.yaml](#varsyaml)
   - [vault.yaml (encrypted)](#vaultyaml-encrypted)
-- [End-to-End Workflow](#end-to-end-workflow)
+- [Shared setup](#shared-setup)
   - [Choose Connected or Disconnected](#choose-connected-or-disconnected)
   - [Setup Bare Metal Host](#setup-bare-metal-host-1)
+  - [Resolving the lab's names from the hypervisor](#resolving-the-labs-names-from-the-hypervisor)
   - [Setup Mirror Registry (disconnected only)](#setup-mirror-registry-disconnected-only)
+  - [Setup MinIO (disconnected, optional)](#setup-minio-disconnected-optional)
   - [Setup Bastion VM (optional)](#setup-bastion-vm-optional)
-  - [Choose the Hub's PV Storage](#choose-the-hubs-pv-storage)
-  - [Setup Hub Cluster](#setup-hub-cluster)
-  - [Prepare ACM (Disconnected Deployment)](#prepare-acm-disconnected-deployment)
-  - [Prepare ACM and Inventory](#prepare-acm-and-inventory)
-  - [Create a Hosted Cluster (Disconnected Deployment)](#create-a-hosted-cluster-disconnected-deployment)
-  - [Deploy a Sample hello-openshift application to the hosted cluster](#deploy-a-sample-hello-openshift-application-to-the-hosted-cluster)
-- [Choose how the control-plane volumes are captured](#choose-how-the-control-plane-volumes-are-captured)
-- [Primary Hub](#primary-hub)
-  - [Configure OADP (credentials + DPA)](#configure-oadp-credentials--dpa)
-  - [Deploy a hello-openshift application to Hub](#deploy-a-hello-openshift-application-to-hub)
-  - [Exclude ACM's import secret from the backup](#exclude-acms-import-secret-from-the-backup)
-  - [Backup a hosted cluster using OADP](#backup-a-hosted-cluster-using-oadp)
-  - [Shutdown Primary Hub](#shutdown-primary-hub)
-  - [Destroy the Ceph cluster (Ceph/CSI DR demo)](#destroy-the-ceph-cluster-cephcsi-dr-demo)
-- [DR Hub](#dr-hub)
-  - [Rebuild Ceph for the DR hub (Ceph/CSI DR demo)](#rebuild-ceph-for-the-dr-hub-cephcsi-dr-demo)
-  - [Build DR Hub](#build-dr-hub)
-  - [Configure OADP on DR Hub](#configure-oadp-on-dr-hub)
-  - [Restore hello-openshift application with a PVC to DR Hub](#restore-hello-openshift-application-with-a-pvc-to-dr-hub)
-  - [Restore the hosted cluster to the DR Hub using OADP](#restore-the-hosted-cluster-to-the-dr-hub-using-oadp)
-  - [Point DNS at the DR hub](#point-dns-at-the-dr-hub)
-- [Disconnected Hosted Cluster](#disconnected-hosted-cluster)
-  - [How the workers are cut off](#how-the-workers-are-cut-off)
-  - [Image signature policy on the discovery host](#image-signature-policy-on-the-discovery-host)
-  - [Building it](#building-it)
-- [MetalLB Address Pools for Hosted Clusters](#metallb-address-pools-for-hosted-clusters)
-  - [DR cutover](#dr-cutover)
-  - [What actually pins the address](#what-actually-pins-the-address)
-  - [Notes and constraints](#notes-and-constraints)
-  - [Verifying](#verifying)
+- [Hosted control planes, end to end](#hosted-control-planes-end-to-end)
 - [Ceph 9 Storage for Hub PVs (ODF External Mode)](#ceph-9-storage-for-hub-pvs-odf-external-mode)
 - [Three-node compact cluster](#three-node-compact-cluster)
 - [Hosted clusters on the KubeVirt platform](#hosted-clusters-on-the-kubevirt-platform)
+- [GitOps with Argo CD on hub1](#gitops-with-argo-cd-on-hub1)
 - [UDN over BGP, VRF-Lite and EVPN (containerlab fabric)](#udn-over-bgp-vrf-lite-and-evpn-containerlab-fabric)
-  - [Can this be simulated on this lab? Yes - here is the honest shape of it](#can-this-be-simulated-on-this-lab-yes---here-is-the-honest-shape-of-it)
-  - [The one idea to drop first: you do not move a UDN's default gateway](#the-one-idea-to-drop-first-you-do-not-move-a-udns-default-gateway)
-  - [Topology](#topology)
-  - [Containerlab in a VM, or on the bare-metal host?](#containerlab-in-a-vm-or-on-the-bare-metal-host)
-  - [What it costs the existing lab](#what-it-costs-the-existing-lab)
-  - [Constraints worth knowing before you start](#constraints-worth-knowing-before-you-start)
-  - [Building it](#building-it-1)
-  - [Verifying each phase](#verifying-each-phase)
-  - [EVPN, two ways](#evpn-two-ways)
-  - [Troubleshooting](#troubleshooting)
+- [SPIFFE/SPIRE](#spiffespire)
 - [Playbook Reference](#playbook-reference)
 - [Key Roles](#key-roles)
-- [OADP Details](#oadp-details)
 - [Cleanup](#cleanup)
+
+## Repository layout
+
+| Directory | What it is | Start at |
+| --- | --- | --- |
+| *(root)* | The shared pieces: `vars.yaml`, `inventory/`, `roles/`, the bare-metal host and helper VM (`setup_bm_host.yaml`), `cleanup.yaml` | this page |
+| [`mirror-registry/`](mirror-registry/) | The Quay mirror registry filled by oc-mirror - required first for anything disconnected | [mirror-registry/README.md](mirror-registry/README.md) |
+| [`standard-cluster/`](standard-cluster/) | **cluster1** and **cluster2** - two independent OpenShift clusters (connected or disconnected), with LVM Storage when `use_lvm_storage: true`, and a playbook to shut either one down. cluster2 can be used for anything; the DR walkthrough uses it as the restore target | [standard-cluster/README.md](standard-cluster/README.md) |
+| [`sno/`](sno/) | Single-node OpenShift clusters `sno` and `sno2` - the second cluster of the UDN, SPIFFE and KubeVirt labs | [sno/README.md](sno/README.md) |
+| [`acm/`](acm/) | Turns a standard cluster (or the compact cluster) into a hosted-control-plane hub: ACM/MCE, MetalLB (with one API pool per hosted cluster) and the OADP operator; the AgentServiceConfig | [acm/README.md](acm/README.md) |
+| [`hcp/`](hcp/) | Agent-platform hosted clusters on a hub: InfraEnv, worker VMs (ISO, PXE or BareMetalHost), the HostedCluster bundle, connected and disconnected | [hcp/README.md](hcp/README.md) |
+| [`hcp/dr/`](hcp/dr/) | Back a hosted cluster up on cluster1 and restore it onto cluster2 with OADP - the DR walkthrough, its commands-only [steps.md](hcp/dr/steps.md) and [summary.md](hcp/dr/summary.md) | [hcp/dr/README.md](hcp/dr/README.md) |
+| [`oadp/`](oadp/) | Generic OADP: the S3 bucket and IAM user, `setup_oadp.yaml`, fs vs csi, a hello-openshift smoke test, troubleshooting | [oadp/README.md](oadp/README.md) |
+| [`minio/`](minio/) | MinIO, the disconnected lab's local S3-compatible store - one bucket per consumer: OADP backups now, Loki/Tempo later | [minio/README.md](minio/README.md) |
+| [`bastion/`](bastion/) | A 256G VM for building and scanning container images - optional | [bastion/README.md](bastion/README.md) |
+| [`ceph/`](ceph/) | A standalone Ceph 9 cluster attached to a cluster through ODF external mode, instead of LVM Storage | [ceph/README.md](ceph/README.md) |
+| [`compact-cluster/`](compact-cluster/) | A three-node compact cluster from one agent ISO, in the lab or on physical servers | [compact-cluster/README.md](compact-cluster/README.md) |
+| [`kubevirt/`](kubevirt/) | Hosted clusters on the KubeVirt platform | [kubevirt/README.md](kubevirt/README.md) |
+| [`gitops/`](gitops/) | OpenShift GitOps (Argo CD) on hub1, step by step | [gitops/README.md](gitops/README.md) |
+| [`udn-bgp-evpn/`](udn-bgp-evpn/) | UDN over BGP, VRF-Lite and EVPN with a containerlab fabric | [udn-bgp-evpn/README.md](udn-bgp-evpn/README.md) |
+| [`spiffe-spire/`](spiffe-spire/) | SPIFFE/SPIRE workload identity on hub1 and the SNO | [spiffe-spire/README.md](spiffe-spire/README.md) |
+| [`terraform/`](terraform/) | `c5.metal` lab hosts on AWS, handed to Ansible | [terraform/README.md](terraform/README.md) |
+| [`tests/`](tests/) | Sample workloads (microservices demo, Online Boutique) | [tests/](tests/) |
+
+Every directory with playbooks has its own `ansible.cfg` that adds the shared
+`roles/` to the role path, so **playbooks are run from inside their
+directory**, with `-i ../inventory/hosts` (`-i ../../inventory/hosts` from
+`hcp/dr/`). All of them share the root `vars.yaml`, `vault.yaml` and
+`inventory/hosts`.
 
 ## Architecture Overview
 
@@ -78,7 +75,7 @@ In a hurry? [steps.md](steps.md) is the same end-to-end run as commands only.
 │  Bare Metal Host (RHEL 9 + KVM/libvirt)                      │
 │                                                              │
 │  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐         │
-│  │  Helper VM  │   │   Hub1 VMs  │   │   Hub2 VMs  │         │
+│  │  Helper VM  │   │  cluster1   │   │  cluster2   │         │
 │  │ (DNS + LB)  │   │ (OCP + ACM) │   │ (DR target) │         │
 │  └─────────────┘   └──────-┬─────┘   └──────-┬─────┘         │
 │                            │                 │               │
@@ -93,9 +90,16 @@ In a hurry? [steps.md](steps.md) is the same end-to-end run as commands only.
                     └────────────────────────────────┘
 ```
 
-**Hub1** is the primary management cluster running ACM, OADP, LVM-Storage, and MetalLB. **Hub2** is a replacement hub used as the restore target during a DR cutover. Both hubs share the same S3 bucket so backups created by hub1 are visible to hub2's Velero instance.
+**cluster1** (`hub`/hub1 in variable names) is the primary management cluster:
+OpenShift with LVM Storage from [`standard-cluster/`](standard-cluster/), then
+ACM, MetalLB and the OADP operator from [`acm/`](acm/). **cluster2**
+(`hub2`) is a second, independent cluster; in the DR walkthrough it is the
+replacement hub a hosted cluster is restored onto. Both hubs share the same S3
+bucket, so backups created on cluster1 are visible to cluster2's Velero.
 
-A hub's PVs come from LVM-Storage by default. They can instead come from a standalone Ceph 9 cluster running on the same bare-metal host, consumed through ODF external mode - see [ceph/README.md](ceph/README.md).
+A cluster's PVs come from LVM Storage by default. They can instead come from a
+standalone Ceph 9 cluster running on the same bare-metal host, consumed through
+ODF external mode - see [ceph/README.md](ceph/README.md).
 
 ## Prerequisites
 ### Setup Bare Metal Host
@@ -147,72 +151,9 @@ semanage fcontext -a -t virt_image_t "/new/path(/.*)?" && restorecon -R /new/pat
 `setup_bm_host.yaml` creates both directories if they are missing, and fails
 early — naming the path — if the base image has not been staged.
 
-- Set up OADP s3 Bucket. An example with AWS is shown here. Refer the respective documentation for other cloud providers.
-
-### Configure OADP Pre-requisites
-- Configure variables in the terminal.
-
-```bash
-export BUCKET=adp-backup-bucket-xjtvvs   # must be globally unique - pick your own
-export REGION=ap-south-1
-```
-- Create the S3 bucket.
-```bash
-aws s3api create-bucket --bucket $BUCKET --region $REGION \
-  --create-bucket-configuration LocationConstraint=$REGION
-```
-- Create the IAM policy.
-```bash
-cat > adp-policy.json <<EOF
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "ec2:DescribeVolumes",
-                "ec2:DescribeSnapshots",
-                "ec2:CreateTags",
-                "ec2:CreateVolume",
-                "ec2:CreateSnapshot",
-                "ec2:DeleteSnapshot"
-            ],
-            "Resource": "*"
-        },
-        {
-            "Effect": "Allow",
-            "Action": [
-                "s3:GetObject",
-                "s3:DeleteObject",
-                "s3:PutObject",
-                "s3:AbortMultipartUpload",
-                "s3:ListMultipartUploadParts"
-            ],
-            "Resource": ["arn:aws:s3:::${BUCKET}/*"]
-        },
-        {
-            "Effect": "Allow",
-            "Action": [
-                "s3:ListBucket",
-                "s3:GetBucketLocation",
-                "s3:ListBucketMultipartUploads"
-            ],
-            "Resource": ["arn:aws:s3:::${BUCKET}"]
-        }
-    ]
-}
-EOF
-```
-
-- Create the IAM user and retrieve the access key.
-```bash 
-aws iam create-user --user-name adp-user
-aws iam put-user-policy --user-name adp-user --policy-name adp-policy --policy-document file://adp-policy.json
-aws iam create-access-key --user-name adp-user
-```
-
-Set `oadp_bucket_name` and `oadp_aws_region` in `vars.yaml` to match, and
-add the access key from the last command to `vault.yaml` as below.
+- For backups, an S3 bucket and an IAM user for OADP - created once per lab,
+  as in [oadp/README.md](oadp/README.md#one-time-aws-setup-per-bucket-not-per-hub).
+  Set `oadp_bucket_name` and `oadp_aws_region` in `vars.yaml` to match.
 
 ### vars.yaml
 
@@ -225,12 +166,14 @@ Review and adjust lab-specific values:
 - Configure the vault.yaml file. All the values are mandatory unless marked optional below
  - Get org_id from [console.redhat.com](https://console.redhat.com)
  - Get activation_key from [console.redhat.com](https://console.redhat.com/insights/connector/activation-keys)
- - Get pull_secret from [console.redhat.com](hhttps://console.redhat.com/openshift/install/pull-secret)
+ - Get pull_secret from [console.redhat.com](https://console.redhat.com/openshift/install/pull-secret)
  - `ssh_key` is optional: `vars.yaml` defaults it to the lab key
    (`/root/.ssh/lab_rsa.pub`, generated by `setup_bm_host.yaml`). Set it to
    use your own public key on the hosted-cluster and bare-metal-infra nodes.
-   The hub and SNO installs always use the lab key.
- - Get oadp_aws_access_key_id and oadp_aws_secret_access_key from the previous steps
+   The cluster1/cluster2 and SNO installs always use the lab key.
+ - `oadp_aws_access_key_id` / `oadp_aws_secret_access_key` are only needed for
+   OADP - the S3 bucket and IAM user they come from are created once, as in
+   [oadp/README.md](oadp/README.md#one-time-aws-setup-per-bucket-not-per-hub).
  - `ceph_dashboard_password` is only needed if you run the Ceph flow
    (`ceph/setup_ceph.yaml`) - it is the initial password `cephadm bootstrap` sets for
    the Ceph dashboard's admin user (`ceph_dashboard_user` in `vars.yaml`).
@@ -239,7 +182,7 @@ Review and adjust lab-specific values:
  - `mirror_registry_password` is only needed for the disconnected flow
    (`disconnected_install: true`) - it is the password the Quay
    `mirror-registry` appliance is installed with, and the one every later
-   podman/oc-mirror login uses. `setup_mirror_registry.yaml` asserts it is
+   podman/oc-mirror login uses. `mirror-registry/setup_mirror_registry.yaml` asserts it is
    present before it creates anything.
 
 ```bash
@@ -257,8 +200,10 @@ ceph_dashboard_password: '...'   # only for the Ceph flow
 mirror_registry_password: '...'  # only for the disconnected flow
 ```
 
-## End-to-End Workflow
+## Shared setup
 
+Everything below is shared by every directory: run it before the flows in
+[Repository layout](#repository-layout).
 
 ### Choose Connected or Disconnected
 
@@ -270,14 +215,14 @@ disconnected_install: false   # connected (default)
 disconnected_install: true    # disconnected
 ```
 
-Then run the steps below in order. Every playbook in the workflow reads it, so
-the commands and their order do not change - the same flow builds either lab:
+Then run the workflow in order. Every playbook in it reads the flag, so the
+commands and their order do not change - the same flow builds either lab:
 
 | | `false` (connected) | `true` (disconnected) |
 | --- | --- | --- |
 | Mirror registry | not used | required, built first |
-| Hub built | hub1, into `hub_install_folder` | hubd, into `hub_disconnected_install_folder` |
-| DR hub built (`setup_hub_cluster2.yaml`) | hub2 | hub2d |
+| cluster1 built (`standard-cluster/setup_cluster1.yaml`) | hub1, into `hub_install_folder` | hubd, into `hub_disconnected_install_folder` |
+| cluster2 built (`standard-cluster/setup_cluster2.yaml`) | hub2 | hub2d |
 | Hub pulls images from | quay.io / registry.redhat.io | the mirror registry, only |
 | Hosted clusters rendered | `hosted_clusters` | `hosted_clusters_disconnected` |
 | Hosted cluster workers | `.41-.43`, internet reachable | `.44-.46`, egress cut |
@@ -290,7 +235,7 @@ with the one before it quietly targets a hub you never built - and that usually
 surfaces several steps later. The commands in this workflow are written without
 it; the few genuine exceptions are called out where they appear.
 
-The two hubs are fully independent - their own IP block (`ip_list.hubd_*`),
+The connected and disconnected clusters are fully independent - their own IP block (`ip_list.hubd_*`),
 subdomain (`hub_disconnected_domain`) and VM/install directories - so a
 connected and a disconnected lab co-exist happily. Flipping the flag and running
 the flow again builds the second one without disturbing the first.
@@ -370,1448 +315,81 @@ configured locally.
 
 ### Setup Mirror Registry (disconnected only)
 
-**Skip this section entirely when `disconnected_install: false`.**
-
-With `disconnected_install: true` this is a prerequisite for everything that
-follows. Run it **after** `setup_bm_host.yaml` - it needs the helper's DNS to
-resolve `registry.<hub_domain>` - and **before** the hub is built, since the hub
-install pulls every image from it:
+**Skip this when `disconnected_install: false`.** With `disconnected_install:
+true` it is a prerequisite for everything that follows: run it **after**
+`setup_bm_host.yaml` and **before** any cluster is built, since a disconnected
+install pulls every image from it.
 
 ```bash
-ansible-playbook -i inventory/hosts setup_mirror_registry.yaml --ask-vault-pass
+cd mirror-registry && ansible-playbook -i ../inventory/hosts setup_mirror_registry.yaml --ask-vault-pass && cd ..
 ```
 
-The playbook refuses to run unless `disconnected_install: true`, so it is the
-one step that cannot be reached by accident from a connected lab.
+It builds the `registry` VM (`.22`), installs the Quay `mirror-registry`
+appliance, fills it with `oc-mirror` v2, and trusts its CA on this host. What
+it mirrors, what to do when `oc-mirror` fails partway, and how to verify it
+before building a cluster: [mirror-registry/README.md](mirror-registry/README.md).
 
-It builds a standalone `registry` VM (`.22`), which stays connected to the
-internet - it is the thing that holds the images - installs the Quay
-`mirror-registry` appliance on it, and fills it with `oc-mirror` v2:
+### Setup MinIO (disconnected, optional)
 
-| Tag | Step |
-| --- | --- |
-| `mirror-vm` | creates the `registry` VM - a 500G sparse disk expanded from the RHEL9 base image with `virt-resize`, then defined and booted |
-| `rhsm` | registers it with subscription-manager (hence `org_id` / `activation_key`) |
-| `mirror` | installs `mirror-registry` (Quay + its root CA), logs podman in, renders `/root/mirror/imageset-config.yaml` and runs `oc mirror ... --v2` into the registry |
-| `mirror-trust` | copies the registry's root CA into **this** host's trust store and logs the bare-metal host's podman in, writing `mirror_registry_authfile` (`/root/.docker/config.json`) |
-
-Before running it:
-
-- `mirror_registry_password`, `org_id` and `activation_key` must be in
-  `vault.yaml` - the playbook asserts all three.
-- Review the mirror block in `vars.yaml`: `mirror_registry_disk_size` (500G,
-  sparse), `mirror_registry_memory` / `mirror_registry_vcpus`,
-  `mirror_ocp_version` (defaults to
-  `<ocp_major_version>.<ocp_minor_version>`, i.e. what the rest of the lab
-  installs) and `mirror_catalog_operator_packages`. That last list is what gets
-  mirrored beyond the release payload; it already covers the operators
-  the hub installs (ACM, MCE, LVM Storage, MetalLB, OADP, cincinnati),
-  so add anything else your lab needs **before** the mirror runs rather than
-  after.
-- Mirroring the release payload plus those catalogs pulls thousands of images -
-  budget the disk and the time.
-
-The `mirror-trust` step is what the rest of the flow actually reads: the hub
-install asserts the CA is at
-`/etc/pki/ca-trust/source/anchors/mirror-registry-rootCA.pem` before it starts,
-and `setup-bminfra` / `create-hosted-cluster` build their mirror-only pull
-secrets from the authfile.
-
-**If `oc-mirror` fails, do not rebuild the VM.** The registry, the tools, the
-pull secret and the ImageSetConfiguration are all in place by then, and
-oc-mirror v2 resumes from its workspace, so each attempt only pulls what is
-still missing. Finish it by hand on the VM - the playbook prints this same
-command when it fails:
+The disconnected lab's own S3-compatible object store, for anything that needs
+S3 without AWS - OADP backups now, Loki and Tempo later. Like the mirror
+registry it is shared infrastructure on the lab network, built after
+`setup_bm_host.yaml` and only with `disconnected_install: true`:
 
 ```bash
-ssh root@192.168.122.22
-cd /root/mirror
-oc mirror -c imageset-config.yaml --workspace file://oc-mirror-output/ \
-  docker://registry.hub.mylab.com:8443 --v2
-# logs: /root/mirror/oc-mirror-output/working-dir/logs/ and /root/mirror/.oc-mirror.log
+cd minio && ansible-playbook -i ../inventory/hosts setup_minio.yaml --ask-vault-pass && cd ..
 ```
 
-Re-running the playbook's `mirror` tag will **skip** the mirror once the
-registry answers `podman login`, which is why finishing it by hand is the way
-out. When it completes, run the trust step and carry on:
-
-```bash
-ansible-playbook -i inventory/hosts setup_mirror_registry.yaml --ask-vault-pass --tags mirror-trust
-```
-
-Verify before building the hub:
-
-```bash
-# on the bare-metal host - the two things every later step reads
-ls -l /etc/pki/ca-trust/source/anchors/mirror-registry-rootCA.pem
-grep -o 'registry[^"]*:8443' /root/.docker/config.json
-
-# on the mirror-registry VM - what oc-mirror published for the hub to apply
-ssh root@192.168.122.22 'find /root/mirror/oc-mirror-output -type d -name cluster-resources'
-```
-
-That last directory holds the `ImageDigestMirrorSet` / `ImageTagMirrorSet` /
-`CatalogSource` the hub install stages and applies as day-2 resources; the hub
-install fails with a clear message if it is not there yet.
+Endpoint, buckets (`minio_buckets`) and vault entries: [minio/README.md](minio/README.md).
 
 ### Setup Bastion VM (optional)
 
-A big-disk guest for building and scanning container images. Nothing else in the
-lab depends on it, and nothing in the install flow imports it — run it when you
-need it, skip it otherwise.
-
-It exists because the bare-metal host does not have the room. Building container
-images is disk-hungry: the hardened-vs-UBI image comparison in
-[`sadiquepp/openshift`](https://github.com/sadiquepp/openshift/tree/main/test-workloads/online-boutique/hardened)
-pulls a dozen base images, produces two full stacks of twelve service images,
-and saves each one to a tar in order to scan it. On a host whose `/` is nearly
-full that either fails partway or fills `/` — and filling `/` on the hypervisor
-takes the whole lab with it.
+A 256G guest for building and scanning container images - the bare-metal host
+does not have the room. Nothing else depends on it:
 
 ```bash
-ansible-playbook -i inventory/hosts setup_bastion.yaml --ask-vault-pass
+cd bastion && ansible-playbook -i ../inventory/hosts setup_bastion.yaml --ask-vault-pass && cd ..
 ```
 
-256G disk, 8 vCPU, 16G RAM by default (`bastion_*` in `vars.yaml`). It reuses the
-base image `setup_bm_host.yaml` prepared, so run that first. Registry trust and
-login additionally need `setup_mirror_registry.yaml`; without it, run:
+Sizing, tags, registry trust and what it installs: [bastion/README.md](bastion/README.md).
 
-```bash
-ansible-playbook -i inventory/hosts setup_bastion.yaml --ask-vault-pass \
-  -e bastion_trust_mirror_registry=false -e bastion_registry_login=false
-```
+## Hosted control planes, end to end
 
-**If `/var/lib/libvirt/images` is itself on a small `/`,** point the disk
-somewhere with room — that is the whole point of the exercise:
+The core flow of this repository, one directory at a time. The commands-only
+version, with Ceph storage and the CSI backup method, is
+[hcp/dr/steps.md](hcp/dr/steps.md); what it proves is
+[hcp/dr/summary.md](hcp/dr/summary.md).
 
-```bash
-ansible-playbook -i inventory/hosts setup_bastion.yaml --ask-vault-pass \
-  -e bastion_disk_dir=/data/libvirt/images
-```
-
-The role refuses to create the disk if the filesystem holding `bastion_disk_dir`
-has less free space than `bastion_disk_size`, and names the filesystem and the
-shortfall when it does. Pass `-e bastion_require_free_space=false` to overcommit
-the sparse qcow2 on purpose.
-
-**Tags can be used on their own.** Address discovery and the ssh wait are tagged
-`always`, so the in-memory `bastion` group is rebuilt on every run regardless of
-what else is selected — `--tags repos,scanners` works without recreating the VM.
-That matters because the group is built by `add_host` and exists only for the
-duration of a run; nothing is written to `inventory/hosts`.
-
-**This VM has no address reservation.** Unlike helper and mirror-registry there
-is no `ip_list` entry and no `ip-dhcp-host` entry on the `default` network — it
-takes whatever libvirt's DHCP gives it, which is fine because nothing in the lab
-needs to reach it at a predictable address. The playbook prints the address and
-adds the host to the in-memory inventory for its own later plays. To find it
-again:
+| # | Directory | What | Playbook |
+| --- | --- | --- | --- |
+| 1 | root | Bare-metal host and helper VM (DNS, DHCP, haproxy) | `setup_bm_host.yaml` |
+| 2 | [`mirror-registry/`](mirror-registry/README.md) | Mirror registry - disconnected only | `setup_mirror_registry.yaml` |
+| 3 | [`standard-cluster/`](standard-cluster/README.md) | cluster1, with LVM Storage (or `use_lvm_storage: false` and [`ceph/`](ceph/README.md) for Ceph) | `setup_cluster1.yaml` |
+| 4 | [`acm/`](acm/README.md) | ACM/MCE, MetalLB and the OADP operator on cluster1; review and apply the AgentServiceConfig | `setup_acm.yaml` |
+| 5 | [`hcp/`](hcp/README.md) | InfraEnv, worker VMs, hosted cluster(s), a sample workload | `setup_bminfra.yaml`, `setup_hosted_cluster_vm.yaml`, `create_hosted_cluster.yaml` |
+| 6 | [`oadp/`](oadp/README.md) | OADP wired to the S3 bucket | `setup_oadp.yaml` |
+| 7 | [`hcp/dr/`](hcp/dr/README.md) | Back the hosted cluster up, shut cluster1 down, build cluster2 (+ `acm/`, `oadp/` with `-e target_hub=hub2`), restore, cut DNS over | `backup_hosted_cluster.yaml`, `standard-cluster/shutdown_cluster.yaml`, `restore_hosted_cluster.yaml` |
 
 ```bash
-virsh domifaddr bastion
-```
-
-**The clone is pinned to a branch.** `main` in `sadiquepp/openshift` does not yet
-carry `test-workloads/online-boutique/hardened` — the build and scan tooling this
-bastion exists to run — so `bastion_git_repos` pins that entry to the branch that
-does. Drop the `version:` line once it merges, otherwise the paths in
-`/root/.bastion-env` point at a directory that is not there.
-
-What it installs: podman, buildah, skopeo, git, jq and friends; `grype` with its
-vulnerability database primed (~1GB, pre-pulled so the first scan does not pay
-for it, and so a database that downloads but cannot unpack fails here rather
-than mid-comparison); `oc` and `kubectl`; the mirror registry's CA in the trust
-bundle plus a `podman login` to it; and a clone of `sadiquepp/openshift` under
-`/root/work`. `trivy` is available but off by default (`bastion_install_trivy`)
-— the two scanners use different databases, so the second is a cross-check
-rather than a requirement.
-
-Then, on the bastion:
-
-```bash
-source /root/.bastion-env     # sets REGISTRY and NAMESPACE
-cd /root/work/openshift/test-workloads/online-boutique/hardened
-./preflight.sh --build-check
-```
-
-Extra dnf repositories, if the packages you want are not in the subscription's,
-go in `bastion_extra_dnf_repos` (passed through to `yum_repository`); extra RHSM
-repository IDs go in `bastion_rhsm_repos`.
-
-### Choose the Hub's PV Storage
-
-The hub needs a PV provider before anything with a PVC (the hosted clusters'
-etcd, the hello-openshift sample used in the backup/restore walkthrough) will
-schedule.
-There are two options, and the choice has to be made **before** the hub is
-built, because the hub build acts on it:
-
-- **LVM Storage** (default) - `use_lvm_storage: true` in `vars.yaml`. Nothing
-  else to do: `roles/setup-lvm-storage` installs it as part of the cluster
-  build itself (tag `lvm`), right after the cluster operators settle and
-  before the ACM step - so a hub built with `--skip-tags acm` still has
-  `lvms-vg1` as its default StorageClass. Good enough to stand up hosted
-  clusters and run workloads on them. The SNO (`setup_sno.yaml`) follows the
-  same switch: it gets a second disk and LVM Storage after its install.
-- **Ceph 9 via ODF external mode** - set `use_lvm_storage: false`, then build
-  the Ceph cluster and attach it with the two playbooks in [`ceph/`](ceph/),
-  before the AgentServiceConfig step - that step's PVCs need a default
-  StorageClass to exist already. See [ceph/README.md](ceph/README.md)
-  for the whole flow, its OCP 4.21+ requirement, and why the two should not both
-  run on the same hub.
-
-> **For backup and restore, pick Ceph.** Restoring a hosted control plane
-> needs a CSI VolumeSnapshot of its etcd volume, and LVM Storage provides no
-> VolumeSnapshotClass - so `oadp_backup_method=csi` is not available on it at
-> all. The `fs` method will still produce a `Completed` backup there, but a
-> file-by-file copy of a live etcd volume is not a point-in-time image of it,
-> which is the property a control-plane restore depends on. Treat LVM Storage
-> as the option for demonstrating hosted clusters, and Ceph as the one for
-> demonstrating backup and restore.
-
-### Setup Hub Cluster
-
-Deploys an OpenShift cluster with LVM-Storage, then ACM, MetalLB, and the OADP
-operator. LVM-Storage is skipped when `use_lvm_storage: false`.
-
-```bash
-ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass
-```
-
-LVM Storage is part of the build, not of the `acm` step: `--skip-tags acm`
-keeps it, `--tags acm` does not re-run it. To add it - and nothing else - to
-a hub that is already up (one built before this, or with `--skip-tags acm`
-when LVM Storage was still part of `acm`):
-
-```bash
-ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass --tags lvm
-ansible-playbook -i inventory/hosts setup_sno.yaml --ask-vault-pass --tags snostorage   # the SNO's equivalent
-```
-
-One playbook, both modes - which hub it builds follows `disconnected_install`
-in `vars.yaml`:
-
-- **`false`** - installs `roles/setup-hub-cluster` into `hub_install_folder`.
-  This is hub1, pulling from quay.io / registry.redhat.io.
-- **`true`** - installs `roles/setup-hub-cluster-disconnected` into
-  `hub_disconnected_install_folder` instead. This is `hubd`, a **third, fully
-  independent hub** rather than a different way of building hub1: its own IP
-  block (`ip_list.hubd_*`), its own subdomain (`hub_disconnected_domain`) and
-  its own VM/install directories, so hub1, hub2 and hubd can all be up at once.
-
-Everything else about a disconnected run follows from the same flag: the
-cluster is wired to pull every release and operator image solely from the local
-mirror registry, its nodes are cut off from the real internet before anything
-boots, oc-mirror's `ImageDigestMirrorSet`/`ImageTagMirrorSet`/`CatalogSource`
-are applied as day-2 resources, and `setup-hub-acm` is handed
-`metallb_hub=hubd` so each hosted cluster gets this hub's address under the pool
-names every hub shares.
-
-Two things a disconnected run expects to be in place first:
-
-- `setup_mirror_registry.yaml` must have run - the play fails fast if the
-  mirror registry CA has not been trusted on this host.
-- The `hubd_*` entries in `ip_list` are what give the hub DHCP reservations and
-  DNS records, so `setup_bm_host.yaml` must have run with them present (its
-  `dns`/`lb` tags are enough) or `api`/`api-int`/`*.apps` for this cluster will
-  not resolve.
-
-### Prepare ACM (Disconnected Deployment)
-
-`setup-hub-acm` renders differently when it is run disconnected. It reads the
-same `disconnected_install` from `vars.yaml` as the rest of the flow, so with
-that set to `true` this happens as part of the step above and there is nothing
-extra to run. Connected runs are unaffected.
-
-To re-run just the ACM part against a hub that is already up:
-
-```bash
-ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass --tags acm
-```
-
-Or only the hosted clusters' MetalLB API pools - all a hub that is already up
-needs after a hosted cluster is added to `hosted_cluster_metallb_pools`:
-
-```bash
-ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass --tags metallb
-```
-
-What the disconnected run does on top of the connected one:
-
-- Points every operator `Subscription` (ACM, LVM Storage, MetalLB, OADP) at the
-  CatalogSource oc-mirror generated instead of the built-in `redhat-operators`,
-  which a disconnected hub has disabled. The name is derived from
-  `mirror_catalog_index` (`...redhat-operator-index:v4.21` →
-  `cs-redhat-operator-index-v4-21`); override `acm_catalog_source` in
-  `vars.yaml` if oc-mirror named it something else. The role checks the
-  CatalogSource exists before subscribing, since a Subscription naming a
-  missing catalog just sits in `ResolutionFailed`.
-- Publishes the mirror registry CA as the `registry-config` ConfigMap in
-  `openshift-config`, keyed `<registry-host>..<port>`, and sets it as
-  `spec.additionalTrustedCA` on `image.config.openshift.io/cluster` so every
-  node's CRI-O trusts the mirror. This is a MachineConfig change - the role
-  waits for the pools to roll it out.
-- Creates the `mirror-config` ConfigMap in `multicluster-engine` (mirror
-  registry CA + `registries.conf`) and renders
-  `AgentServiceConfig.spec.mirrorRegistryRef` pointing at it, so
-  assisted-service and the discovery ISOs it builds pull through the mirror.
-  The mappings come from `acm_disconnected_registry_mirrors`; the role warns
-  about any source the hub's own IDMS/ITMS redirects that is missing from it.
-- Downloads each `agent_service_os_images` RHCOS live ISO to the bare-metal
-  host and pushes it to the helper's web server
-  (`/var/www/html/bootp`, served on port 8080), then rewrites the `osImages`
-  urls to point there - the `mirror.openshift.com` urls are unreachable from a
-  disconnected hub. Set `agent_service_os_images_disconnected` in `vars.yaml`
-  to skip this and use urls you staged yourself.
-- Creates one `ClusterImageSet` per osImage version
-  (`openshift-4-21-0`, ...) pointing at the mirror registry's copy of the
-  release payload, since ACM/HyperShift will not offer a version that has no
-  ClusterImageSet and cannot resolve the quay.io pullspec anyway.
-
-The ISOs are ~1.3G each and the helper is built from the 10G RHEL9 base image,
-so `roles/setup-bm-host` now expands that base image into a `helper_disk_size`
-(100G, sparse) disk with `virt-resize`. An **existing** helper is not resized -
-if the role stops with "the helper has only N G free", either delete
-`/var/lib/libvirt/images/helper_disk.qcow2` and re-run `setup_bm_host.yaml`, or
-grow the disk in place:
-
-```bash
-virsh shutdown helper
-qemu-img resize /var/lib/libvirt/images/helper_disk.qcow2 100G
-virsh start helper
-# on the helper
-growpart /dev/vda 4 && xfs_growfs /
-```
-
-The rendered files are left in `roles/setup-hub-acm/files/` for review:
-`.rendered-05-agentserviceconfig.yaml` (the disconnected rendering, applied
-manually as below), plus `.rendered-06-registry-ca-configmap.yaml`,
-`.rendered-07-mirror-config-configmap.yaml` and
-`.rendered-08-clusterimagesets.yaml`, which the role applies itself.
-
-### Prepare ACM and Inventory
-
-- Configure CIM. Apply the AgentServiceConfig to the ACM cluster. Customize the OS images using `osImages` to the ones you want to use for the hosted clusters. Review the rendendered yaml file at `roles/setup-hub-acm/files/.rendered-05-agentserviceconfig.yaml` and apply it to the ACM cluster.
-- Make sure that ACM and `MultClusterHub` is fully operational before proceeding to apply the `AgentServiceConfig` in the next step.
-- The hub also needs a **default StorageClass** by this point. The
-  AgentServiceConfig provisions three PVCs (`databaseStorage` 10Gi,
-  `filesystemStorage` 100Gi, `imageStorage` 50Gi) and none of them names a
-  `storageClassName`, so they bind against the default class - without one
-  they stay `Pending` and assisted-service never starts. On the LVM path
-  that class is `lvms-vg1` and hub bring-up created it. On the Ceph path
-  (`use_lvm_storage: false`) run `ceph/setup_ceph.yaml` and
-  `ceph/setup_ceph_odf.yaml` ([ceph/README.md](ceph/README.md)) **before**
-  this step, so `ocs-external-storagecluster-ceph-rbd` exists and
-  is the default (`ceph_odf_rbd_default_sc`). Confirm with `oc get sc`.
-
-```bash
-oc apply -f roles/setup-hub-acm/files/.rendered-05-agentserviceconfig.yaml
-oc get pvc -n multicluster-engine    # the three should reach Bound
-```
-
-- Create Infrastructure Environment. 
-
-  - **Option1**: `ACM -> Fleet Management -> Host Inventory -> Create Infrastructure Environment -> Create Environment -> Fill up the form and create the environment.` 
-  
-  - **Option2**: Invoke the setup-bminfra role to render the yaml files.
-
-```bash
-ansible-playbook -i inventory/hosts setup_bminfra.yaml --ask-vault-pass
-```
-
-  The same command covers both modes: with `disconnected_install: true` it
-  targets the disconnected hub's kubeconfig instead of hub1's (the flag wins
-  over `target_hub`), and renders the InfraEnv differently.
-
-  On a disconnected run the rendered pull-secret carries only the
-  mirror registry's credentials (read from `mirror_registry_authfile`, the
-  authfile `setup_mirror_registry.yaml` logs podman into), not vault.yaml's
-  `pull_secret`. The discovery agent resolves its image through the mirror
-  mappings in the ConfigMap `roles/setup-hub-acm` publishes, so the pull is
-  against the mirror registry and is authenticated against that host - with the
-  Red Hat pull secret instead it fails `unauthorized` on the mirror and then
-  `no route to host` on `registry.redhat.io`. Same reduction the disconnected
-  hub's own `install-config.yaml` does, and for the same reason: nothing in a
-  disconnected lab should hold a working credential back to the real registries.
-
-  A note on the pull-secret, if you hit this on a connected hub:
-
-```
-The Secret "pullsecret-bminfra" is invalid: data[.dockerconfigjson]: Invalid value:
-"<secret contents redacted>": invalid character '\'' looking for beginning of object key string
-```
-
-  Those are Python's quotes, from `str(dict)` - and vault.yaml is not the
-  problem. Ansible converts a template's result back into an object when the
-  whole thing looks like one, so a properly quoted JSON *string* in vault.yaml
-  came back out of the role's `bminfra_pull_secret: "{{ pull_secret }}"` hop as a
-  dict, which `b64encode` then encoded as its repr. The default now ends in a
-  `string`/`to_json` filter (`STRING_TYPE_FILTERS`, which suppresses that
-  conversion), so either spelling of `pull_secret` - quoted string or YAML
-  mapping - renders as JSON, and the role asserts the document has an `auths`
-  object before rendering. Nothing to change in vault.yaml. Roles that use
-  `pull_secret` directly never hit this; it takes the extra variable hop.
-
-- The role applies those four itself, in order (namespace, pull-secret,
-  InfraEnv, capi-provider RBAC). It refuses to run if this hub has no
-  AgentServiceConfig, since an InfraEnv without assisted-service never
-  produces a discovery ISO - apply
-  `.rendered-05-agentserviceconfig.yaml` first, as in the step above.
-  The rendered files are left in place for inspection:
-
-```bash
-ls roles/setup-bminfra/templates/.rendered-*.yaml
-oc get infraenv -n bminfra
-```
-
-- The discovery ISO is downloaded in the same run, after the apply, so there
-  is no longer a race against the timeout. If it does expire, download the ISO
-  from `Add Hosts` in the ACM Web UI, or let the playbook that creates the
-  hosted cluster VMs fetch it as its first step.
-
-- Download the Discovery ISO from `Add Hosts` in the ACM Web UI if needed. Only required if you are not using the playbook to automate the discovery process.
-Note: The ISO is automatically downloaded to the bare-metal host in the download dir specified in `vars.yaml`  when you automate the discovery process by running the playbook `setup_hosted_cluster_vm.yaml` or `setup_hosted_cluster2_vm.yaml` in the next step. If vms for hosted cluster is manually created, you can download the ISO from `Add Hosts` and place it in the download dir.
-
-- Discover the VMs as hosts in inventory. 
-  - **Option1**: Manually create from virt-manager specifiying the correct mcaddress.
-
-  - **Option2**: Invoke the setup-hosted-cluster-vm role which automatically downloads the discovery ISO and creates the hosts in inventory.
-
-  ```bash
-  ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass
-  ```
-- Once discovered, approve the nodes from ACM/MCE Web UI.
-
-- Create a Hosted Cluster from the Web UI using the discovered nodes.
-
-  - List the hosted clusters you want in `hosted_clusters` in `vars.yaml`, then render them all by invoking the create-hosted-cluster role. One template covers every connected cluster (a second one covers disconnected clusters - see below); an entry is a bare name, or a dict with `name` plus any per-cluster override. Concurrent hosted clusters on the same hub can share `cluster_cidr`/`service_cidr` - each is its own OVN-Kubernetes cluster and those CIDRs never leave its data plane.
-  ```yaml
-  hosted_clusters:
-    - hcp-cluster1
-    - hcp-cluster2
-    - name: hcp-cluster3
-      nodepool_replicas: 3
-  ```
-  Every name listed must also have an entry in `hosted_cluster_metallb_pools`
-  - that is what gives the cluster its own single-address MetalLB pool and
-  keeps its kube-apiserver VIP on the address `api`/`api-int` resolve to. See
-  [MetalLB Address Pools for Hosted Clusters](#metallb-address-pools-for-hosted-clusters).
-  ```bash
-  ansible-playbook -i inventory/hosts create_hosted_cluster.yaml --ask-vault-pass
-  ```
-  - Add `-e hcp_cluster_name=hcp-cluster2` to render just one of them.
-  - With `disconnected_install: true` the same command renders the
-    **disconnected** hosted clusters (`hosted_clusters_disconnected`) instead,
-    against the disconnected hub - see
-    [Disconnected Hosted Cluster](#disconnected-hosted-cluster).
-  - Review and apply the rendered yaml files (one `.rendered-<cluster>.yaml` per entry) to the ACM cluster.
-  ```bash
-  oc apply -f roles/create-hosted-cluster/templates/.rendered-hcp-cluster1.yaml
-  ```
-### Create a Hosted Cluster (Disconnected Deployment)
-
-`create-hosted-cluster` renders differently when it is run disconnected, the
-same way `setup-hub-acm` does. It reads the same `disconnected_install` from
-`vars.yaml`, so it is the same command as the connected flow - and connected
-runs render byte-for-byte what they always did.
-
-```bash
-ansible-playbook -i inventory/hosts create_hosted_cluster.yaml --ask-vault-pass
-```
-
-The run also picks the hub for you: a disconnected render goes to the
-disconnected hub's kubeconfig without needing `-e target_hub=hubd`, since that
-is the only hub the `-d` clusters exist on. (`-e target_hub=hub2` still wins -
-that is the DR cutover, which moves both kinds of cluster onto the DR hub.)
-
-Requires `setup_mirror_registry.yaml` to have run against this lab first - that
-is what leaves the registry's CA at
-`/etc/pki/ca-trust/source/anchors/mirror-registry-rootCA.pem` and logs the
-bare-metal host's podman into the registry, which are the two inputs the
-disconnected rendering reads.
-
-What the disconnected run adds to each bundle:
-
-- A `<cluster>-user-ca-bundle` ConfigMap in the hosted cluster's own namespace,
-  holding the mirror registry CA under `ca-bundle.crt`. The HostedCluster
-  references it twice: `spec.configuration.proxy.trustedCA`, which puts the CA
-  in the hosted cluster's cluster-wide proxy trust bundle, and
-  `spec.additionalTrustBundle`, which HyperShift carries into the nodes' own
-  trust store through the ignition it generates. Both fields look for
-  `ca-bundle.crt`, so one ConfigMap serves both. The mirror registry is
-  self-signed, so without this every pull from it fails on an unknown
-  authority.
-- `spec.imageContentSources` on the HostedCluster, from
-  `hosted_cluster_image_content_sources`. A hosted cluster is its own cluster
-  with its own `registries.conf` - the hub's `ImageDigestMirrorSet` /
-  `ImageTagMirrorSet` only redirect pulls made *by the hub*, so without this
-  list the hosted cluster resolves every pullspec to its public registry.
-  `registry.redhat.io/multicluster-engine` is the mapping that matters most on
-  Agent platform: the agent and assisted-installer images the nodes run come
-  from there, so omitting it gives you a control plane that comes up while the
-  NodePool never finishes joining. The role asserts it is present
-  (`hosted_cluster_required_image_content_sources`) rather than letting that
-  fail silently hours later.
-- A pull secret reduced to the mirror registry's own credentials, read from
-  `mirror_registry_authfile`. Same reasoning as
-  `roles/setup-hub-cluster-disconnected`: vault's `pull_secret` also carries
-  live quay.io / registry.redhat.io credentials, and shipping those would give
-  the nodes a working route back to the real registries, so a pull the mirror
-  is missing could still succeed and the cluster would be disconnected only by
-  accident. Set `hosted_cluster_disconnected_pull_secret: false` to render
-  vault's secret unchanged while debugging.
-- `spec.configuration.operatorhub.disableAllDefaultSources: true`, since the
-  default catalogs resolve against `registry.redhat.io` and otherwise only show
-  up as failing CatalogSource pods. Set
-  `hosted_cluster_disable_default_catalog_sources: false` if you are mirroring
-  them.
-- An APIServer `loadBalancer.hostname` that has to resolve to this cluster's
-  MetalLB address **on the hub it is running on**. Pool *names* are identical on
-  every hub; the *addresses* are not (connected clusters: `hub` 160-162, `hub2`
-  190-192; `-d` clusters: `hub2` 193-195, `hubd` 167-169),
-  so a cluster rendered disconnected publishes a name that must resolve to its
-  `hubd` address, not its `hub` one. The role resolves the hub per cluster
-  (`hosted_cluster_metallb_hub`, defaulting to `target_hub`, but `hubd` for any
-  cluster rendered disconnected), fails if that cluster's
-  `hosted_cluster_metallb_pools[...].ip` has no entry for that hub, and prints
-  the name/address pairing plus the `dig` command to check it. Re-render DNS
-  after any change - `setup_bm_host.yaml --tags dns` - and the two stay in step:
-  `roles/setup-dns` resolves the hub per cluster, publishing the `hubd` address
-  for a `-d` cluster and `target_hub`'s for a connected one, so no override is
-  needed. The default (`api.<cluster-name>.<base_domain>`) is correct by
-  construction under the repo convention that a hosted cluster's DNS zone is
-  named after the cluster - a cluster named `hcp-cluster1-d` gets
-  `api.hcp-cluster1-d.mylab.com`. If you render a cluster disconnected under a
-  name whose zone points at another hub - e.g. plain `hcp-cluster1` - set
-  `api_hostname` on its `hosted_clusters` entry, or
-  `hosted_cluster_api_hostname` in `vars.yaml`.
-
-The connected and disconnected renderings are **two separate templates**
-(`templates/hosted-cluster.yaml.j2` and
-`templates/hosted-cluster-disconnected.yaml.j2`), the same way `setup-hub-acm`
-keeps its disconnected `AgentServiceConfig` separate. `tasks/main.yml` picks
-between them per cluster. They share the NodePool / ManagedCluster /
-KlusterletAddonConfig tail, so a change to one usually belongs in both.
-
-The release payload is addressed **by version**, not by a hard-coded digest:
-`hosted_cluster_release_version` defaults to `<ocp_major_version>.<ocp_minor_version>`,
-so the hosted clusters run the same release the rest of the lab is built from
-and there is one number to bump. Both `HostedCluster.spec.release.image` and
-`NodePool.spec.release.image` come from it.
-
-Connected renders `quay.io/openshift-release-dev/ocp-release:<version>-x86_64`.
-Disconnected renders the **mirror registry's own copy** at the same version,
-`<registry>:<port>/<mirror_release_repository>:<version>-x86_64` - the same
-pullspec `setup-hub-cluster-disconnected` already extracts `openshift-install`
-from, so it is known to exist there.
-
-That is a preference, not a requirement. The release image is resolved **on the
-hub** - HyperShift pulls it there to extract the payload and pin every component
-image by digest - and the hub carries oc-mirror's `ImageTagMirrorSet`, which
-redirects `quay.io/openshift-release-dev/ocp-release` by tag
-(`acm_disconnected_registry_mirrors` lists it with `digest_only: false`, and
-`setup-hub-cluster-disconnected` applies ITMS as a day-2 resource). So the
-canonical quay.io tag resolves through the mirror perfectly well.
-
-`spec.imageContentSources` is a different layer: it is the hosted cluster's own
-`registries.conf`, carries `ImageDigestMirrorSet` (mirror-by-digest-only)
-semantics, and covers the component images - which are pulled by digest anyway,
-so digest-only is exactly right there.
-
-Naming the mirror directly buys one thing: the payload pull stops depending on
-the hub's ITMS being present and correct. It costs portability, since the
-pullspec names this lab's registry, so a HostedCluster restored onto a connected
-hub needs its release image swapped. Set
-`hosted_cluster_release_image_disconnected: "{{ hosted_cluster_release_image }}"`
-to keep the canonical name and lean on the hub's ITMS instead.
-
-Connected and disconnected clusters are **two separate lists of separate
-clusters**, which is what lets a connected and a disconnected hosted cluster be
-up on this lab at the same time:
-
-```yaml
-## connected - these names are reserved for connected runs
-hosted_clusters:
-  - hcp-cluster1
-  - hcp-cluster2
-  - hcp-cluster3
-
-## disconnected - rendered instead of the above when disconnected_install: true
-hosted_clusters_disconnected:
-  - hcp-cluster1-d
-  - hcp-cluster2-d
-  - hcp-cluster3-d
-```
-
-A `-d` cluster is a cluster in its own right: its own namespace, its own
-MetalLB pool (`hubd` .167-.169), its own DNS zone and its own worker VMs. It is
-not `hcp-cluster1` rendered differently, and the role refuses to run if a name
-appears in both lists, since the two would collide on all three. Note the
-connected clusters carry **no `hubd` address** - they never run on the
-disconnected hub, and a stray entry would make `setup-hub-acm` create pools
-there for clusters that will never ask for them.
-
-A disconnected render goes to the disconnected hub's kubeconfig on its own -
-`disconnected_install` selects the hub as well as the cluster list, so this is
-the same command either way:
-
-```bash
-ansible-playbook -i inventory/hosts create_hosted_cluster.yaml --ask-vault-pass
-```
-
-`setup_bm_host.yaml` renders the helper for **both** kinds in one
-unconditional pass - there is no `disconnected_install` switch anywhere in
-`setup-bm-host` / `setup-dns` / `setup-lb` / `setup-tftp`, so the helper never
-needs rebuilding to move between connected and disconnected. That pass now
-covers the `-d` clusters:
-
-- a forward zone per hosted cluster, connected and disconnected, derived from
-  the two cluster lists (`<cluster-name>.<base_domain>`) instead of the old
-  `hosted_domain`/`2`/`3` variables. One shared template replaces the three
-  copy-pasted ones, which is why adding the `-d` clusters needed no new
-  template.
-- a matching `zone` stanza in `named.conf` and PTRs in the reverse zone, driven
-  from the same lists so a zone file and its stanza can never disagree.
-- a `<forwarder>` in the libvirt `default` network per zone, so those names
-  resolve from the VMs on `virbr0` and not just from the helper.
-
-Which hub each zone's `api`/`api-int` points at is resolved **per cluster**:
-connected clusters follow `target_hub`, disconnected ones use `hubd`, and both
-move to `hub2` under `-e target_hub=hub2` for a DR cutover. So a plain
-`--tags dns` run is right for both kinds at once, and no `target_hub` override
-is needed to publish a `-d` cluster on the disconnected hub.
-
-`*.apps` is wired for the `-d` clusters too. `setup-lb` binds one ingress VIP
-per hosted cluster as a secondary address on the helper and renders an haproxy
-frontend/backend pair per cluster on :80 and :443, all derived from
-`hosted_cluster_node_keys` rather than hand-listed - the `-d` clusters had no
-ingress path before simply because that list was maintained by hand:
-
-| cluster | `*.apps` VIP | worker backends |
-|---|---|---|
-| hcp-cluster1 / 2 / 3 | .149 / .159 / .158 | .41-.43 / .51-.53 / .54-.56 |
-| hcp-cluster1-d | .148 | .44-.46 |
-| hcp-cluster2-d | .138 | .28, .29, .37 |
-| hcp-cluster3-d | .199 | .96-.98 |
-
-Worker, PTR, DHCP and `*.apps` records are all rendered only for `ip_list` keys
-that exist, so a cluster whose VMs have not been built yet still gets a valid
-zone carrying the `api`/`api-int` records its HostedCluster publishes, and an
-haproxy section appears only once it has both a VIP and at least one worker -
-never a frontend with no backend.
-
-Review and apply the rendered bundles exactly as in the connected flow -
-`roles/create-hosted-cluster/templates/.rendered-<cluster>.yaml`. Keep
-`hosted_cluster_image_content_sources` in step with
-`acm_disconnected_registry_mirrors` (setup-hub-acm) and with what oc-mirror
-actually published; after the hub is up,
-`oc get imagedigestmirrorset,imagetagmirrorset -o yaml` is the source of truth.
-
-- Note that the hosted cluster worker nodes will go to shutoff mode while joining the nodes to the NodePool. Make sure that the vms are started from virt-manager or via virsh to complete the NodePool join process.
-```bash
-virsh start c1_worker1
-virsh start c1_worker2
-```
-### Deploy a Sample hello-openshift application to the hosted cluster.
-
-We will evaluate that the application is accessible while hub cluster is down and during and after the restore process.
-
-Get the kubeconfig for the hosted cluster.
-```bash
-oc get secret hcp-cluster1-admin-kubeconfig -n hcp-cluster1 -o jsonpath='{.data.kubeconfig}' | base64 -d > kubeconfig-hcp-cluster1.yaml
-export KUBECONFIG=kubeconfig-hcp-cluster1.yaml
-```
-
-Apply the hello-openshift application.
-```bash
-oc apply -f hello-openshift.yaml
-```
-
-Or Online Boutique, if you want a workload with a UI worth showing after the
-cutover. The `no-loadgenerator` overlay drops the Locust traffic generator,
-strips the `runAsUser`/`runAsGroup`/`fsGroup` values `restricted-v2` rejects,
-swaps upstream's LoadBalancer Service for a Route, and creates its own
-namespace:
-
-```bash
-oc apply -k https://github.com/sadiquepp/openshift/test-workloads/online-boutique/overlays/no-loadgenerator
-oc get route frontend -n online-boutique -o jsonpath='{.spec.host}{"\n"}'
-```
-
-It is ~1270m CPU / ~1112Mi of requests across 11 services, which fits two
-workers at 4 vCPU / 8Gi. Stateless apart from `redis-cart` on an `emptyDir`,
-so what a restore brings back is the workload definitions - the same claim
-hello-openshift makes, with a better demo.
-
-Verify that the application is accessible.
-
-```bash
-oc get route hello-openshift -n hello-openshift
-```
-
-
-# Backup and Restore
-
-## Choose how the control-plane volumes are captured
-
-The hosted control plane's state is etcd, on a PVC in the HyperShift
-control-plane namespace. `oadp_backup_method` in `vars.yaml` decides how
-Velero captures it, and every command below takes it as an override:
-
-- **`fs`** (default) - Kopia file-system backup
-  (`defaultVolumesToFsBackup: true`). Velero's node-agent mounts the
-  volume and streams the files to S3. Runs on any StorageClass, LVM
-  Storage included - but see the note under
-  [Choose the Hub's PV Storage](#choose-the-hubs-pv-storage): completing is
-  not the same as being restorable for a control plane.
-- **`csi`** - CSI VolumeSnapshot plus Velero's data mover
-  (`snapshotVolumes` + `snapshotMoveData` + `datamover: velero`). The
-  storage layer takes a point-in-time snapshot and the data mover copies
-  it to the same S3 bucket. Needs a CSI driver with snapshot support -
-  which on this lab means the hub is on Ceph/ODF rather than LVM
-  Storage, and is the reason
-  [the Ceph cluster](ceph/README.md)
-  exists.
-
-Each method has its own Backup/Restore templates in `oadp/templates/`
-and its own object names (`<cluster>-backup` vs `<cluster>-backup-csi`),
-so both can be demonstrated against one bucket. The bucket, the
-credentials and the DataProtectionApplication are shared - switching
-methods changes nothing else. `oadp/README.md` has the full comparison
-and the prerequisites.
-
-## Primary Hub
-### Configure OADP (credentials + DPA)
-The operator is already there (installed during hub bring-up). This
-step just points it at your bucket:
-
-```bash
-ansible-playbook -i inventory/hosts setup_oadp.yaml --ask-vault-pass
-```
-
-For the CSI method, pass it here too - the role then labels the
-VolumeSnapshotClass (`velero.io/csi-volumesnapshot-class=true`) that
-Velero selects snapshot classes by. Without that label Velero skips the
-volume and still reports the backup `Completed`:
-
-```bash
-ansible-playbook -i inventory/hosts setup_oadp.yaml --ask-vault-pass -e oadp_backup_method=csi
-```
-
-Idempotent - re-running against the same hub just reconciles the
-secret/DPA. Both hubs point at the same bucket/prefix, so hub2's Velero
-can see backups hub1 created. Run it on the DR hub with the same method,
-so the snapshot class is labelled there before the restore.
-
-### Deploy a hello-openshift application to Hub. 
-Deply a hello-openshift application with a PVC to Hub Cluster and backup it using OADP. This will be helpful to verify that the backup and restore process of a sample application is working before running it against a hosted cluster.
-
-```bash
-oc apply -f oadp/hello-openshift-oadp.yaml
-```
-
-Write some persistent data to the PVC.
-
-```bash
-POD=`oc get pod -n hello-openshift-oadp -o jsonpath='{.items[0].metadata.name}'`
-oc exec -it $POD -n hello-openshift-oadp -- sh -c 'echo "Hello, World!" > /var/data/hello.txt'
-```
-
-Verify that the data is written to the PVC.
-
-```bash
-oc exec -it $POD -n hello-openshift-oadp -- sh -c 'cat /var/data/hello.txt'
-```
-
-Backup the hello-openshift application with a PVC using OADP.
-```bash
-oc apply -f oadp/hello-openshift-oadp-backup.yaml
-```
-- Check the backup status periodically until it shows as completed.
-```bash
-oc get backup.velero.io -n openshift-adp hello-openshift-oadp-backup -o yaml
-```
-### Exclude ACM's import secret from the backup
-
-Do this **before** the backup, on the hub being backed up.
-
-```bash
-oc label secret hcp-cluster1-import -n hcp-cluster1 \
-  velero.io/exclude-from-backup=true --overwrite
-oc get secret hcp-cluster1-import -n hcp-cluster1 --show-labels
-```
-
-`hcp-cluster1` is the HostedCluster's namespace and *also* ACM's
-ManagedCluster namespace, so `hcp-cluster1-import` - which carries a
-bootstrap ServiceAccount token minted by this hub - is inside the
-backup's scope. Restoring it hands the DR hub a token signed by the wrong
-cluster's key, and the restored cluster hangs in `Importing` with the
-klusterlet logging `Unauthorized` until the secret is deleted by hand. It
-is also a 360-day credential that has no business sitting in S3.
-
-`velero.io/exclude-from-backup` is a **label**, not an annotation -
-`oc annotate` applies cleanly and does nothing. Velero reads it while
-collecting items, so it only has to be set at backup time; nothing is
-needed on the DR hub.
-
-MCE owns this secret and reconciles it, so check `--show-labels` before
-each backup rather than assuming the label stuck - a backup that quietly
-re-includes it looks healthy right up until the restore fails.
-
-This is a workaround, not the fix. Filed as
-[OCPBUGS-121709](https://redhat.atlassian.net/browse/OCPBUGS-121709) -
-**refer to that JIRA for the current status**, and keep labelling the secret on
-every backup until it is resolved in the ACM/MCE version you are running.
-
-Full write-up:
-[Restored cluster stuck in `Importing`](oadp/README.md#restored-cluster-stuck-in-importing).
-
-### Backup a hosted cluster using OADP.
-
-```bash
-ansible-playbook -i inventory/hosts backup_hosted_cluster.yaml --ask-vault-pass \
-  -e hcp_cluster_name=hcp-cluster1
-```
-
-`hcp_cluster_name` must match the HostedCluster's name/namespace - it's
-used to derive both the hosting namespace and the HyperShift
-control-plane namespace (`<name>-<name>`). Works unchanged for
-`hcp-cluster2` or any future hosted cluster.
-
-For a CSI snapshot backup (Backup named `hcp-cluster1-backup-csi`):
-
-```bash
-ansible-playbook -i inventory/hosts backup_hosted_cluster.yaml --ask-vault-pass \
-  -e hcp_cluster_name=hcp-cluster1 -e oadp_backup_method=csi
-```
-
-The playbook refuses to start if no VolumeSnapshotClass is labelled for
-Velero. The volume data then moves in `DataUpload` objects rather than
-inside the Backup's own progress counters, so a csi backup sits in
-`WaitingForPluginOperations` for a while - watch it with:
-
-```bash
-oc get datauploads.velero.io -n openshift-adp -w
-```
-
-- Get the status of the backup and wait till it finishes before proceeding to the next step.
-```bash
-oc get backup.velero.io -n openshift-adp hcp-cluster1-backup -o yaml
-```
-It should show the backup as completed. Example output: `phase: Completed`. `itemsBackedUp:` should be equal to `totalItems`.
-```yaml
-status:
-  expiration: "2026-09-28T04:52:01Z"
-  formatVersion: 1.1.0
-  phase: Completed
-  progress:
-    itemsBackedUp: 363
-    totalItems: 363
-  startTimestamp: "2026-08-17T13:52:01Z"
-  version: 1
-```
-### Shutdown Primary Hub
-
-```bash
-ansible-playbook -i inventory/hosts shutdown_hub_cluster.yaml --ask-vault-pass
-```
-
-### Destroy the Ceph cluster (Ceph/CSI DR demo)
-
-Only for the Ceph path, and only worth doing deliberately: **this
-destroys the storage the backup was taken from.**
-
-With `oadp_backup_method=csi` the etcd data is no longer on Ceph. The CSI
-snapshot was transient - taken, copied to S3 by the data mover, then
-released - so the bucket holds everything the restore needs. Leaving the
-original Ceph cluster running makes that impossible to demonstrate: an
-observer cannot tell whether the hosted cluster came back from object
-storage or from storage that never went away, and in a real disaster it
-would not have.
-
-In production the DR site has its own storage cluster of the same type,
-never the primary's. Rebuilding gets the same evidence on one bare-metal
-host without a second 80G Ceph cluster: after this, every RBD image the
-hosted cluster's etcd ever lived on is gone.
-
-Take the backup first, and confirm the `DataUpload`s completed, before
-running this - after it there is no going back to hub1's storage.
-
-```bash
-ansible-playbook -i inventory/hosts cleanup.yaml --tags ceph
-```
-
-Verify it actually removed everything - a partial teardown leaves stale
-OSD disks that the rebuilt cluster cannot claim, and you get a Ceph
-cluster with no OSDs:
-
-```bash
-virsh list --all | grep -E 'ceph[123]|cephadmin'          # expect no rows
-ls /var/lib/libvirt/images/ | grep -E '^ceph|^cephadmin'  # expect nothing
-```
-
-If anything is left, remove it by hand before rebuilding.
-
-## DR Hub
-### Rebuild Ceph for the DR hub (Ceph/CSI DR demo)
-
-A brand-new cluster on the same four VMs - no pool, no image, no CSI user
-survives from hub1's cluster:
-
-```bash
-(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass)
-```
-
-Wait for `HEALTH_OK` with 3 mons and 9 OSDs before continuing
-(`ssh root@192.168.122.27 ceph -s`) - the export step will produce a JSON
-blob against a degraded cluster and you will find out later.
-
-The StorageClass name is derived from `ceph_odf_storagecluster_name`, so
-the rebuilt cluster presents `ocs-external-storagecluster-ceph-rbd`
-again. That matters: Velero restores each PVC with its original
-`spec.storageClassName`, and a DR hub without a class of that exact name
-leaves the restored PVCs `Pending` for ever with nothing in the Restore's
-status to explain it.
-
-### Build DR Hub
-Once the primary hub is shutdown, you can build the DR hub.
-```bash
-ansible-playbook -i inventory/hosts setup_hub_cluster2.yaml --ask-vault-pass
-```
-
-`setup_hub_cluster2.yaml` follows `disconnected_install` the same way
-`setup_hub_cluster.yaml` does, so the command above builds whichever DR hub the
-flow calls for:
-
-- **`false`** - installs `roles/setup-hub-cluster2` into `hub2_install_folder`.
-  This is `hub2`, pulling from quay.io / registry.redhat.io.
-- **`true`** - installs `roles/setup-hub-cluster2-disconnected` into
-  `hub2_disconnected_install_folder`. This is **`hub2d`**, a separate cluster
-  standing in the same relation to hub2 that `hubd` does to hub1: its own IP
-  block (`ip_list.hub2d_*`, `.10-.16`, haproxy VIP `.119`), its own subdomain
-  (`hub2_disconnected_domain`, `hub2d.mylab.com`) and its own VM/install
-  directories, wired to pull every image from the mirror registry with its
-  nodes cut off from the real internet before anything boots. All four hubs -
-  hub1, hub2, hubd, hub2d - can be up at once.
-
-A disconnected DR hub needs the mirror registry standing (the play fails fast if
-its CA is not trusted here) and the `hub2d_*` entries present in `ip_list` when
-`setup_bm_host.yaml` last ran, so its DNS, DHCP reservations and haproxy
-frontends exist.
-
-> **MetalLB is the one thing the flag does not switch here.** Both modes pass
-> `metallb_hub=hub2`, because a disconnected DR hub is still the DR hub: a
-> hosted cluster restored onto it comes up on hub2's addresses (`.190-.192` for
-> the connected clusters, `.193-.195` for the `-d` ones). What
-> `disconnected_install` decides is *which* clusters get pools - see
-> [MetalLB Address Pools for Hosted Clusters](#metallb-address-pools-for-hosted-clusters).
-> `hub2d` is deliberately not a hub name in `hosted_cluster_metallb_pools`.
-
-Tear it down with `cleanup.yaml --tags hub2d`, which touches nothing but
-`hub2d`.
-
-> **The OADP playbooks do not know about `hub2d` yet.** `setup_oadp.yaml`,
-> `backup_hosted_cluster.yaml` and `restore_hosted_cluster.yaml` still resolve
-> their kubeconfig with a two-way `target_hub == 'hub2'` test, so on a
-> disconnected lab `-e target_hub=hub2` points them at the *connected* hub2's
-> install directory (and `hubd` has always had the same gap). Until that
-> selection is widened, name the kubeconfig explicitly - `-e` beats the
-> playbook's own variable:
->
-> ```bash
-> ansible-playbook -i inventory/hosts setup_oadp.yaml --ask-vault-pass \
->   -e target_hub=hub2 \
->   -e hub_kubeconfig=/var/lib/libvirt/images/hub2d_install/auth/kubeconfig
-> ```
-
-On the Ceph path, build hub2 with `use_lvm_storage: false` and attach it to
-the rebuilt Ceph cluster **now**, before the AgentServiceConfig below:
-
-```bash
-(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass -e target_hub=hub2)
-```
-
-The AgentServiceConfig provisions three PVCs - `databaseStorage` (10Gi),
-`filesystemStorage` (100Gi) and `imageStorage` (50Gi) - and none of them
-names a `storageClassName`, so they bind against whatever StorageClass the
-cluster marks **default**. Until that exists they sit `Pending` and
-assisted-service never starts. On the LVM path `lvms-vg1` is the default;
-on the Ceph path it is `ocs-external-storagecluster-ceph-rbd`, which is
-why `ceph_odf_rbd_default_sc` defaults to true. Check before continuing:
-
-```bash
-oc get sc      # exactly one class marked (default)
-```
-
-Note that AgentServiceConfigs are not restored by OADP. You need to apply the rendered manifests manually before proceeding to the next step. Watch the ansible debug output for the location of the rendered manifests to apply.
-```bash
-oc apply -f /home/images/ocp-onpremise/roles/setup-hub-acm/files/.rendered-05-agentserviceconfig.yaml
-oc get pvc -n multicluster-engine    # the three should reach Bound
-```
-There is no need to create InfraEnv, HostedCluster and discover nodes. OADP will do that automatically.
-
-### Configure OADP on DR Hub
-
-```bash
-ansible-playbook -i inventory/hosts setup_oadp.yaml --ask-vault-pass -e target_hub=hub2
-```
-### Restore hello-openshift application with a PVC to DR Hub.
-This will validate that the restore is working before restoring the hosted cluster.
-
-```bash
-oc apply -f oadp/hello-openshift-oadp-restore.yaml
-```
-Verify that the data persisted in the PVC is visible in the DR hub pod after restore.
-
-```bash
-POD=`oc get pod -n hello-openshift-oadp -o jsonpath='{.items[0].metadata.name}'`
-oc exec -it $POD -n hello-openshift-oadp -- sh -c 'cat /var/data/hello.txt'
-```
-
-### Restore the hosted cluster to the DR Hub using OADP. 
-This will restore the hosted cluster to the DR Hub using OADP.
-
-```bash
-ansible-playbook -i inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2
-```
-Check the status of the restore.
-```bash
-oc get restore.velero.io -n openshift-adp hcp-cluster1-restore -o yaml
-```
-
-Restore with the same method the backup used - it selects both the
-Restore template and the name of the Backup to restore from, and the
-playbook stops with a clear message if that Backup is not visible on
-this hub yet:
-
-```bash
-ansible-playbook -i inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
-  -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2 -e oadp_backup_method=csi
-oc get restore.velero.io -n openshift-adp hcp-cluster1-restore-csi -o yaml
-oc get datadownloads.velero.io -n openshift-adp -w
-```
-
-### Point DNS at the DR hub
-
-The DR hub is on its own network segment, so the restored hosted clusters come
-up on its MetalLB addresses (`.190`/`.191`/`.192`) rather than hub1's - the pool
-names are the same, the addresses are not. Re-render the zone files so
-`api`/`api-int` follow them:
-
-```bash
-ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns \
-  --ask-vault-pass -e target_hub=hub2
-```
-
-Verify DNS and the restored kube-apiserver Service agree:
-
-```bash
-dig +short api.hcp-cluster1.mylab.com @192.168.122.21
-oc get svc kube-apiserver -n hcp-cluster1-hcp-cluster1 \
-  -o jsonpath='{.status.loadBalancer.ingress[0].ip}{"\n"}'
-```
-
-**Then check a worker node, not just the helper.** The VMs do not query the
-helper directly - they get `192.168.122.1` from DHCP, which is libvirt's
-dnsmasq, which forwards the lab zones to the helper **and caches the answers**.
-A correct zone on the helper and a stale answer on the nodes is the normal
-state for a few minutes after a cutover, and the symptom is both hosted-cluster
-workers going `NotReady` while `oc get co` falls apart - the kubelets are still
-dialling the hub that just went away.
-
-```bash
-ssh core@192.168.122.41 'getent hosts api.hcp-cluster1.mylab.com'   # want the DR address
-```
-
-If it still shows the old address, flush dnsmasq's cache on the bare-metal
-host - this clears cached records without touching DHCP leases or disturbing
-any VM:
-
-```bash
-sudo kill -HUP $(cat /var/run/libvirt/network/default.pid 2>/dev/null \
-                 || cat /var/run/libvirt/dnsmasq/default.pid)
-```
-
-Kubelets re-resolve and rejoin on their own within a minute or two;
-`systemctl restart kubelet` on each worker forces it.
-
-The hosted-cluster zones are served with `$TTL 60` and this dnsmasq is capped
-at `max-cache-ttl=60` (`roles/setup-bm-host/templates/default-network.xml.j2`),
-so a cutover propagates in about a minute. Both are recent - a lab whose
-`default` network was defined before that change still caches at the zone's
-old 1-day TTL until `setup_bm_host.yaml --tags virtnet` redefines the network,
-which drops `virbr0` and briefly interrupts every VM. The flush above is the
-zero-downtime alternative.
-
-Set `target_hub: hub2` in `vars.yaml` to make the cutover permanent. See
-[MetalLB Address Pools for Hosted Clusters](#metallb-address-pools-for-hosted-clusters)
-for how the per-hub addresses are defined.
-
-
-## Disconnected Hosted Cluster
-
-A hosted cluster whose worker VMs have **no route off the lab network**, so it
-can only ever pull from the local mirror registry. It runs on the disconnected
-hub built by `setup_hub_cluster.yaml`, and is deliberately built to sit
-*alongside* `hcp-cluster1` rather than replace it - both can be up at once.
-
-Everything hangs off the same `disconnected_install` in `vars.yaml` as the rest
-of the flow. Connected runs are completely unaffected: the same playbooks, the
-same role and the same `hosted-cluster.yaml.j2` template are used for both.
-
-What is distinct about it:
-
-| | Connected (`hcp-cluster1`) | Disconnected (`hcp-cluster1-d`) |
-| --- | --- | --- |
-| Worker VMs | `c1_worker1..3` | `c1-d-worker1..3` |
-| Worker IPs | `.41` `.42` `.43` | `.44` `.45` `.46` |
-| Internet access from workers | yes | **cut** (no NAT, egress rejected) |
-| DNS zone | `hcp-cluster1.mylab.com` | `hcp-cluster1-d.mylab.com` |
-| `api` / `api-int` | MetalLB `hcp-cluster1-api-pool` | MetalLB `hcp-cluster1-d-api-pool` |
-| `*.apps` VIP (haproxy) | `.149` (`c1lb`) | `.148` (`c1dlb`) |
-| VM folder | `/var/lib/libvirt/images/hosted_cluster` | `/var/lib/libvirt/images/hosted_cluster_disconnected` |
-
-The `api`/`api-int` split is what makes the two clusters independent: each
-hosted cluster's kube-apiserver VIP comes from its own single-address MetalLB
-pool, and each has its own zone publishing that address, so nothing collides.
-`*.apps` for the disconnected cluster is served by its own haproxy frontends on
-`c1dlb`, whose backends are the three `c1dworker*` addresses.
-
-### How the workers are cut off
-
-Before any VM is created, the three worker IPs get the same two rules the
-disconnected hub's nodes get (see
-`roles/setup-hub-cluster-disconnected/tasks/block-node-nat.yml`, which both
-share):
-
-1. `RETURN` at the top of libvirt's `LIBVIRT_PRT` chain (**nat** table), so
-   their traffic is never MASQUERADEd out to the real internet.
-2. `REJECT` at the top of `LIBVIRT_FWO` (**filter** table), so the un-NATed
-   packets do not leave the hypervisor either and the node fails fast instead
-   of timing out.
-
-Both matches are "from this worker, NOT to `192.168.122.0/24`", so the mirror
-registry, MinIO, the helper's DNS/DHCP/TFTP, the load balancer and the workers
-themselves all stay fully reachable - only egress past the lab is cut. The
-rules live in the running ruleset only; libvirt rebuilds those chains when
-libvirtd restarts or a network is stopped/started, so re-run the playbook (or
-just `--tags disconnected-nat`) if that happens. Set
-`hosted_cluster_disconnected_block_node_nat: false` to leave the workers
-connected while still installing from the mirror - useful when checking whether
-a failure is genuinely caused by the disconnection.
-
-### Image signature policy on the discovery host
-
-RHCOS ships `/etc/containers/policy.json` with a `signedBy` entry for
-`registry.redhat.io` and `registry.access.redhat.com`. The mirror mappings in
-`roles/setup-hub-acm`'s `mirror-config` ConfigMap redirect the *pull* to the
-mirror registry, but podman still looks for the detached signature under the
-image's original `registry.redhat.io` name - in Red Hat's sigstore, which a node
-whose NAT has been cut cannot reach and which mirror-registry does not serve.
-So a disconnected worker boots the discovery ISO and dies on:
-
-```
-podman[3161]: Trying to pull registry.redhat.io/multicluster-engine/assisted-installer-agent-rhel9@sha256:12fdad03...
-podman[3161]: Error: copying system image from manifest list: Source image rejected: A signature was required, but no signature exists
-```
-
-`agent.service` never starts, so the host never registers and **no Agent ever
-appears in the InfraEnv** - which looks exactly like the VMs failing to boot.
-
-Shipping the GPG key with the ISO does not help: the keys are already on the
-host (that is what `keyPaths` points at) - it is the per-image signature that is
-missing, not the key to verify it with.
-
-The fix is the InfraEnv's `spec.ignitionConfigOverride`, which writes a
-`policy.json` that accepts those two registries unsigned - the same edit that
-works by hand after sshing into the node, applied declaratively so the run does
-not need one.
-`setup_hosted_cluster_vm.yaml` puts it on the live InfraEnv (patching an
-InfraEnv that predates it), waits for assisted-service to rebuild the ISO, and
-forces the cached copy in `download_dir` to be replaced before booting the VMs -
-so nothing boots the old ISO. `setup_bminfra.yaml` renders the same override
-into `.rendered-03-infraenv.yaml` for a fresh InfraEnv.
-
-Only the disconnected path does any of this; a connected InfraEnv is rendered
-exactly as before. Tunable in `vars.yaml`:
-
-| Variable | Default | |
-|---|---|---|
-| `bminfra_disconnected_relax_image_policy` | `true` | set `false` to keep signature checking - only useful if you have mirrored Red Hat's sigstore |
-| `bminfra_discovery_image_policy` | both Red Hat registries unsigned | the `policy.json` document itself; narrow it to one registry if you prefer |
-| `bminfra_ignition_extra_files` | `[]` | extra ignition `storage.files` entries, e.g. an `/etc/containers/registries.d/` drop-in pointing `sigstore` at a mirrored signature store |
-| `bminfra_ignition_version` | `3.2.0` | ignition spec version of the override |
-
-To re-apply just this step against an existing InfraEnv:
-
-```bash
-ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass \
-  --tags discovery-ignition
-```
-
-### Building it
-
-Exactly the same commands as a connected hosted cluster - with
-`disconnected_install: true` in `vars.yaml`, each step uses the disconnected
-hub's kubeconfig and the disconnected cluster list on its own (the flag wins
-over `target_hub`):
-
-```bash
-# 1. worker VMs (.44-.46): NAT cut first, the hubd InfraEnv's ignition override
-#    ensured (see above), then the VMs booted off that InfraEnv's ISO
-ansible-playbook -i inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass
-
-# 2. approve the discovered agents in the ACM/MCE Web UI, then render the bundle
-ansible-playbook -i inventory/hosts create_hosted_cluster.yaml --ask-vault-pass
-
-# 3. review and apply it
-oc apply -f roles/create-hosted-cluster/templates/.rendered-hcp-cluster1-d.yaml
-```
-
-DNS for the zone is rendered by `setup-dns` like every other zone - the zone is
-always present, and `api`/`api-int` for a `-d` cluster resolve to the
-disconnected hub without any override, so a plain `dns` run is all it takes:
-
-```bash
-ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns --ask-vault-pass
-```
-
-Verify:
-
-```bash
-dig +short api.hcp-cluster1-d.mylab.com @192.168.122.21     # -> 192.168.122.167 on hubd
-dig +short console-openshift-console.apps.hcp-cluster1-d.mylab.com @192.168.122.21  # -> 192.168.122.148
-sudo iptables -t nat -nL LIBVIRT_PRT --line-numbers | grep hcp-cluster1-d
-```
-
-Adding a second disconnected hosted cluster is the same three edits as a
-connected one: a name in `hosted_clusters_disconnected`, an entry in
-`hosted_cluster_metallb_pools`, and its workers in
-`hosted_cluster_disconnected_workers` (plus their `ip_list` octets, a zone and
-haproxy frontends if it needs its own ingress VIP).
-
-
-## MetalLB Address Pools for Hosted Clusters
-
-Each hosted cluster gets its **own single-address MetalLB pool**, so its
-kube-apiserver VIP can only ever be the address DNS publishes for it on the hub
-it is running on.
-
-The **pool name is the same on every hub**; the **address it holds is not**.
-The DR hub sits on its own network segment where hub1's addresses are not
-routable, so each cluster carries one address per hub:
-
-| Hosted cluster   | Pool                      | hub (primary)    | hub2 (DR)        | hubd (disconnected) |
-| ---------------- | ------------------------- | ---------------- | ---------------- | ------------------- |
-| `hcp-cluster1`   | `hcp-cluster1-api-pool`   | `192.168.122.160` | `192.168.122.190` | -                   |
-| `hcp-cluster2`   | `hcp-cluster2-api-pool`   | `192.168.122.161` | `192.168.122.191` | -                   |
-| `hcp-cluster3`   | `hcp-cluster3-api-pool`   | `192.168.122.162` | `192.168.122.192` | -                   |
-| `hcp-cluster1-d` | `hcp-cluster1-d-api-pool` | -                | `192.168.122.193` | `192.168.122.167`    |
-| `hcp-cluster2-d` | `hcp-cluster2-d-api-pool` | -                | `192.168.122.194` | `192.168.122.168`    |
-| `hcp-cluster3-d` | `hcp-cluster3-d-api-pool` | -                | `192.168.122.195` | `192.168.122.169`    |
-
-A `-` is a deliberate reservation, not an omission. The connected three never
-run on the disconnected hub and the `-d` clusters never run on hub1, so those
-addresses do not exist and nothing renders a pool for them. hub2 is the one hub
-in both columns: it is the DR restore target for both sets, because the
-disconnected bundle pins the canonical quay.io release digest and a `-d`
-cluster therefore restores onto a connected hub unchanged.
-
-Keeping the pool names identical across hubs is what lets a HostedCluster's
-`metallb.io/address-pool` annotation survive an OADP restore onto the DR hub
-unchanged - the cluster still belongs to the same pool, that pool just holds a
-different, locally routable address there.
-
-All of it comes from one map in `vars.yaml`, so the pool, the DNS record and
-the HostedCluster annotation cannot drift apart:
-
-```yaml
-hosted_cluster_metallb_pools:
-  hcp-cluster1:
-    pool: hcp-cluster1-api-pool
-    ip:
-      hub: 60
-      hub2: 90
-  hcp-cluster2:
-    pool: hcp-cluster2-api-pool
-    ip: {hub: 61, hub2: 91}
-  hcp-cluster3:
-    pool: hcp-cluster3-api-pool
-    ip: {hub: 62, hub2: 92}
-
-  hcp-cluster1-d:
-    pool: hcp-cluster1-d-api-pool
-    ip: {hub2: 93, hubd: 67}
-  hcp-cluster2-d:
-    pool: hcp-cluster2-d-api-pool
-    ip: {hub2: 94, hubd: 68}
-  hcp-cluster3-d:
-    pool: hcp-cluster3-d-api-pool
-    ip: {hub2: 95, hubd: 69}
-```
-
-Three variables select what a hub gets:
-
-- **`metallb_hub`** - which hub `setup-hub-acm` is configuring. Set by
-  `setup_hub_cluster.yaml` - `hub` normally, `hubd` when `disconnected_install`
-  is true - and `setup_hub_cluster2.yaml` (`hub2`).
-- **`target_hub`** - which hub is currently authoritative. Already used to pick
-  the kubeconfig for the OADP playbooks; it now also selects the address
-  `setup-dns` publishes as `api`/`api-int`. Defaults to `hub`.
-- **`disconnected_install`** - which *set* of hosted clusters the run is about:
-  `hosted_clusters_disconnected` when true, `hosted_clusters` when false. The
-  same switch `roles/create-hosted-cluster` already renders from, so a hub gets
-  pools for exactly the clusters that hub run would create there.
-
-Carrying the hub's address is necessary but not sufficient - the cluster must
-also be in the run's install mode. This only ever matters on hub2, the one hub
-holding addresses for both sets:
-
-| Run                        | `disconnected_install` | Pools rendered                            |
-| -------------------------- | ---------------------- | ----------------------------------------- |
-| `setup_hub_cluster.yaml`   | `false`                | `hcp-cluster1/2/3-api-pool` (.160-.162)     |
-| `setup_hub_cluster.yaml`   | `true`                 | `hcp-cluster{1,2,3}-d-api-pool` (.167-.169) |
-| `setup_hub_cluster2.yaml`  | `false`                | `hcp-cluster1/2/3-api-pool` (.190-.192)     |
-| `setup_hub_cluster2.yaml`  | `true`                 | `hcp-cluster{1,2,3}-d-api-pool` (.193-.195) |
-
-So `oc get IPAddressPool -n metallb-system` on a connected hub2 shows **three**
-pools, not six. The `-d` clusters' hub2 addresses stay reserved in the map; the
-pools for them are created by re-running just the `acm` tag in disconnected
-mode, which is the step before restoring a `-d` cluster onto hub2.
-
-This is **the one place a `-e disconnected_install=` override is genuinely
-useful**: hub2 is the DR target for both kinds of cluster, so a hub2 you built
-connected may still need the `-d` pools, and that is a single day-2 action
-rather than a change of mode for the whole lab:
-
-```bash
-ansible-playbook -i inventory/hosts setup_hub_cluster2.yaml --ask-vault-pass --tags acm \
-  -e disconnected_install=true
-```
-
-`roles/setup-hub-acm` prints the split it resolved (`renders pools for: ... |
-not rendered here: ...`) on every run, so you can see which set a hub got
-without reading the map.
-
-Switching modes also cleans up after itself, since `oc apply` does not prune: a
-hub2 built when both sets were rendered would otherwise keep all six pools
-forever. The role deletes the other mode's `IPAddressPool`/`L2Advertisement`
-pairs - only ones named in `hosted_cluster_metallb_pools` that carry an address
-for this hub, never anything else on the cluster - and **skips any pool whose
-address a Service currently holds**, so a connected re-run cannot strip the VIP
-from a `-d` cluster restored onto the same hub. It reports what it did
-(`deleted:` / `in use ..., kept:` / `absent:`) per pool. Set
-`metallb_prune_other_mode_pools: false` to leave both modes' pools in place.
-
-Three things are generated from the map:
-
-1. `roles/setup-hub-acm` renders one `IPAddressPool` per cluster of this run's
-   install mode that holds a `metallb_hub` address (a single address, e.g.
-   `192.168.122.160-192.168.122.160`) and one `L2Advertisement` per pool, so each
-   address is advertised independently.
-2. `roles/setup-dns` points that cluster's `api` and `api-int` A records at
-   `target_hub`'s address for it.
-3. `roles/create-hosted-cluster` annotates the HostedCluster with
-   `metallb.io/address-pool: <pool>`.
-
-If a hub is genuinely on a different subnet rather than a different block of
-the same `/24`, give it its own prefix and the addresses and DNS records both
-follow:
-
-```yaml
-hosted_cluster_metallb_network_prefixes:
-  hub2: "192.168.150"
-```
-
-### DR cutover
-
-The DR hub's pools for the connected clusters are created when you build it
-(`setup_hub_cluster2.yaml` passes `metallb_hub: hub2`), so after restoring the
-hosted clusters onto hub2 the only remaining step is to move DNS. (Restoring a
-`-d` cluster there needs its pool created first - see the
-`disconnected_install` note above.)
-
-```bash
-ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns \
-  --ask-vault-pass -e target_hub=hub2
-```
-
-`api`/`api-int` for every hosted cluster now resolve to the hub2 addresses
-(`.190`/`.191`/`.192`), which is where their restored kube-apiservers actually
-came up. Set `target_hub: hub2` in `vars.yaml` to make the cutover permanent.
-
-### What actually pins the address
-
-Each pool carries a `serviceAllocation` constraint naming that hosted
-cluster's control-plane namespace:
-
-```yaml
-  serviceAllocation:
-    priority: 10
-    namespaces:
-      - hcp-cluster1-hcp-cluster1   # <hostedcluster-namespace>-<hostedcluster-name>
-```
-
-That constraint is what enforces the mapping. **The
-`metallb.io/address-pool` annotation on the HostedCluster does not, on its
-own** - MetalLB reads that annotation from the LoadBalancer *Service*, and
-HyperShift does not copy HostedCluster annotations onto the `kube-apiserver`
-Service it generates. Keep the annotation for what it is: the record, on the
-HostedCluster itself, of which pool that cluster belongs to, and the value to
-pass if you ever need to force a reallocation by hand:
-
-```bash
-oc -n hcp-cluster1-hcp-cluster1 annotate svc/kube-apiserver \
-  metallb.io/address-pool=hcp-cluster1-api-pool --overwrite
-```
-
-### Notes and constraints
-
-- This replaces the old shared `hcp-ip-pool` (hub `60-63`, hubd `64-67`,
-  hub2 `90-93`), which let any hosted cluster take any free address in the
-  range. `.63` was left free, and `.67` and `.93` went to the `-d`
-  clusters' own pools. `roles/setup-hub-acm` deletes the
-  old pool and its `l2advertisement` before applying the new ones, since
-  MetalLB rejects overlapping pools - set
-  `metallb_remove_legacy_shared_pool: false` to skip that. Every pool has
-  since moved to `.100`-`.199` (each old address plus 100), so the VMs have
-  `.60`-`.63`, `.67`-`.69` and `.90`-`.95` back.
-- **Moving the addresses on a hub that is already up.** The pool names do not
-  change, only the address each one holds, so re-running the hub's `acm` tag
-  re-applies them in place, and the DNS run publishes the new addresses:
-  ```bash
-  ansible-playbook -i inventory/hosts setup_hub_cluster.yaml --ask-vault-pass --tags acm
-  ansible-playbook -i inventory/hosts setup_bm_host.yaml --ask-vault-pass --tags dns
-  ```
-  Then run [Verifying](#verifying) for each hosted cluster: the Service's
-  address and DNS must agree, now on `.1xx`. The zones have a 60s TTL, so
-  clients follow within a minute. Not yet run on a hub with hosted clusters
-  up: if a `kube-apiserver` Service keeps its old address, delete it
-  (`oc delete svc kube-apiserver -n <hcp namespace>`) - HyperShift recreates
-  it and MetalLB gives it the pool's new address. Simplest is to move them
-  while no hosted cluster is running.
-- All three hubs can carry the pools at once, since MetalLB only ARPs for an
-  address once a Service is assigned it. Just don't run the same hosted
-  cluster on two hubs at the same time.
-- Every pool is namespace-constrained and there is no longer a catch-all pool
-  on the hub, so a LoadBalancer Service outside these control-plane
-  namespaces will sit at `<pending>` until you give it a pool of its own.
-- Adding a fourth hosted cluster means adding it to **both**
-  `hosted_cluster_metallb_pools` (with an address for every hub) and
-  `hosted_clusters`, then re-running `setup-hub-acm` (pools) and `setup-dns`
-  (records). Both roles fail fast on a missing entry.
-
-### Verifying
-
-```bash
-oc get ipaddresspool,l2advertisement -n metallb-system
-oc get svc kube-apiserver -n hcp-cluster1-hcp-cluster1 \
-  -o jsonpath='{.status.loadBalancer.ingress[0].ip}{"\n"}'
-dig +short api.hcp-cluster1.mylab.com @192.168.122.21
-```
-
-The last two must agree - that is the whole point of this layout.
-
+cd standard-cluster && ansible-playbook -i ../inventory/hosts setup_cluster1.yaml --ask-vault-pass && cd ..
+cd acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass && cd ..
+```
+
+> **Upgrading from a checkout where these playbooks sat at the repository
+> root?** `setup_hub_cluster.yaml` and `setup_hub_cluster2.yaml` are now
+> `standard-cluster/setup_cluster1.yaml` and `setup_cluster2.yaml`, and **no
+> longer install ACM/MetalLB/OADP** - run `acm/setup_acm.yaml` after them
+> (`--tags acm` and `--tags metallb` runs become `acm/setup_acm.yaml` and
+> `acm/setup_acm.yaml --tags metallb`). The hosted-cluster playbooks moved to
+> `hcp/`, the backup/restore/shutdown playbooks and their templates to
+> `hcp/dr/`, `setup_oadp.yaml` to `oadp/`, `setup_minio.yaml` to `minio/`,
+> `setup_mirror_registry.yaml` to `mirror-registry/`, `setup_bastion.yaml` to `bastion/`,
+> `setup_sno.yaml` and `setup_sno2.yaml` to `sno/`, and `shutdown_hub_cluster.yaml`
+> became `standard-cluster/shutdown_cluster.yaml` (any of the four clusters, by
+> `target_hub` / `disconnected_install`). The compact cluster's `--tags acm` is
+> `acm/setup_acm.yaml -e target_hub=compact`. The unused `gitops-manifests/`
+> and `roles/setup-gitops` are gone (see [`gitops/`](gitops/)). Variable names,
+> `target_hub` values and rendered-file locations under `roles/` are unchanged.
 
 ## Ceph 9 Storage for Hub PVs (ODF External Mode)
 
@@ -1821,7 +399,7 @@ same bare-metal host and handed to a hub through OpenShift Data Foundation in
 external mode. It replaces LVM Storage as the hub's PV provider
 (`use_lvm_storage: false`) and is what provides the CSI VolumeSnapshotClass the
 `csi` backup method needs - see
-[Choose how the control-plane volumes are captured](#choose-how-the-control-plane-volumes-are-captured).
+[hcp/dr/README.md](hcp/dr/README.md#choose-how-the-control-plane-volumes-are-captured).
 Everything about building, attaching, verifying and tearing it down - sizing,
 the OCP 4.21+ requirement, the `ceph_dashboard_password` vault entry, and why it
 should not share `openshift-storage` with LVM Storage - is in
@@ -1848,7 +426,7 @@ cluster for hosted control planes, side by side with the hub
 Start with [compact-cluster/README.md](compact-cluster/README.md).
 
 Additive like the UDN lab below: it shares `vars.yaml`, `vault.yaml`,
-`inventory/hosts` and `roles/`, but nothing in the hub, hosted-cluster or OADP
+`inventory/hosts` and `roles/`, but nothing in the cluster, hosted-cluster or OADP
 flows reads it. Run its playbooks from inside the directory:
 
 ```bash
@@ -1863,7 +441,7 @@ workers are KubeVirt VMs that its NodePool creates on the hub's OpenShift
 Virtualization. On this lab they are nested VMs, so there's no ISO and no
 Agent to approve. Ingress goes through the hub's router by default, with
 MetalLB inside the hosted cluster as a per-cluster toggle. The host, Ceph and
-hub1 are built with the same playbooks as [steps.md](steps.md); the
+hub1 are built with the same playbooks as [hcp/dr/steps.md](hcp/dr/steps.md); the
 directory automates only the rest. Every command, start to finish, in
 [kubevirt/steps.md](kubevirt/steps.md); explanations in
 [kubevirt/README.md](kubevirt/README.md).
@@ -1878,7 +456,7 @@ explains it.*
 
 hcp-kv1 is an ordinary `hosted_clusters` entry with `platform: kubevirt`, so
 `setup-dns` and `setup-hub-acm` give it its API name and pool.
-`create_hosted_cluster.yaml` skips it. `hcp-kv2` is the same with
+`hcp/create_hosted_cluster.yaml` skips it. `hcp-kv2` is the same with
 `infra: sno`: its control plane on the hub, its worker VMs on the single-node
 cluster ([kubevirt/README.md](kubevirt/README.md#workers-on-another-cluster-hcp-kv2-on-the-sno)).
 `hcp-kv3` adds a third cluster: its control plane on `sno3`, a second SNO that
@@ -1905,7 +483,7 @@ Start at [gitops/README.md](gitops/README.md).
 **Moved to [`udn-bgp-evpn/`](udn-bgp-evpn/).** The whole lab - the two roles,
 the playbook, the scripts and the documentation - lives in that directory now.
 
-Entirely additive to this repository: nothing in the hub, hosted-cluster, OADP
+Entirely additive to this repository: nothing in the cluster, hosted-cluster, OADP
 or Ceph flows reads any of it, and none of those flows change whether or not
 you ever run it.
 
@@ -1929,19 +507,24 @@ The cluster it peers with is still built from here - see
 [udn-bgp-evpn/udn-bgp-evpn-steps.md](udn-bgp-evpn/udn-bgp-evpn-steps.md) for
 the order.
 
+## SPIFFE/SPIRE
+
+**Lives in [`spiffe-spire/`](spiffe-spire/).** SPIFFE/SPIRE workload identity
+on hub1 and the SNO, built on top of the base lab with its own `build-lab.sh`
+and workshop. Start at [spiffe-spire/README.md](spiffe-spire/README.md).
 
 ## Playbook Reference
 
-Every playbook here is run with `-i inventory/hosts`. Most plays target
-`localhost`, but they reach the lab VMs through `delegate_to` - the helper, the
-mirror registry, minio, `ceph1`, `cephadmin` - and a delegated host that is not
-in the inventory gets no `ansible_ssh_private_key_file` or
-`StrictHostKeyChecking=no`, so the SSH fails or hangs on a host-key prompt.
-`ceph/setup_ceph.yaml` goes further and has a play against the `ceph_nodes` group,
-which does not exist at all without `-i`. Passing it everywhere keeps one habit
-instead of a rule about which playbook needs it. Playbooks in a subdirectory
-(`ceph/`, `compact-cluster/`, `kubevirt/`, `udn-bgp-evpn/`) are run from inside
-it, with `-i ../inventory/hosts`.
+Every playbook is run with an inventory - `-i inventory/hosts` from the root,
+`-i ../inventory/hosts` from a subdirectory. Most plays target `localhost`, but
+they reach the lab VMs through `delegate_to` - the helper, the mirror registry,
+minio, `ceph1`, `cephadmin` - and a delegated host that is not in the inventory
+gets no `ansible_ssh_private_key_file` or `StrictHostKeyChecking=no`, so the SSH
+fails or hangs on a host-key prompt. `ceph/setup_ceph.yaml` goes further and has
+a play against the `ceph_nodes` group, which does not exist at all without `-i`.
+Passing it everywhere keeps one habit instead of a rule about which playbook
+needs it. Playbooks in a subdirectory are run from inside it, because each
+directory's `ansible.cfg` is what adds the shared `roles/` to the role path.
 
 `inventory/hosts` is generated from `inventory/hosts.j2` and `vars.yaml`
 (`lab_network_prefix` + `ip_list`) by `setup_bm_host.yaml`, which re-reads it in
@@ -1950,37 +533,48 @@ is the render of the defaults; if you change `lab_network_prefix` or `ip_list`,
 re-run that playbook (its first task is enough) before running anything that
 delegates.
 
-| Playbook                      | Description                                   |
-| ----------------------------- | --------------------------------------------- |
-| `setup_bm_host.yaml`          | Prepare bare metal, create helper VM (DNS/LB) |
-| `setup_mirror_registry.yaml`  | Build the mirror registry VM and fill it with oc-mirror - required first when `disconnected_install: true`, refuses to run otherwise |
-| `setup_bastion.yaml`          | Build the 256G bastion VM for container image builds and CVE scanning - optional, nothing else depends on it |
-| `setup_hub_cluster.yaml`      | Deploy the hub (OCP + day-2 operators): hub1, or hubd when `disconnected_install: true` |
-| `setup_hub_cluster2.yaml`     | Deploy the DR replacement hub: hub2, or hub2d when `disconnected_install: true` |
-| `setup_hosted_cluster.yaml`   | Provision hosted cluster 1                    |
-| `setup_hosted_cluster2.yaml`  | Provision hosted cluster 2                    |
-| `setup_oadp.yaml`             | Wire OADP to S3 (credentials + DPA)           |
-| `backup_hosted_cluster.yaml`  | Backup a hosted cluster control plane         |
-| `restore_hosted_cluster.yaml` | Restore a hosted cluster control plane        |
-| `shutdown_hub_cluster.yaml`   | Gracefully stop hub1 VMs (preserves disks)    |
-| `cleanup.yaml`                | Destroy all VMs, or one piece with `--tags hub\|hub2\|hubd\|hub2d\|hosted\|helper\|minio\|ceph\|sno\|compact\|...` (see [Cleanup](#cleanup)). The mirror registry is only shut down; `--tags registry-destroy` really removes it |
-| `setup_hosted_cluster_vm.yaml` | Create a hosted cluster's worker VMs; builds the disconnected set when `disconnected_install: true` |
-| `create_hosted_cluster.yaml`  | Render the HostedCluster/NodePool bundle; renders the disconnected clusters when `disconnected_install: true` |
-| `ceph/setup_ceph.yaml`        | Build the standalone Ceph 9 cluster (ceph1-3 + cephadmin) - see [ceph/README.md](ceph/README.md) |
-| `ceph/setup_ceph_odf.yaml`    | Install ODF and attach that Ceph cluster to a hub in external mode |
+| Playbook | Description |
+| --- | --- |
+| `setup_bm_host.yaml` | Prepare bare metal, create helper VM (DNS/LB) |
+| `mirror-registry/setup_mirror_registry.yaml` | Build the mirror registry VM and fill it with oc-mirror - required first when `disconnected_install: true`, refuses to run otherwise |
+| `bastion/setup_bastion.yaml` | Build the 256G bastion VM for container image builds and CVE scanning - optional, nothing else depends on it |
+| `minio/setup_minio.yaml` | Build the MinIO VM, the disconnected lab's local S3 store (buckets in `minio_buckets`) - see [minio/README.md](minio/README.md) |
+| `sno/setup_sno.yaml` / `sno/setup_sno2.yaml` | Single-node OpenShift clusters (used by the UDN, SPIFFE and KubeVirt labs) - see [sno/README.md](sno/README.md) |
+| `cleanup.yaml` | Destroy all VMs, or one piece with `--tags hub\|hub2\|hubd\|hub2d\|hosted\|helper\|minio\|ceph\|sno\|compact\|...` (see [Cleanup](#cleanup)). The mirror registry is only shut down; `--tags registry-destroy` really removes it |
+| `standard-cluster/setup_cluster1.yaml` | Deploy cluster1 (+ LVM Storage): hub1, or hubd when `disconnected_install: true` |
+| `standard-cluster/setup_cluster2.yaml` | Deploy cluster2 (+ LVM Storage): hub2, or hub2d when `disconnected_install: true` |
+| `acm/setup_acm.yaml` | Install ACM/MCE, MetalLB and the OADP operator on cluster1 (cluster2 with `-e target_hub=hub2`, the compact cluster with `-e target_hub=compact`), create the hosted clusters' MetalLB pools, render the AgentServiceConfig |
+| `hcp/setup_bminfra.yaml` | Create the InfraEnv (namespace, pull secret, RBAC) and download its discovery ISO |
+| `hcp/setup_hosted_cluster_vm.yaml` | Create a hosted cluster's worker VMs; builds the disconnected set when `disconnected_install: true`, BareMetalHosts with `hosted_cluster_worker_provisioning=bmh` |
+| `hcp/setup_hosted_cluster2_vm.yaml` | Create `hcp-cluster2`'s worker VMs, PXE-booted |
+| `hcp/create_hosted_cluster.yaml` | Render the HostedCluster/NodePool bundle; renders the disconnected clusters when `disconnected_install: true` |
+| `hcp/setup_sushy_emulator.yaml` / `hcp/cleanup-sushy-emulator.yaml` | Run / remove the Redfish BMCs for BareMetalHost workers |
+| `hcp/dr/backup_hosted_cluster.yaml` | Backup a hosted cluster control plane |
+| `hcp/dr/restore_hosted_cluster.yaml` | Restore a hosted cluster control plane |
+| `standard-cluster/shutdown_cluster.yaml` | Gracefully stop a standard cluster's VMs - cluster1 by default (preserves disks) |
+| `oadp/setup_oadp.yaml` | Wire OADP to S3 (credentials + DPA) |
+| `ceph/setup_ceph.yaml` | Build the standalone Ceph 9 cluster (ceph1-3 + cephadmin) - see [ceph/README.md](ceph/README.md) |
+| `ceph/setup_ceph_odf.yaml` | Install ODF and attach that Ceph cluster to a cluster in external mode |
+| `compact-cluster/setup_compact_cluster.yaml` | The three-node compact cluster - see [compact-cluster/README.md](compact-cluster/README.md) |
+| `kubevirt/setup_hosted_cluster_kubevirt.yaml` | KubeVirt-platform hosted clusters - see [kubevirt/README.md](kubevirt/README.md) |
 | `udn-bgp-evpn/setup_udn_bgp_lab.yaml` | Build the containerlab BGP/EVPN provider fabric and wire a cluster into it. Phase-tagged: `--tags fabric\|preflight\|default\|shared\|vrflite\|evpn` |
-
-
-
+| `spiffe-spire/setup_spiffe_spire.yaml` | SPIFFE/SPIRE - see [spiffe-spire/README.md](spiffe-spire/README.md) |
 
 ## Key Roles
 
+All roles live in [`roles/`](roles/) (plus the lab-specific ones under
+`kubevirt/roles/`, `udn-bgp-evpn/roles/` and `spiffe-spire/roles/`), wherever
+the playbook that uses them lives.
 
-| Role            | Responsibility                                                        |
-| --------------- | --------------------------------------------------------------------- |
-| `setup-lvm-storage` | Installs LVM-Storage (operator + `LVMCluster`) and waits for the `lvms-vg1` default StorageClass. Run by the hub builds (tag `lvm`, outside `acm`) and the SNO's `snostorage` step; skipped when `use_lvm_storage: false` |
-| `setup-hub-acm` | Installs ACM, MetalLB, and OADP operator subscriptions, and creates one single-address MetalLB `IPAddressPool` + `L2Advertisement` per hosted cluster |
-| `setup-oadp`    | Creates the cloud-credentials secret and DataProtectionApplication CR; with `oadp_backup_method=csi` also labels the VolumeSnapshotClass Velero selects CSI snapshot classes by |
+| Role | Responsibility |
+| --- | --- |
+| `setup-hub-cluster`, `setup-hub-cluster2` (+ `-disconnected`) | Install cluster1 / cluster2 as KVM/libvirt UPI clusters, connected or from the mirror registry - run by `standard-cluster/` |
+| `setup-lvm-storage` | Installs LVM-Storage (operator + `LVMCluster`) and waits for the `lvms-vg1` default StorageClass. Run by the cluster builds (tag `lvm`) and the SNO's `snostorage` step; skipped when `use_lvm_storage: false` |
+| `setup-hub-acm` | Installs ACM, MetalLB, and OADP operator subscriptions, and creates one single-address MetalLB `IPAddressPool` + `L2Advertisement` per hosted cluster - run by `acm/setup_acm.yaml` |
+| `setup-bminfra` | The InfraEnv, its pull secret and RBAC, and the discovery ISO download - run by `hcp/setup_bminfra.yaml` |
+| `create-hosted-cluster` | Renders the HostedCluster/NodePool/ManagedCluster/KlusterletAddonConfig bundle per hosted cluster - run by `hcp/create_hosted_cluster.yaml` |
+| `setup-sushy-emulator` | Redfish BMCs for the hosted cluster workers (BareMetalHost path) |
+| `setup-oadp` | Creates the cloud-credentials secret and DataProtectionApplication CR; with `oadp_backup_method=csi` also labels the VolumeSnapshotClass Velero selects CSI snapshot classes by - run by `oadp/setup_oadp.yaml` |
 | `setup-bastion-vm` | Creates the bastion VM: preflights free space where the disk will live, expands the prepared RHEL 9 base image into a 256G sparse qcow2, imports it, then discovers its DHCP address and adds it to the in-memory inventory (no reservation, unlike every other VM in this lab) |
 | `setup-bastion` | The in-guest half: build and scan tooling (podman/buildah/skopeo, grype with its db primed, optional trivy), `oc`, the mirror registry's CA and login, and a clone of `sadiquepp/openshift` under `/root/work` |
 | `setup-ceph-vm` | Creates the ceph1-3 + cephadmin VMs and attaches the raw OSD disks |
@@ -1991,40 +585,11 @@ delegates.
 | `udn-bgp-evpn/roles/setup-clab-fabric` | Creates the isolated fabric bridge (virbr1), adds a second NIC to each OCP node VM, optionally builds the containerlab VM, and deploys the FRR topology (single border leaf, or leaf/spine/leaf for EVPN) |
 | `udn-bgp-evpn/roles/setup-udn-bgp` | The cluster half: enables FRR + route advertisements, addresses the fabric NICs via NMState, creates the tenant CUDNs and workloads, and applies the phase's `FRRConfiguration`/`RouteAdvertisements`. Discovers each node's live UDN VRF before writing any VRF-Lite policy |
 
-
-
-
-## OADP Details
-
-The OADP configuration uses:
-
-- **Velero plugins**: `openshift`, `aws`, `csi`, `hypershift`
-- **Uploader**: Kopia (node-agent), used both for filesystem backup and as the
-  data mover behind CSI snapshots
-- **Storage**: AWS S3 with a shared bucket/prefix across hubs
-- **Volume method**: `oadp_backup_method` - `fs` (default) or `csi`
-
-Templates live in `oadp/templates/` (backup/restore manifests) and `roles/setup-oadp/templates/` (DPA and credentials). There is one Backup/Restore pair per volume method, selected by `oadp_backup_method`:
-
-| Method | Backup template | Restore template | Objects |
-| ------ | --------------- | ---------------- | ------- |
-| `fs`   | `backup-hcp-cluster.yaml.j2` | `restore-hcp-cluster.yaml.j2` | `<cluster>-backup` / `<cluster>-restore` |
-| `csi`  | `backup-hcp-cluster-csi.yaml.j2` | `restore-hcp-cluster-csi.yaml.j2` | `<cluster>-backup-csi` / `<cluster>-restore-csi` |
-
-There is no CSI copy of the hello-openshift smoke test. The hypershift plugin
-the DPA loads runs against every item of every backup and errors on any
-namespace that is not a hosted control plane, which aborts Velero's action
-chain before the CSI snapshot action runs - fs backup survives that, CSI cannot.
-Validate the `csi` method on a real hosted cluster instead; `oadp/README.md`
-explains the mechanism.
-
-For the full IAM policy, smoke-test manifests, and per-hub setup details, see `[oadp/README.md](oadp/README.md)`.
-
 ## Cleanup
 
 Everything is torn down by one playbook, `cleanup.yaml`. With no tags it
-removes every VM of the lab - hub1, hub2, the disconnected hubs hubd and
-hub2d, the hosted cluster workers, the helper, MinIO, Ceph, the SNOs, the
+removes every VM of the lab - cluster1 (hub1), cluster2 (hub2), their
+disconnected builds hubd and hub2d, the hosted cluster workers, the helper, MinIO, Ceph, the SNOs, the
 compact clusters and the UDN lab:
 
 ```bash
@@ -2036,10 +601,10 @@ others alone - none of them touches S3 backups:
 
 | Tag | Removes |
 |-----|---------|
-| `hub` | hub1: VMs, VM folder, install folder |
-| `hub2` | the DR hub, the same way |
-| `hubd` | the disconnected hub, plus its staged oc-mirror manifests and egress-blocking iptables rules |
-| `hub2d` | the disconnected DR hub, the same way |
+| `hub` | cluster1 (hub1): VMs, VM folder, install folder |
+| `hub2` | cluster2 (hub2), the same way |
+| `hubd` | the disconnected cluster1, plus its staged oc-mirror manifests and egress-blocking iptables rules |
+| `hub2d` | the disconnected cluster2, the same way |
 | `hosted` | the hosted clusters' worker VMs (`c1_worker*`, `c1-d-worker*`) |
 | `helper` | the helper VM |
 | `registry` | shuts the mirror registry down (it is kept - see below) |
@@ -2070,7 +635,7 @@ disconnected run fail on TLS instead of stopping with a clear message. Keep
 them with `-e mirror_registry_remove_local_trust=false`. `registry-destroy` is
 tagged `never`, so neither a plain run nor `--tags all` reaches it.
 
-Remove the Ceph cluster (VMs + OSD disks; leaves the hubs alone). ODF on the
+Remove the Ceph cluster (VMs + OSD disks; leaves the clusters alone). ODF on the
 hub is not touched - delete the `StorageCluster` there first if you are tearing
 the whole thing down:
 

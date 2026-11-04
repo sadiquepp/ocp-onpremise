@@ -1,0 +1,143 @@
+## Installs cluster2 - a second standard OpenShift cluster on KVM/libvirt,
+## independent of cluster1 - and, when use_lvm_storage is true, LVM Storage on
+## it as its default StorageClass.
+##
+## cluster2 is general purpose. The hosted-control-plane DR walkthrough
+## (../hcp/dr/README.md) uses it as the replacement hub a hosted cluster's
+## OADP backup is restored onto, but nothing here assumes that: it is the same
+## kind of cluster as cluster1, on its own IP block, subdomain and VM/install
+## directories.
+##
+## Nothing else is installed on top. To make it a hosted-control-plane hub
+## (the DR use), install ACM/MCE, MetalLB and the OADP operator afterwards:
+##   cd ../acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass -e target_hub=hub2
+##
+## Run from inside standard-cluster/ (standard-cluster/ansible.cfg is what puts
+## the shared ../roles on the role search path).
+##
+## In variable names and target_hub values cluster2 is still called "hub2":
+## hub2_install_folder, ip_list.hub2_*, hub2_domain, target_hub=hub2.
+##
+## One playbook, two install modes, selected by disconnected_install
+## (vars.yaml, default false) - the same flag setup_cluster1.yaml and the rest
+## of the disconnected flow hang off:
+##
+## Connected (default) - cluster2 (hub2):
+##   ansible-playbook -i ../inventory/hosts setup_cluster2.yaml --ask-vault-pass
+## installs roles/setup-hub-cluster2 into hub2_install_folder and pulls from
+## quay.io + registry.redhat.io.
+##
+## Disconnected - cluster2d (hub2d):
+##   ansible-playbook -i ../inventory/hosts setup_cluster2.yaml --ask-vault-pass \
+##     -e disconnected_install=true      # or set it in vars.yaml
+## installs roles/setup-hub-cluster2-disconnected into
+## hub2_disconnected_install_folder instead: a separate cluster with its own IP
+## block (ip_list.hub2d_*), its own subdomain (hub2_disconnected_domain) and its
+## own VM/install directories, wired to pull every release and operator image
+## solely from the local mirror registry, with its nodes cut off from the real
+## internet before anything boots. It stands in the same relation to cluster2
+## that the disconnected cluster1 (hubd) does to cluster1, and all four can be
+## up at once.
+##
+## A disconnected run requires ../mirror-registry/setup_mirror_registry.yaml to have run first
+## (mirror registry CA trusted here, oc-mirror output present on the
+## mirror-registry VM); the preflight below fails fast if it has not.
+##
+## LVM Storage (use_lvm_storage, default true) is the last step of the build,
+## tag lvm; --tags lvm adds just that to a cluster2 that is already up.
+
+- name: Setting Up Cluster2
+  hosts: localhost
+  become: true
+  vars_files:
+    - ../vars.yaml
+    - ../vault.yaml
+  vars:
+    ## Every difference between the two modes is derived from this one flag, so
+    ## the connected and disconnected runs differ in their inputs rather than in
+    ## their steps. Play vars rather than a set_fact, so a --tags lvm run
+    ## resolves them too; '| bool' at each use because a play var reaches a task
+    ## as the rendered template.
+    hub2_disconnected: "{{ disconnected_install | default(false) | bool }}"
+    hub2_install_folder_selected: >-
+      {{ hub2_disconnected_install_folder
+         if (disconnected_install | default(false) | bool)
+         else hub2_install_folder }}
+    hub2_kubeconfig: "{{ hub2_install_folder_selected }}/auth/kubeconfig"
+  tasks:
+  - name: Report which cluster2 is being installed
+    ansible.builtin.debug:
+      msg: >-
+        {{ (hub2_disconnected | bool) | ternary('Disconnected (hub2d)', 'Connected (hub2)') }}
+        cluster2 install into {{ hub2_install_folder_selected }}
+
+  # Only the disconnected install has a prerequisite outside this playbook:
+  # ../mirror-registry/setup_mirror_registry.yaml has to have stood the registry up and run
+  # setup-mirror-registry-trust here, or the install cannot pull anything.
+  - name: Fail fast if the mirror registry CA has not been trusted locally yet
+    ansible.builtin.stat:
+      path: /etc/pki/ca-trust/source/anchors/mirror-registry-rootCA.pem
+    register: mirror_ca_status
+    when: hub2_disconnected | bool
+
+  - ansible.builtin.assert:
+      that:
+        - mirror_ca_status.stat.exists
+      fail_msg: >-
+        Mirror registry CA not found locally - run mirror-registry/setup_mirror_registry.yaml
+        (repository root) first: it stands up the mirror registry and runs
+        setup-mirror-registry-trust to trust its CA here.
+    when: hub2_disconnected | bool
+
+  - ansible.builtin.import_role:
+      name: setup-hub-cluster2
+    when: not (hub2_disconnected | bool)
+
+  - ansible.builtin.import_role:
+      name: setup-hub-cluster2-disconnected
+    when: hub2_disconnected | bool
+
+  # Every cluster role ships a byte-identical copy of this; cluster2 has always
+  # included cluster1's, so keep to that one file rather than branching on the
+  # mode here. Relative to this playbook's directory, not the working directory.
+  - name: Wait for ClusterOperators to be healthy before day-2 install
+    ansible.builtin.include_tasks: ../roles/setup-hub-cluster/tasks/wait-for-cluster-operators.yml
+    vars:
+      kubeconfig_path: "{{ hub2_kubeconfig }}"
+
+  # The ImageDigestMirrorSet/ImageTagMirrorSet/CatalogSource oc-mirror generated
+  # are applied here rather than dropped into the install manifests directory.
+  # In manifests/ they are rendered into a MachineConfig by the in-cluster MCO,
+  # which then has to match what the bootstrap MCO rendered from
+  # install-config.yaml's imageDigestSources - and an ImageTagMirrorSet has no
+  # imageDigestSources equivalent, so the two can never agree. Applied on day 2
+  # they are an ordinary MachineConfig update instead. The install itself does
+  # not need them: the installer generates its own ImageDigestMirrorSet from
+  # imageDigestSources.
+  - name: Apply the mirror registry's day-2 resources (IDMS/ITMS/CatalogSource)
+    ansible.builtin.include_tasks: ../roles/setup-hub-cluster2-disconnected/tasks/apply-day2-mirror-resources.yml
+    vars:
+      kubeconfig_path: "{{ hub2_kubeconfig }}"
+    when: hub2_disconnected | bool
+
+  # LVM Storage as part of the build: the cluster comes up with a default
+  # StorageClass (lvms-vg1) on the workers' storage_worker<N>.qcow2 disks.
+  # Off on the Ceph path (use_lvm_storage: false), where ODF wants
+  # openshift-storage to itself. On a cluster that is already up, add it - and
+  # nothing else - with:
+  #   ansible-playbook -i ../inventory/hosts setup_cluster2.yaml --ask-vault-pass --tags lvm
+  - ansible.builtin.import_role:
+      name: setup-lvm-storage
+    when: use_lvm_storage | bool
+    environment:
+      KUBECONFIG: "{{ hub2_kubeconfig }}"
+    tags:
+      - lvm
+
+  - name: Next step
+    ansible.builtin.debug:
+      msg: >-
+        cluster2 is up ({{ hub2_kubeconfig }}). To make it a hosted-control-plane
+        hub (the DR restore target in ../hcp/dr), install ACM/MCE, MetalLB and
+        the OADP operator with
+        'cd ../acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass -e target_hub=hub2'.

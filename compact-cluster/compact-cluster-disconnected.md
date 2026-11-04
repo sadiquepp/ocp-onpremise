@@ -7,7 +7,7 @@ schedulable masters, `platform: baremetal` with two VIPs, and every node's
 address on an **active-backup (mode 1) bond** over two NICs. Four things are
 different:
 
-1. **The mirror registry comes first.** `setup_mirror_registry.yaml` builds the
+1. **The mirror registry comes first.** `mirror-registry/setup_mirror_registry.yaml` builds the
    registry VM, mirrors the release and operators with `oc mirror`, and trusts
    the registry's CA and credentials on the hypervisor.
 2. **`openshift-install` is extracted from the mirrored release** with
@@ -99,18 +99,18 @@ ansible-playbook -i ../inventory/hosts setup_compact_cluster_disconnected.yaml \
 Run the two compact playbooks from **inside `compact-cluster/`**. Ansible
 reads `ansible.cfg` from the working directory, and the one in this folder
 adds `../roles` to `roles_path`. Run from the repository root, Ansible cannot
-find `setup-compact-cluster`. The shared playbooks (`setup_bm_host.yaml`,
-`setup_mirror_registry.yaml`, `cleanup.yaml`) stay at the repository root and
-run from there.
+find `setup-compact-cluster`. The shared playbooks run from their own places:
+`setup_bm_host.yaml` and `cleanup.yaml` from the repository root, and
+`setup_mirror_registry.yaml` from inside `mirror-registry/`.
 
 
-`-e disconnected_install=true` is required because `setup_mirror_registry.yaml`
+`-e disconnected_install=true` is required because `mirror-registry/setup_mirror_registry.yaml`
 refuses to run without it. It affects only this run. `vars.yaml` keeps the lab
 connected.
 
 | Tag | What it does | File |
 |---|---|---|
-| (no tags) | Mirror registry, then everything below | `setup_mirror_registry.yaml` + the role |
+| (no tags) | Mirror registry, then everything below | `mirror-registry/setup_mirror_registry.yaml` + the role |
 | `compact` | The cluster only. Skips the mirror registry. | the role |
 | `compactimage` | Fetches the `oc mirror` output, extracts `openshift-install` from the mirror, renders the manifests, builds the ISO | `tasks/image.yml`, `tasks/mirror.yml` |
 | `compactvm` | Egress block and NTP server, then the three VMs | `tasks/vm.yml`, `tasks/ntp-server.yml`, hubd's `block-node-nat.yml` |
@@ -149,12 +149,12 @@ It pulls only from the mirror.
 
 ### Step 2 - Build the mirror registry
 
-*Automated by: `setup_mirror_registry.yaml` (roles `setup-mirror-registry-vm`, `setup-rhsm`, `setup-mirror-registry`, `setup-mirror-registry-trust`)*
+*Automated by: `mirror-registry/setup_mirror_registry.yaml` (roles `setup-mirror-registry-vm`, `setup-rhsm`, `setup-mirror-registry`, `setup-mirror-registry-trust`)*
 
 ```bash
 # from the repository root
-ansible-playbook -i inventory/hosts setup_mirror_registry.yaml \
-  -e disconnected_install=true --ask-vault-pass
+(cd mirror-registry && ansible-playbook -i ../inventory/hosts setup_mirror_registry.yaml \
+  -e disconnected_install=true --ask-vault-pass)
 ```
 
 This playbook:
@@ -924,11 +924,11 @@ These problems are specific to the disconnected install:
 
 | Symptom | Likely cause | Check |
 |---|---|---|
-| The playbook stops at once: `Pass -e disconnected_install=true` | `setup_mirror_registry.yaml` requires it | Add `-e disconnected_install=true`, or use `--tags compact` if the mirror is already built |
+| The playbook stops at once: `Pass -e disconnected_install=true` | `mirror-registry/setup_mirror_registry.yaml` requires it | Add `-e disconnected_install=true`, or use `--tags compact` if the mirror is already built |
 | Pre-flight: `mirror registry CA is not trusted on this host` | The mirror registry has not been built | Step 2 |
 | `oc adm release extract` tries `quay.io/...ocp-v4.0-art-dev` | No `--idms-file`, or the operator IDMS instead of the release IDMS | Use the IDMS that maps `quay.io/openshift-release-dev` (Step 7) |
 | `oc adm release extract` fails with `unknown flag: --idms-file` | The `oc` in `$WORK` is older than 4.13 | Step 7: download the `oc` for `$OCP` |
-| `x509: certificate signed by unknown authority` on the hypervisor | The mirror's CA is not trusted here | Step 2: `setup_mirror_registry.yaml` (its `mirror-trust` tag) |
+| `x509: certificate signed by unknown authority` on the hypervisor | The mirror's CA is not trusted here | Step 2: `mirror-registry/setup_mirror_registry.yaml` (its `mirror-trust` tag) |
 | `openshift-install version` shows a `quay.io` release image | The installer was downloaded, not extracted from the mirror | Step 8 |
 | `agent create image` fails with `Failed to extract base ISO from release payload` | The installer could not pull from the mirror: `oc` not first on `PATH`, no `imageDigestSources`, or no mirror entry in the pull secret | `create-image.log` (debug), `PATH=$WORK:$PATH which oc`, `rendered/install-config.yaml` |
 | `agent create image` warns `Using older version of "oc" that does not support mirroring` | The `oc` on `PATH` is too old for the installer's mirror handling | Put `$WORK` first on `PATH` (Step 11) |

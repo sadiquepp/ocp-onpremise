@@ -1,6 +1,6 @@
 {# One BMC secret and one BareMetalHost per hosted cluster worker VM, for
    hosted_cluster_worker_provisioning=bmh. Rendered and applied by
-   setup_hosted_cluster_vm.yaml after roles/setup-sushy-emulator has given
+   hcp/setup_hosted_cluster_vm.yaml after roles/setup-sushy-emulator has given
    each VM a Redfish BMC (sushy_emulator_systems: name, uuid, address).
 
    What the hub does with them:
@@ -18,7 +18,7 @@
 
    bmh_render_part picks what to render: 'secrets' (the BMC secrets only),
    'hosts' (the BareMetalHosts only) or 'all' (both, the default).
-   setup_hosted_cluster_vm.yaml renders the two parts into separate files so
+   hcp/setup_hosted_cluster_vm.yaml renders the two parts into separate files so
    the BareMetalHosts can be kept and the password-bearing secrets
    deleted. #}
 {% set part = bmh_render_part | default('all') %}

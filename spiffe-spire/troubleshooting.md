@@ -225,7 +225,7 @@ an SNO - kept the old answer alive.
   and there is no stale answer to clear.
 - On an SNO that is already running, the same step then sends the node's
   dnsmasq SIGHUP (`oc debug ... --to-namespace=default`, retried), so the
-  cached "no such host" goes at once: `setup_sno.yaml --tags snodns`.
+  cached "no such host" goes at once: `sno/setup_sno.yaml --tags snodns`.
 - build-lab.sh's `lvm` step runs `--tags snodns,snostorage`, so an older
   lab gets both with `./build-lab.sh --only lvm`.
 - Nothing to restart afterwards: spiffe-helper retries every 30s and the

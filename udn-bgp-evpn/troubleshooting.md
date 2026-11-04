@@ -946,8 +946,8 @@ Two facts, neither visible from the failing task:
 And `build-lab.sh` runs them at the same time:
 
 ```bash
-play_bg hub ../setup_hub_cluster.yaml --skip-tags acm
-play_bg sno ../setup_sno.yaml
+play_bg hub ../standard-cluster/setup_cluster1.yaml
+play_bg sno ../sno/setup_sno.yaml
 wait_all
 ```
 

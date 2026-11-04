@@ -3,12 +3,12 @@
 
 ## Which hub this role is configuring. Selects each hosted cluster's address
 ## out of hosted_cluster_metallb_pools below - pool names are the same on
-## every hub, the addresses are not. Set by setup_hub_cluster.yaml - hub
-## normally, hubd when it runs with disconnected_install - and by
-## setup_hub_cluster2.yaml, which passes hub2 in BOTH modes: its disconnected
-## build (hub2d) is a different cluster but the same DR hub, so a restored
-## hosted cluster comes up on hub2's addresses either way. The compact cluster
-## (compact-cluster/setup_compact_cluster.yaml --tags acm) passes compact.
+## every hub, the addresses are not. Set by acm/setup_acm.yaml - for cluster1
+## (target_hub=hub) hub normally, hubd when it runs with disconnected_install;
+## for cluster2 (target_hub=hub2) hub2 in BOTH modes: its disconnected build
+## (hub2d) is a different cluster but the same DR hub, so a restored hosted
+## cluster comes up on hub2's addresses either way. For the compact cluster
+## (target_hub=compact) it passes compact.
 metallb_hub: hub
 
 ## MetalLB IPAddressPools for the hosted clusters' APIServer VIPs - one
@@ -113,13 +113,13 @@ agent_service_os_images:
 ## separate set of templates rather than extra conditionals bolted onto the
 ## connected ones.
 ##
-## Everything below assumes the mirror registry from setup_mirror_registry.yaml
-## and the hub from a disconnected setup_hub_cluster.yaml run, so it reads
+## Everything below assumes the mirror registry from mirror-registry/setup_mirror_registry.yaml
+## and the hub from a disconnected standard-cluster/setup_cluster1.yaml run, so it reads
 ## mirror_registry_* / mirror_release_repository / ip_list from vars.yaml.
 ## ---------------------------------------------------------------------------
 
 ## The one switch the whole disconnected path hangs off - the same
-## disconnected_install setup_mirror_registry.yaml and setup_hub_cluster.yaml
+## disconnected_install mirror-registry/setup_mirror_registry.yaml and standard-cluster/setup_cluster1.yaml
 ## already gate on, not a second name for it. Set it in vars.yaml or pass
 ## -e disconnected_install=true. Repeated here only so the role still has a
 ## value if it is ever run without vars.yaml.

@@ -1,7 +1,7 @@
 ---
 # Tasks file for setup-minio
 #
-# Runs delegated to the minio VM (see setup_minio.yaml). Installs the
+# Runs delegated to the minio VM (see minio/setup_minio.yaml). Installs the
 # MinIO server + mc client, runs it as a systemd service, and creates
 # the bucket OADP will use as its backup target when disconnected.
 #
@@ -90,14 +90,21 @@
     http://127.0.0.1:{{ minio_api_port }}
     {{ minio_root_user }} {{ minio_root_password }}
 
-- name: Create the OADP backup bucket if it doesn't already exist
-  shell: >
-    /usr/local/bin/mc ls local/{{ minio_bucket_name }} ||
-    /usr/local/bin/mc mb local/{{ minio_bucket_name }}
+# One bucket per consumer of the store (minio_buckets in vars.yaml): the OADP
+# backup bucket by default, plus whatever else is listed (Loki, Tempo, ...).
+# A bucket that already exists is left alone, so a re-run is a no-op for it.
+- name: Create the buckets that don't already exist
+  ansible.builtin.shell: >-
+    if /usr/local/bin/mc ls local/{{ item }} >/dev/null 2>&1;
+    then echo "exists: {{ item }}";
+    else /usr/local/bin/mc mb local/{{ item }}; fi
+  loop: "{{ minio_buckets }}"
+  register: minio_mb
+  changed_when: "'exists:' not in minio_mb.stdout"
 
 - name: Report MinIO endpoint
   debug:
     msg: >-
       MinIO ready at http://{{ minio_domain }}:{{ minio_api_port }}
       (console: http://{{ minio_domain }}:{{ minio_console_port }}),
-      bucket '{{ minio_bucket_name }}' created.
+      buckets: {{ minio_buckets | join(', ') }}.

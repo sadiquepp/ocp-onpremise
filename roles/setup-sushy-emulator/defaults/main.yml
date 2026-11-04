@@ -8,7 +8,7 @@
 # hosted_cluster_worker_provisioning in vars.yaml.
 
 # present: run it. absent: stop it and remove its unit, config and firewall
-# rule (cleanup-sushy-emulator.yaml).
+# rule (hcp/cleanup-sushy-emulator.yaml).
 sushy_emulator_state: present
 
 # The sushy-tools container image (sushy-emulator plus the libvirt driver).

@@ -1,0 +1,373 @@
+# HCP Backup & Restore - Steps
+
+Connected lab, Ceph 9 / ODF external storage, CSI snapshot backup, DR cutover
+to cluster2 (hub2). Commands only. What it proves: [summary.md](summary.md).
+Explanations: [README.md](README.md) (this directory), [../README.md](../README.md)
+(hosted clusters), [../../acm/README.md](../../acm/README.md),
+[../../standard-cluster/README.md](../../standard-cluster/README.md) and
+[../../oadp/README.md](../../oadp/README.md).
+
+**Run every command from the repository root** (`cd ocp-onpremise`, step 1).
+Playbooks that live in a subdirectory are run from inside it, in a subshell -
+`(cd standard-cluster && ansible-playbook -i ../inventory/hosts ...)` - because
+each directory's `ansible.cfg` is what puts the shared `roles/` on the role
+path.
+
+In variable names and `target_hub` values cluster1 is `hub` (hub1) and
+cluster2 is `hub2`.
+
+## 1. Prepare
+
+```bash
+subscription-manager register
+yum install ansible-core -y
+ansible-galaxy collection install community.libvirt
+ansible-galaxy collection install community.crypto
+
+git clone https://github.com/sadiquepp/ocp-onpremise.git
+cd ocp-onpremise
+mkdir -p /opt/lab-images
+cp rhel-9.8-x86_64-kvm.qcow2 /opt/lab-images/   # base_image_dir in vars.yaml
+```
+
+## 2. S3 bucket and IAM user (once per lab, not per hub)
+
+```bash
+export BUCKET=adp-backup-bucket-xjtvvs   # must be globally unique - pick your own
+export REGION=ap-south-1
+
+aws s3api create-bucket --bucket $BUCKET --region $REGION \
+  --create-bucket-configuration LocationConstraint=$REGION
+
+cat > adp-policy.json <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeVolumes",
+                "ec2:DescribeSnapshots",
+                "ec2:CreateTags",
+                "ec2:CreateVolume",
+                "ec2:CreateSnapshot",
+                "ec2:DeleteSnapshot"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:DeleteObject",
+                "s3:PutObject",
+                "s3:AbortMultipartUpload",
+                "s3:ListMultipartUploadParts"
+            ],
+            "Resource": ["arn:aws:s3:::${BUCKET}/*"]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetBucketLocation",
+                "s3:ListBucketMultipartUploads"
+            ],
+            "Resource": ["arn:aws:s3:::${BUCKET}"]
+        }
+    ]
+}
+EOF
+
+aws iam create-user --user-name adp-user
+aws iam put-user-policy --user-name adp-user --policy-name adp-policy --policy-document file://adp-policy.json
+aws iam create-access-key --user-name adp-user
+```
+
+## 3. Credentials and lab variables
+
+```bash
+ansible-vault create vault.yaml
+```
+
+```yaml
+org_id: XXXX
+activation_key: YYYYY
+pull_secret: 'ZZZZZ...'
+ssh_key:
+oadp_aws_access_key_id: 'AKIA...'
+oadp_aws_secret_access_key: '...'
+ceph_dashboard_password: '...'
+```
+
+In `vars.yaml`:
+
+```yaml
+use_lvm_storage: false
+oadp_backup_method: csi
+oadp_bucket_name: <$BUCKET from step 2>
+oadp_aws_region: <$REGION from step 2>
+```
+
+## 4. Bare metal host
+
+```bash
+ansible-playbook -i inventory/hosts setup_bm_host.yaml --ask-vault-pass
+```
+
+## 5. Ceph cluster
+
+```bash
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass)
+ssh root@192.168.122.27 ceph -s          # HEALTH_OK, 3 mons, 9 OSDs
+```
+
+## 6. Hub1 (cluster1 + ACM)
+
+```bash
+(cd standard-cluster && ansible-playbook -i ../inventory/hosts setup_cluster1.yaml --ask-vault-pass)
+(cd acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass)
+```
+
+The first builds the cluster (no LVM Storage: `use_lvm_storage: false`), the
+second installs ACM/MCE, MetalLB and the OADP operator on it.
+
+## 7. Attach Ceph to hub1
+
+```bash
+export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass)
+oc get storagecluster -n openshift-storage
+oc get sc                                 # ocs-external-storagecluster-ceph-rbd (default)
+```
+
+## 8. ACM inventory
+
+```bash
+oc apply -f roles/setup-hub-acm/files/.rendered-05-agentserviceconfig.yaml
+oc get pvc -n multicluster-engine         # three Bound
+
+(cd hcp && ansible-playbook -i ../inventory/hosts setup_bminfra.yaml --ask-vault-pass)
+
+oc get infraenv -n bminfra
+```
+
+## 9. Hosted cluster
+
+```bash
+(cd hcp && ansible-playbook -i ../inventory/hosts setup_hosted_cluster_vm.yaml --ask-vault-pass)
+# approve the discovered agents in the ACM/MCE web UI
+
+(cd hcp && ansible-playbook -i ../inventory/hosts create_hosted_cluster.yaml --ask-vault-pass)
+
+oc apply -f roles/create-hosted-cluster/templates/.rendered-hcp-cluster1.yaml
+
+oc get hostedcluster,nodepool -n hcp-cluster1
+```
+
+`create_hosted_cluster.yaml` only renders - one
+`.rendered-<cluster>.yaml` per entry in `hosted_clusters`. Apply each one
+you want.
+
+To have the hub manage the workers as BareMetalHosts (Redfish BMCs from
+sushy-emulator on this host) instead, add
+`-e hosted_cluster_worker_provisioning=bmh` to the first command, with
+`sushy_emulator_password` in `vault.yaml`. The hub then boots and approves
+them itself, so there is nothing to approve in the UI. See
+[BMH-DR-test.md](BMH-DR-test.md).
+
+## 10. Workload
+
+Extract the hosted cluster's kubeconfig from hub1. HyperShift keeps it in
+the secret that the HostedCluster's `.status.kubeconfig` names:
+
+```bash
+export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
+oc get hostedcluster hcp-cluster1 -n hcp-cluster1 \
+  -o jsonpath='{.status.kubeconfig.name}{"\n"}'   # hcp-cluster1-admin-kubeconfig
+
+oc extract secret/hcp-cluster1-admin-kubeconfig -n hcp-cluster1 \
+  --keys=kubeconfig --to=- > ~/hcp-cluster1.kubeconfig
+
+export KUBECONFIG=~/hcp-cluster1.kubeconfig
+oc get nodes                              # the NodePool's workers, Ready
+```
+
+If `.status.kubeconfig` is empty, the control plane is not up yet - wait
+and retry. The kubeconfig talks to `api.hcp-cluster1.mylab.com:6443`, so
+that name must resolve from where you run `oc`.
+
+```bash
+oc apply -f hcp/hello-openshift.yaml
+```
+
+Online Boutique, for a workload with something to look at after the
+restore. The `no-loadgenerator` overlay drops the Locust traffic
+generator, strips the `runAsUser`/`runAsGroup`/`fsGroup` values that
+OpenShift's `restricted-v2` SCC rejects, replaces upstream's LoadBalancer
+Service with a Route, and creates its own namespace:
+
+```bash
+oc apply -k https://github.com/sadiquepp/openshift/test-workloads/online-boutique/overlays/no-loadgenerator
+
+oc get pods -n online-boutique
+oc get route frontend -n online-boutique -o jsonpath='{.spec.host}{"\n"}'
+```
+
+~1270m CPU and ~1112Mi of requests across 11 services - fits two workers
+at 4 vCPU / 8Gi. Stateless apart from `redis-cart` on `emptyDir`, so what
+survives the restore is the workload definitions, not cart contents.
+
+## 11. OADP on hub1
+
+```bash
+export KUBECONFIG=/var/lib/libvirt/images/hub_install/auth/kubeconfig
+(cd oadp && ansible-playbook -i ../inventory/hosts setup_oadp.yaml --ask-vault-pass -e oadp_backup_method=csi)
+oc get volumesnapshotclass -L velero.io/csi-volumesnapshot-class
+```
+
+## 12. Exclude ACM's import secret from the backup
+
+```bash
+oc label secret hcp-cluster1-import -n hcp-cluster1 \
+  velero.io/exclude-from-backup=true --overwrite
+oc get secret hcp-cluster1-import -n hcp-cluster1 --show-labels
+```
+
+A **label**, not an annotation. Must be set before step 13, on this hub.
+Re-check it on every run - MCE reconciles this secret. Skipping it leaves
+the restored cluster stuck in `Importing`.
+
+Workaround for [OCPBUGS-121709](https://redhat.atlassian.net/browse/OCPBUGS-121709) -
+check that JIRA for the current status.
+
+## 13. Backup
+
+```bash
+(cd hcp/dr && ansible-playbook -i ../../inventory/hosts backup_hosted_cluster.yaml --ask-vault-pass \
+  -e hcp_cluster_name=hcp-cluster1 -e oadp_backup_method=csi)
+
+oc get backup.velero.io hcp-cluster1-backup-csi -n openshift-adp -o yaml
+oc get datauploads.velero.io -n openshift-adp
+```
+
+Do not continue until every `DataUpload` is `Completed`.
+
+## 14. Shut down hub1
+
+```bash
+(cd standard-cluster && ansible-playbook -i ../inventory/hosts shutdown_cluster.yaml)
+```
+
+## 15. Destroy Ceph
+
+```bash
+ansible-playbook -i inventory/hosts cleanup.yaml --tags ceph
+virsh list --all | grep -E 'ceph[123]|cephadmin'
+ls /var/lib/libvirt/images/ | grep -E '^ceph|^cephadmin'
+```
+
+Both must return nothing.
+
+## 16. Rebuild Ceph
+
+```bash
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass)
+ssh root@192.168.122.27 ceph -s
+```
+
+## 17. Hub2 (cluster2 + ACM)
+
+```bash
+(cd standard-cluster && ansible-playbook -i ../inventory/hosts setup_cluster2.yaml --ask-vault-pass)
+(cd acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass -e target_hub=hub2)
+```
+
+## 18. Attach Ceph to hub2
+
+```bash
+export KUBECONFIG=/var/lib/libvirt/images/hub2_install/auth/kubeconfig
+(cd ceph && ansible-playbook -i ../inventory/hosts setup_ceph_odf.yaml --ask-vault-pass -e target_hub=hub2)
+oc get sc                                 # ocs-external-storagecluster-ceph-rbd (default)
+```
+
+## 19. AgentServiceConfig on hub2
+
+```bash
+oc apply -f roles/setup-hub-acm/files/.rendered-05-agentserviceconfig.yaml
+oc get pvc -n multicluster-engine         # three Bound
+```
+
+## 20. OADP on hub2
+
+```bash
+(cd oadp && ansible-playbook -i ../inventory/hosts setup_oadp.yaml --ask-vault-pass \
+  -e target_hub=hub2 -e oadp_backup_method=csi)
+oc get backup.velero.io -n openshift-adp  # hcp-cluster1-backup-csi appears
+```
+
+## 21. Restore
+
+```bash
+(cd hcp/dr && ansible-playbook -i ../../inventory/hosts restore_hosted_cluster.yaml --ask-vault-pass \
+  -e hcp_cluster_name=hcp-cluster1 -e target_hub=hub2 -e oadp_backup_method=csi)
+
+oc get restore.velero.io hcp-cluster1-restore-csi -n openshift-adp -o yaml
+oc get datadownloads.velero.io -n openshift-adp
+```
+
+## 22. DNS cutover
+
+```bash
+ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns \
+  --ask-vault-pass -e target_hub=hub2
+
+dig +short api.hcp-cluster1.mylab.com @192.168.122.21
+oc get svc kube-apiserver -n hcp-cluster1-hcp-cluster1 \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}{"\n"}'
+
+ssh core@192.168.122.41 'getent hosts api.hcp-cluster1.mylab.com'
+```
+
+If the worker still returns the old address:
+
+```bash
+sudo kill -HUP $(cat /var/run/libvirt/network/default.pid 2>/dev/null \
+                 || cat /var/run/libvirt/dnsmasq/default.pid)
+```
+
+Make it permanent: `target_hub: hub2` in `vars.yaml`.
+
+## 23. Verify
+
+```bash
+oc get managedcluster                                   # hub2
+oc get hostedcluster,nodepool -n hcp-cluster1
+
+export KUBECONFIG=~/hcp-cluster1.kubeconfig              # from step 10
+oc get nodes                                            # Ready
+oc get co | grep -v 'True.*False.*False'
+oc get pods -A | grep -vE 'Running|Completed'
+
+oc get route -n hello-openshift
+oc get pods,route -n online-boutique
+```
+
+The kubeconfig from step 10 should keep working: the hosted cluster's
+certificates come back with the restore, and step 22 points
+`api.hcp-cluster1.mylab.com` at hub2. If it is rejected, extract it again
+on hub2 with the step 10 commands, using hub2's kubeconfig.
+
+## Cleanup
+
+```bash
+ansible-playbook -i inventory/hosts cleanup.yaml
+```
+
+---
+
+Full explanations, the fs-vs-csi choice, troubleshooting and known-good
+output: **[README.md](README.md)** and **[../../oadp/README.md](../../oadp/README.md)**.
+Common failures: [no DataUpload](../../oadp/README.md#if-no-dataupload-is-created-at-all),
+[stuck in Importing](README.md#restored-cluster-stuck-in-importing),
+[backup already exists in object storage](../../oadp/README.md#recovering-from-backup-already-exists-in-object-storage).

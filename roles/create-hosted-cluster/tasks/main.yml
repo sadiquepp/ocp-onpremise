@@ -32,7 +32,7 @@
 #
 # With disconnected_install true (vars.yaml, or -e disconnected_install=true)
 # hosted_clusters_disconnected is rendered INSTEAD of hosted_clusters, the same
-# way disconnected_install wins over target_hub in setup_bminfra.yaml. A
+# way disconnected_install wins over target_hub in hcp/setup_bminfra.yaml. A
 # disconnected run is its own environment on the disconnected hub: the connected
 # clusters' worker VMs are not cut off from the internet and their control
 # planes belong on hub1/hub2, so rendering them here as well would be wrong.

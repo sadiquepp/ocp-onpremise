@@ -13,7 +13,7 @@
 # LIBVIRT_PRT, which used to push rules placed *inside* that chain below the
 # MASQUERADE and silently switch the internet back on. See
 # tasks/block-node-nat.yml, which is where those rules live (shared with the
-# disconnected hosted cluster in setup_hosted_cluster_vm.yaml) and which now
+# disconnected hosted cluster in hcp/setup_hosted_cluster_vm.yaml) and which now
 # asserts at the end that the blocking is really in force.
 # Set to false to install from the mirror registry while leaving the nodes able
 # to reach the internet - useful when debugging whether a failure is genuinely

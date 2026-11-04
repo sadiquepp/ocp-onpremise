@@ -24,7 +24,7 @@ metadata:
    What actually binds the address is the pool's serviceAllocation, which
    restricts it to this cluster's control-plane namespace. This is also the
    value to pass to 'oc annotate svc/kube-apiserver' if you ever need to force
-   a reallocation by hand - see the MetalLB section of the README. #}
+   a reallocation by hand - see the MetalLB section of acm/README.md. #}
   annotations:
     metallb.io/address-pool: '{{ hcp.metallb_pool | default(hosted_cluster_metallb_pools[hcp.name].pool) }}'
   labels:
