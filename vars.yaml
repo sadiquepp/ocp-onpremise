@@ -155,18 +155,31 @@ ocp_minor_version: 10
 ##    the diff explains.
 ##  * The download is guarded on the local file already existing, so "latest"
 ##    is resolved the first time a lab host fetches it and not on every run.
-##    Delete {{ download_dir }}/rhcos-qemu.x86_64.qcow2 to pick up a newer one.
+##    Delete {{ download_dir }}/rhcos-<ocp_major_version>-latest-qemu.x86_64.qcow2
+##    to pick up a newer one - but only once no VM uses it as a backing file
+##    (every hub node disk is a qcow2 overlay on it).
 coreos_minor_version: "latest"
 
 ## Derived, so the four hub roles carry no version arithmetic of their own.
-rhcos_qemu_image: >-
+##
+## The LOCAL name (rhcos_qemu_image) always carries the stream, even on
+## "latest": latest/ publishes an unversioned rhcos-qemu.x86_64.qcow2, and
+## caching it under that name meant changing ocp_major_version silently reused
+## the previous stream's media - a 4.20 install booting the 4.22 (RHEL 9.8)
+## RHCOS, whose bootstrap never serves ignition to the masters. The REMOTE name
+## (rhcos_qemu_remote_image) is what the mirror actually publishes.
+rhcos_qemu_remote_image: >-
   {{ 'rhcos-qemu.x86_64.qcow2'
      if coreos_minor_version | string == 'latest'
      else 'rhcos-' ~ ocp_major_version ~ '.' ~ coreos_minor_version ~ '-x86_64-qemu.x86_64.qcow2' }}
+rhcos_qemu_image: >-
+  {{ 'rhcos-' ~ ocp_major_version ~ '-latest-qemu.x86_64.qcow2'
+     if coreos_minor_version | string == 'latest'
+     else rhcos_qemu_remote_image }}
 rhcos_qemu_url: >-
   https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/{{ ocp_major_version }}/{{
     'latest' if coreos_minor_version | string == 'latest'
-    else ocp_major_version ~ '.' ~ coreos_minor_version }}/{{ rhcos_qemu_image }}.gz
+    else ocp_major_version ~ '.' ~ coreos_minor_version }}/{{ rhcos_qemu_remote_image }}.gz
 
 ## --- VM sizing -------------------------------------------------------------
 
