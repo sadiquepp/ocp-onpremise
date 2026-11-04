@@ -108,17 +108,25 @@ oc get ipaddresspool,l2advertisement -n metallb-system
 Against a hub that is already up:
 
 ```bash
-# only the hosted clusters' MetalLB API pools - all a hub needs after a hosted
-# cluster is added to hosted_cluster_metallb_pools in vars.yaml
+# the MetalLB operator Subscription (a no-op when it is already there) and the
+# hosted clusters' MetalLB API pools - all a hub needs after a hosted cluster
+# is added to hosted_cluster_metallb_pools in vars.yaml
 ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass --tags metallb
 
-# only the pinned-OADP InstallPlan approval / CSV wait (oadp_operator_starting_csv)
+# the OADP operator Subscription, plus the InstallPlan approval / CSV wait when
+# OADP is pinned (oadp_operator_starting_csv)
 ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass --tags oadp
+
+# both operators, ACM untouched - for a cluster whose ACM was installed by hand
+ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass --tags metallb,oadp
 ```
 
-Add `-e target_hub=hub2` (and/or `-e disconnected_install=true`) to point either
-at another cluster. The whole playbook is idempotent, so re-running it without
-tags is safe too.
+Add `-e target_hub=hub2` (and/or `-e disconnected_install=true`) to point any
+of them at another cluster. The whole playbook is idempotent, so re-running it
+without tags is safe too - with one exception: it re-applies the ACM
+Subscription on `acm_operator_channel` with automatic approval, so on a cluster
+where ACM was installed or pinned by hand, either set `acm_operator_channel` to
+that channel first or stick to the tags above.
 
 ## Disconnected deployment
 

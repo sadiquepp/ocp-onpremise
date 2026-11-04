@@ -10,9 +10,23 @@
 # oc-mirror generated for the mirrored index (cs-redhat-operator-index-v4-21 and
 # the like). It is one value, acm_catalog_source, so the Subscriptions are one
 # template per operator rather than a connected and a disconnected copy of each.
+#
+# The MetalLB and OADP Subscription steps are tagged metallb / oadp as well, so
+# `--tags metallb,oadp` installs those two operators (and the MetalLB pools,
+# and the pinned-OADP approval) on a cluster whose ACM was installed by hand,
+# without touching the ACM Subscription. include_tasks is dynamic, so its tags
+# reach the included tasks only through apply.
 - name: Check the mirrored CatalogSource exists before subscribing to anything
-  ansible.builtin.include_tasks: disconnected-catalog-source.yml
+  ansible.builtin.include_tasks:
+    file: disconnected-catalog-source.yml
+    apply:
+      tags:
+        - metallb
+        - oadp
   when: disconnected_install | bool
+  tags:
+    - metallb
+    - oadp
 
 - name: Render the operator Subscriptions
   ansible.builtin.template:
@@ -22,6 +36,9 @@
     - acm
     - metal-lb
     - oadp
+  tags:
+    - metallb
+    - oadp
 
 - name: Report which catalog the operators will resolve against
   ansible.builtin.debug:
@@ -29,6 +46,9 @@
       Subscriptions point at CatalogSource '{{ acm_catalog_source }}' in
       {{ acm_catalog_source_namespace }}
       ({{ 'disconnected' if disconnected_install | bool else 'connected' }}).
+  tags:
+    - metallb
+    - oadp
 
 - name: Deploy ACM Operator
   shell: |
@@ -46,12 +66,16 @@
     oc apply -f "{{ role_path }}/files/metal-lb/01-namespace.yaml"
     oc apply -f "{{ role_path }}/files/metal-lb/02-operatorGroup.yaml"
     oc apply -f "{{ role_path }}/files/metal-lb/.rendered-03-subscription.yaml"
+  tags:
+    - metallb
 
 - name: Deploy OADP Operator
   shell: |
     oc apply -f "{{ role_path }}/files/oadp/01-namespace.yaml"
     oc apply -f "{{ role_path }}/files/oadp/02-operatorGroup.yaml"
     oc apply -f "{{ role_path }}/files/oadp/.rendered-03-subscription.yaml"
+  tags:
+    - oadp
 
 # Pinned OADP (oadp_operator_starting_csv): the Subscription asks for manual
 # approval, so nothing installs until its InstallPlan is approved. Approve
