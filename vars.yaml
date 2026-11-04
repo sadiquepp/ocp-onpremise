@@ -191,7 +191,8 @@ hub_worker_replicas: 3
 ## per-command; see "Choose Connected or Disconnected" in README.md.
 disconnected_install: false
 
-## LVM Storage (true) or Ceph 9 via ODF external mode (false) for the hub's PVs.
+## LVM Storage (true) or Ceph (ceph_version, below) via ODF external mode
+## (false) for the hub's PVs.
 ## Has to be decided before the hub is built. true installs LVM Storage as part
 ## of the cluster build itself (roles/setup-lvm-storage, tag lvm - not part of
 ## --tags acm), so every hub, and the SNO (sno_lvm_storage), comes up with
@@ -405,6 +406,22 @@ minio_bucket_name: adp-backup-disconnected
 
 ## --- Ceph path only (ignored when use_lvm_storage is true) -----------------
 
+## Red Hat Ceph Storage major version: 8 (Squid) or 9 (Tentacle). The one place
+## it is set - rhceph_tools_repo and ceph_container_image (RHCS or upstream)
+## are derived from it in the Ceph block further down.
+##
+## Match it to the OCP version of the cluster CONSUMING the storage, not the
+## hub's alone: on OCP 4.20 and older the node kernel cannot map an RHCS 9 RBD
+## image (`failed to add secret to kernel`, CSI error 524 - ceph/README.md,
+## Requirements), so use 8 there. 9 needs OCP 4.21 or later.
+## ceph/setup_ceph_odf.yaml reads the target cluster's version and stops on a
+## 9-on-4.20 pairing.
+##
+## Changing it does NOT convert an existing cluster - Ceph cannot be downgraded
+## and setup_ceph.yaml never reconfigures a live one (it stops if the running
+## version differs). Rebuild: cleanup.yaml --tags ceph, then setup_ceph.yaml.
+ceph_version: 9
+
 ## Sizing for the 3 all-in-one Ceph nodes. The OSD disks are raw and per node,
 ## so the raw capacity is disks_per_node x disk_size x 3. The rest of the Ceph
 ## settings - node names, pools, the container image, the admin node - are in
@@ -573,7 +590,7 @@ ip_list:
   # connected-infrastructure treatment as mirror_registry.
   minio: 23
 
-  # Ceph - 3-node all-in-one + 1-node admin Ceph 9 cluster (see ceph/setup_ceph.yaml).
+  # Ceph - 3-node all-in-one + 1-node admin Ceph cluster (see ceph/setup_ceph.yaml).
   ceph1: 24
   ceph2: 25
   ceph3: 26
@@ -1808,8 +1825,9 @@ minio_data_dir: /data/minio
 # -----------------------------------------------------------------------
 
 ## setup-ceph-vm / setup-ceph-prereqs / setup-ceph-cluster: a 3-node
-## all-in-one (mon+mgr+osd) + 1-node admin Ceph 9 cluster (see
+## all-in-one (mon+mgr+osd) + 1-node admin Ceph cluster (see
 ## ceph/setup_ceph.yaml). Entirely independent of the HCP/hub flow.
+## The release is ceph_version in the START HERE block at the top.
 ceph_storage_node_names:
   - ceph1
   - ceph2
@@ -1828,11 +1846,36 @@ ceph_os_resize_partition: /dev/sda4
 ceph_admin_memory: 8192
 ceph_admin_vcpus: 4
 
+## Everything that changes with ceph_version, in one lookup table.
+## Keyed by string so ceph_version works quoted or not (and from -e,
+## where it always arrives as a string). Adding a release is one more
+## entry here plus the assert in ceph/setup_ceph.yaml.
+##   codename      - Ceph upstream release name
+##   ceph_major    - what `ceph version` reports (19.x = Squid, 20.x =
+##                   Tentacle); setup-ceph-cluster compares a live
+##                   cluster against it
+##   upstream_tag  - quay.io/ceph/ceph tag for the same release
+##   min_ocp       - oldest OCP whose node kernel maps its RBD images
+##                   (checked by ceph/setup_ceph_odf.yaml)
+ceph_releases:
+  "8":
+    codename: squid
+    ceph_major: "19"
+    upstream_tag: v19
+    ## No floor seen in this lab; 4.20 is where 8 is the pick.
+    min_ocp: "4.0"
+  "9":
+    codename: tentacle
+    ceph_major: "20"
+    upstream_tag: v20
+    min_ocp: "4.21"
+ceph_release: "{{ ceph_releases[ceph_version | string] }}"
+
 ## setup-ceph-prereqs: direct subscription-manager registration (no
 ## Satellite) - org_id/activation_key come from vault.yaml, shared
 ## with the rest of the lab (see roles/setup-rhsm). This is just the
-## repo name for the RHCS9 content itself.
-rhceph_tools_repo: rhceph-9-tools-for-rhel-9-x86_64-rpms
+## repo name for the RHCS content itself, derived from ceph_version.
+rhceph_tools_repo: "rhceph-{{ ceph_version }}-tools-for-rhel-9-x86_64-rpms"
 
 ## setup-ceph-cluster: cephadm pulls the container image straight
 ## from registry.redhat.io. Authentication is just pull_secret
@@ -1842,11 +1885,20 @@ rhceph_tools_repo: rhceph-9-tools-for-rhel-9-x86_64-rpms
 ## registry.redhat.io auth entry (same as roles/setup-mirror-registry
 ## already relies on). If you don't have RHCS entitlements, point
 ## this at the upstream community image on quay.io instead (public -
-## pull_secret doesn't need a quay.io/ceph entry for this to work):
+## pull_secret doesn't need a quay.io/ceph entry for this to work) by
+## setting just:
 ##   ceph_container_registry: quay.io
-##   ceph_container_image: quay.io/ceph/ceph:v19
+## and ceph_container_image follows: quay.io/ceph/ceph:v19 for
+## ceph_version 8, :v20 for 9. (rhceph_tools_repo still needs the
+## RHCS entitlement for cephadm/ceph-common.)
+##
+## Both derived values can still be overridden outright here or with
+## -e (e.g. to pin an RHCS z-stream tag instead of :latest).
 ceph_container_registry: registry.redhat.io
-ceph_container_image: "{{ ceph_container_registry }}/rhceph/rhceph-9-rhel9:latest"
+ceph_container_image: >-
+  {{ (ceph_container_registry == 'quay.io')
+     | ternary('quay.io/ceph/ceph:' ~ ceph_release.upstream_tag,
+               ceph_container_registry ~ '/rhceph/rhceph-' ~ ceph_version ~ '-rhel9:latest') }}
 ceph_dashboard_user: admin
 ## ceph_dashboard_password goes in vault.yaml, not here.
 

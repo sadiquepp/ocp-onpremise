@@ -1,12 +1,17 @@
-# Ceph 9 Storage for Hub PVs (ODF External Mode)
+# Ceph Storage for Hub PVs (ODF External Mode)
 
 The hub's PVs come from **LVM Storage** by default - one `LVMCluster` over the
 hub nodes' own spare disks, installed by `roles/setup-hub-acm` as part of hub
 bring-up. The alternative in this directory builds a **standalone Red Hat Ceph
-Storage 9 cluster** on the same bare-metal host and hands it to the hub through
+Storage (RHCS) 8 or 9 cluster** on the same bare-metal host and hands it to the hub through
 **OpenShift Data Foundation (ODF) in external mode**: ODF is installed on the
 hub, but no Ceph daemon runs there - ceph-csi simply talks to the external
 cluster's mons and provisions RBD (and CephFS) PVs out of it.
+
+Which release gets built is one setting, `ceph_version` in `vars.yaml`
+(`8` or `9`). Pick it from the OCP version of the cluster consuming the
+storage - **8 for OCP 4.20 and older, 9 for 4.21 and later** - see
+[Choosing the Ceph version](#choosing-the-ceph-version).
 
 It is a drop-in replacement for LVM Storage as the hub's PV provider, and it
 brings what LVM Storage does not: a CSI **VolumeSnapshotClass**
@@ -18,6 +23,7 @@ CephFS, and storage that lives outside the cluster and survives rebuilding it.
 - [What lives here](#what-lives-here)
 - [When to use it](#when-to-use-it)
 - [What gets built](#what-gets-built)
+- [Choosing the Ceph version](#choosing-the-ceph-version)
 - [Requirements](#requirements)
 - [Switching the hub off LVM Storage](#switching-the-hub-off-lvm-storage)
 - [Build the Ceph cluster](#build-the-ceph-cluster)
@@ -32,7 +38,7 @@ CephFS, and storage that lives outside the cluster and survives rebuilding it.
 
 | File                  | Purpose                                                              |
 | --------------------- | -------------------------------------------------------------------- |
-| `setup_ceph.yaml`     | Build the standalone Ceph 9 cluster (ceph1-3 + cephadmin)            |
+| `setup_ceph.yaml`     | Build the standalone Ceph cluster (ceph1-3 + cephadmin), RHCS 8 or 9 per `ceph_version`            |
 | `setup_ceph_odf.yaml` | Install ODF and attach that Ceph cluster to a hub in external mode   |
 | `ansible.cfg`         | Mirrors the root `ansible.cfg` and adds `../roles` to `roles_path`   |
 | `ceph-odf/`           | Created at run time by `setup_ceph_odf.yaml` - the extracted exporter script and the connection JSON. **Git-ignored: it holds live cluster credentials** |
@@ -73,7 +79,7 @@ built, because the hub build acts on it:
   else to do: `roles/setup-lvm-storage` installs it as part of the cluster
   build itself. Good enough to stand up hosted clusters and run workloads on
   them.
-- **Ceph 9 via ODF external mode** - set `use_lvm_storage: false`, then build
+- **Ceph (RHCS 8 or 9) via ODF external mode** - set `use_lvm_storage: false`, then build
   the Ceph cluster and attach it with the two playbooks here, **before** the
   AgentServiceConfig step - that step's PVCs need a default StorageClass to
   exist already.
@@ -110,11 +116,12 @@ so day-2 work never has to happen on a node that is also serving I/O.
 There is no Satellite anywhere in this flow. The nodes register directly with
 `subscription-manager` using the same `org_id` / `activation_key` every other VM
 in this lab uses, and cephadm pulls
-`registry.redhat.io/rhceph/rhceph-9-rhel9:latest` authenticated with the same
-`pull_secret`, which `setup-ceph-prereqs` installs as each node's podman
-authfile - no separate registry credentials. Without RHCS entitlements, point
-`ceph_container_registry` / `ceph_container_image` at the public upstream image
-instead; `vars.yaml` carries the values commented in place.
+`registry.redhat.io/rhceph/rhceph-<ceph_version>-rhel9:latest` authenticated
+with the same `pull_secret`, which `setup-ceph-prereqs` installs as each node's
+podman authfile - no separate registry credentials. Without an entitlement for
+the RHCS container image, set `ceph_container_registry: quay.io` and the image
+follows to the public upstream one for the same release
+(`quay.io/ceph/ceph:v19` for 8, `:v20` for 9).
 
 The variables that shape the cluster all live in the root
 [`vars.yaml`](../vars.yaml): the sizing knobs under "Ceph path only" in the
@@ -123,12 +130,14 @@ START HERE block at the top, everything else in the Ceph block that starts at
 
 | Variable | Default | What it controls |
 | -------- | ------- | ---------------- |
+| `ceph_version` | `9` | RHCS major release, `8` (Squid) or `9` (Tentacle). Everything below marked *derived* follows it |
 | `ip_list.ceph1`-`ceph3`, `ip_list.cephadmin` | `24`-`26`, `27` | Last octet of each node's address |
 | `ceph_osd_disks_per_node` / `ceph_osd_disk_size` | `3` / `100G` | Raw OSD disks per storage node, and their size |
 | `ceph_storage_memory` / `ceph_storage_vcpus` | `24576` / `16` | RAM (MiB) and vCPUs per storage node |
 | `ceph_admin_memory` / `ceph_admin_vcpus` | `8192` / `4` | RAM (MiB) and vCPUs for `cephadmin` |
 | `ceph_os_disk_size` | `60G` | OS disk per node |
-| `ceph_container_registry` / `ceph_container_image` | `registry.redhat.io` / `rhceph/rhceph-9-rhel9:latest` | Image cephadm deploys |
+| `rhceph_tools_repo` | *derived*: `rhceph-<ceph_version>-tools-for-rhel-9-x86_64-rpms` | Repo `cephadm` / `ceph-common` install from |
+| `ceph_container_registry` / `ceph_container_image` | `registry.redhat.io` / *derived*: `rhceph/rhceph-<ceph_version>-rhel9:latest` (`quay.io/ceph/ceph:v19`/`v20` when the registry is `quay.io`) | Image cephadm deploys |
 | `ceph_dashboard_user` | `admin` | Dashboard admin user (password in `vault.yaml`) |
 | `ceph_odf_rbd_pool` | `ocs-storagecluster-cephblockpool` | RBD pool exported to ODF |
 | `ceph_odf_enable_cephfs` / `ceph_odf_cephfs_name` | `true` / `ocs-storagecluster-cephfilesystem` | Whether a CephFS (and MDS) is exported too |
@@ -136,22 +145,62 @@ START HERE block at the top, everything else in the Ceph block that starts at
 | `ceph_odf_rbd_default_sc` | `true` | Mark the RBD StorageClass the cluster default |
 | `ceph_odf_export_dir` | `{{ playbook_dir }}/ceph-odf` | Where the connection JSON lands on the controller (`ceph/ceph-odf/`) |
 
+## Choosing the Ceph version
+
+Set `ceph_version` in the START HERE block of `vars.yaml` and nothing else:
+the tools repo, the container image (RHCS or upstream) and the version checks
+all derive from it through the `ceph_releases` table in the Ceph block.
+
+| `ceph_version` | Release | Container image | Tools repo | Consuming OCP |
+| -------------- | ------- | --------------- | ---------- | ------------- |
+| `8` | Squid (Ceph 19.x) | `rhceph/rhceph-8-rhel9:latest` | `rhceph-8-tools-for-rhel-9-x86_64-rpms` | 4.20 and older (the only option there); not tested in this repo on 4.21+ |
+| `9` | Tentacle (Ceph 20.x) | `rhceph/rhceph-9-rhel9:latest` | `rhceph-9-tools-for-rhel-9-x86_64-rpms` | **4.21 or later** only - see [Requirements](#requirements) |
+
+The derived values can still be overridden one by one - in `vars.yaml` or with
+`-e` - for example to pin an RHCS z-stream image tag instead of `:latest`.
+
+Two checks keep `ceph_version` honest:
+
+- **`setup_ceph.yaml`** rejects anything but a known release up front, and on a
+  re-run against an existing cluster reads `ceph version` and stops if the
+  running release is not the one `ceph_version` asks for. It never upgrades or
+  downgrades a live cluster (Ceph cannot be downgraded at all), so changing
+  `ceph_version` means a [rebuild](#rebuilding-the-ceph-cluster).
+- **`setup_ceph_odf.yaml`** reads the target cluster's OCP version before it
+  installs anything and stops when that version cannot map RBD images from the
+  chosen release (RHCS 9 below OCP 4.21). If you are going to mount through an
+  rbd-nbd StorageClass instead (below), skip it with
+  `-e ceph_odf_skip_krbd_check=true`.
+
+For an OCP 4.20 lab:
+
+```yaml
+ocp_major_version: "4.20"   # hub OCP version and the ODF channel (stable-4.20)
+ceph_version: 8
+```
+
+The ODF side needs nothing version-specific: the exporter script is extracted
+from whatever ODF operator is installed, and RHCS 8 clusters bootstrapped by
+cephadm have msgr2 on, just like 9.
+
 ## Requirements
 
-**OCP 4.21 or later on the cluster consuming the storage.** On **4.20**, the
+**RHCS 9 needs OCP 4.21 or later on the cluster consuming the storage** - use
+`ceph_version: 8` below that. On **4.20**, the
 in-kernel RBD client could not attach to an RHCS 9
 (Tentacle) cluster: `rbd map` failed with `failed to add secret to kernel` and
 the CSI attach ended in error 524, so the PV bound but never mounted. This is a
 client-side kernel gap - the cluster health, the CSI user's caps and the image
 features all checked out, and the same image mapped by hand from a RHEL 9 node.
 It works on **4.21** (krbd mounts RHCS 9 images: `/dev/rbd0` under the NooBaa
-database, 2026-10-23) and on **4.22**. On any other version, run the RBD smoke
+database, 2026-10-23) and on **4.22**. Whatever the pairing, run the RBD smoke
 test under [Verifying](#verifying) before building anything on the storage.
 `ocp_major_version` in `vars.yaml` drives both the hub's OCP version and the ODF
 channel the consumer role subscribes to (`stable-{{ ocp_major_version }}`), so
 changing it moves both together.
 
-On a version where the smoke test fails, take krbd out of the path and mount through
+If you have to stay on RHCS 9 with an older OCP (and the smoke test fails),
+take krbd out of the path and mount through
 rbd-nbd in userspace instead, by giving the RBD StorageClass
 `parameters.mounter: rbd-nbd`. StorageClass parameters are immutable, so this
 means exporting the generated class, renaming it, adding the parameter and
@@ -351,7 +400,8 @@ oc exec ceph-rbd-smoke -- sh -c 'echo ok > /data/f && cat /data/f'
 
 A PVC that goes `Bound` while the pod stays `ContainerCreating` with
 `rbd: map failed ... failed to add secret to kernel` is the kernel issue
-above (seen on 4.20; 4.21 and 4.22 work), not a Ceph or credentials problem.
+above (RHCS 9 on OCP 4.20; 4.21 and 4.22 work, and RHCS 8 is the fix on 4.20),
+not a Ceph or credentials problem.
 
 Clean up the smoke test afterwards:
 
@@ -396,7 +446,9 @@ cd ceph
 ansible-playbook -i ../inventory/hosts setup_ceph.yaml --ask-vault-pass
 ```
 
-Wait for `HEALTH_OK` with 3 mons and 9 OSDs (`ssh root@192.168.122.27 ceph -s`),
+To switch releases, set `ceph_version` before this build - the old
+cluster's release does not carry over. Wait for `HEALTH_OK` with 3 mons and
+9 OSDs (`ssh root@192.168.122.27 ceph -s`),
 then re-run `setup_ceph_odf.yaml` against each cluster that should consume it.
 The StorageClass names derive from `ceph_odf_storagecluster_name`, so the
 rebuilt cluster presents `ocs-external-storagecluster-ceph-rbd` and
@@ -420,11 +472,11 @@ cluster is staying.
 
 | Playbook / role | Purpose |
 | --------------- | ------- |
-| [`setup_ceph.yaml`](setup_ceph.yaml) | Build the standalone Ceph 9 cluster (ceph1-3 + cephadmin) |
+| [`setup_ceph.yaml`](setup_ceph.yaml) | Build the standalone Ceph cluster (ceph1-3 + cephadmin), RHCS 8 or 9 per `ceph_version` |
 | [`setup_ceph_odf.yaml`](setup_ceph_odf.yaml) | Install ODF and attach that Ceph cluster to a hub in external mode |
 | [`roles/setup-ceph-vm`](../roles/setup-ceph-vm) | Creates the ceph1-3 + cephadmin VMs and attaches the raw OSD disks |
 | [`roles/setup-rhsm`](../roles/setup-rhsm) | Registers each node with subscription-manager (shared with the rest of the lab) |
-| [`roles/setup-ceph-prereqs`](../roles/setup-ceph-prereqs) | Enables the RHCS 9 tools repo, installs cephadm, and installs `pull_secret` as each node's podman authfile |
+| [`roles/setup-ceph-prereqs`](../roles/setup-ceph-prereqs) | Enables the RHCS tools repo for `ceph_version`, installs cephadm, and installs `pull_secret` as each node's podman authfile |
 | [`roles/setup-ceph-cluster`](../roles/setup-ceph-cluster) | Runs `cephadm bootstrap` on ceph1, expands the cluster onto ceph2/ceph3 + cephadmin, places mon/mgr/osd daemons, and enables msgr2 |
 | [`roles/setup-ceph-odf-export`](../roles/setup-ceph-odf-export) | Creates the RBD pool (+ optional CephFS) and runs the version-matched exporter on cephadmin to produce the connection JSON |
 | [`roles/setup-ceph-odf-consumer`](../roles/setup-ceph-odf-consumer) | Installs the ODF operator and extracts its exporter script (stage `install`), then creates the external-cluster secret and `StorageCluster` (stage `create`) |
@@ -450,7 +502,7 @@ cluster is staying.
 - **The mons have to be answering msgr2.** The exporter runs with
   `--v2-port-enable`, so the endpoints it hands ODF are the v2 port 3300; if the
   mons are only bound to the v1 port 6789 those endpoints are dead and CSI
-  cannot reach the cluster. A Ceph 9 cluster bootstrapped by cephadm has msgr2
+  cannot reach the cluster. An RHCS 8 or 9 cluster bootstrapped by cephadm has msgr2
   on already - confirm with `ceph mon dump` (each mon should show a `v2:` entry)
   and, in the unlikely case it does not, `ceph mon enable-msgr2` turns it on.
 - The Ceph cluster is entirely independent of the HCP flow - no other playbook

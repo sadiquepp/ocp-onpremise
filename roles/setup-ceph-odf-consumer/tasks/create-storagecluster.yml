@@ -5,7 +5,7 @@
 # KUBECONFIG pointed at the target OCP cluster, AFTER the export play
 # has produced external-cluster-details.json. Creates the
 # external-cluster secret from that JSON and the external
-# StorageCluster CR that ties ceph-csi to the Ceph 9 cluster.
+# StorageCluster CR that ties ceph-csi to the Ceph cluster.
 
 - name: Fail fast if the exported JSON hasn't been fetched yet
   ansible.builtin.stat:

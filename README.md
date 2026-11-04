@@ -52,7 +52,7 @@ In a hurry? [steps.md](steps.md) is the same end-to-end run as commands only.
   - [What actually pins the address](#what-actually-pins-the-address)
   - [Notes and constraints](#notes-and-constraints)
   - [Verifying](#verifying)
-- [Ceph 9 Storage for Hub PVs (ODF External Mode)](#ceph-9-storage-for-hub-pvs-odf-external-mode)
+- [Ceph Storage for Hub PVs (ODF External Mode)](#ceph-storage-for-hub-pvs-odf-external-mode)
 - [Three-node compact cluster](#three-node-compact-cluster)
 - [Hosted clusters on the KubeVirt platform](#hosted-clusters-on-the-kubevirt-platform)
 - [UDN over BGP, VRF-Lite and EVPN (containerlab fabric)](#udn-over-bgp-vrf-lite-and-evpn-containerlab-fabric)
@@ -95,7 +95,7 @@ In a hurry? [steps.md](steps.md) is the same end-to-end run as commands only.
 
 **Hub1** is the primary management cluster running ACM, OADP, LVM-Storage, and MetalLB. **Hub2** is a replacement hub used as the restore target during a DR cutover. Both hubs share the same S3 bucket so backups created by hub1 are visible to hub2's Velero instance.
 
-A hub's PVs come from LVM-Storage by default. They can instead come from a standalone Ceph 9 cluster running on the same bare-metal host, consumed through ODF external mode - see [ceph/README.md](ceph/README.md).
+A hub's PVs come from LVM-Storage by default. They can instead come from a standalone Ceph cluster (RHCS 8 or 9, `ceph_version` in `vars.yaml`) running on the same bare-metal host, consumed through ODF external mode - see [ceph/README.md](ceph/README.md).
 
 ## Prerequisites
 ### Setup Bare Metal Host
@@ -553,7 +553,7 @@ built, because the hub build acts on it:
   `lvms-vg1` as its default StorageClass. Good enough to stand up hosted
   clusters and run workloads on them. The SNO (`setup_sno.yaml`) follows the
   same switch: it gets a second disk and LVM Storage after its install.
-- **Ceph 9 via ODF external mode** - set `use_lvm_storage: false`, then build
+- **Ceph (RHCS 8 or 9, `ceph_version`) via ODF external mode** - set `use_lvm_storage: false`, then build
   the Ceph cluster and attach it with the two playbooks in [`ceph/`](ceph/),
   before the AgentServiceConfig step - that step's PVCs need a default
   StorageClass to exist already. See [ceph/README.md](ceph/README.md)
@@ -1813,9 +1813,9 @@ dig +short api.hcp-cluster1.mylab.com @192.168.122.21
 The last two must agree - that is the whole point of this layout.
 
 
-## Ceph 9 Storage for Hub PVs (ODF External Mode)
+## Ceph Storage for Hub PVs (ODF External Mode)
 
-**Lives in [`ceph/`](ceph/).** A standalone Red Hat Ceph Storage 9 cluster -
+**Lives in [`ceph/`](ceph/).** A standalone Red Hat Ceph Storage cluster (8 or 9, `ceph_version` in `vars.yaml`) -
 `ceph1`-`ceph3` (mon + mgr + osd) and `cephadmin` (`.24`-`.27`) - built on the
 same bare-metal host and handed to a hub through OpenShift Data Foundation in
 external mode. It replaces LVM Storage as the hub's PV provider
@@ -1823,7 +1823,7 @@ external mode. It replaces LVM Storage as the hub's PV provider
 `csi` backup method needs - see
 [Choose how the control-plane volumes are captured](#choose-how-the-control-plane-volumes-are-captured).
 Everything about building, attaching, verifying and tearing it down - sizing,
-the OCP 4.21+ requirement, the `ceph_dashboard_password` vault entry, and why it
+choosing between RHCS 8 and 9 (9 needs OCP 4.21+, use 8 on 4.20), the `ceph_dashboard_password` vault entry, and why it
 should not share `openshift-storage` with LVM Storage - is in
 [ceph/README.md](ceph/README.md).
 
@@ -1966,7 +1966,7 @@ delegates.
 | `cleanup.yaml`                | Destroy all VMs, or one piece with `--tags hub\|hub2\|hubd\|hub2d\|hosted\|helper\|minio\|ceph\|sno\|compact\|...` (see [Cleanup](#cleanup)). The mirror registry is only shut down; `--tags registry-destroy` really removes it |
 | `setup_hosted_cluster_vm.yaml` | Create a hosted cluster's worker VMs; builds the disconnected set when `disconnected_install: true` |
 | `create_hosted_cluster.yaml`  | Render the HostedCluster/NodePool bundle; renders the disconnected clusters when `disconnected_install: true` |
-| `ceph/setup_ceph.yaml`        | Build the standalone Ceph 9 cluster (ceph1-3 + cephadmin) - see [ceph/README.md](ceph/README.md) |
+| `ceph/setup_ceph.yaml`        | Build the standalone Ceph cluster (ceph1-3 + cephadmin), RHCS 8 or 9 per `ceph_version` - see [ceph/README.md](ceph/README.md) |
 | `ceph/setup_ceph_odf.yaml`    | Install ODF and attach that Ceph cluster to a hub in external mode |
 | `udn-bgp-evpn/setup_udn_bgp_lab.yaml` | Build the containerlab BGP/EVPN provider fabric and wire a cluster into it. Phase-tagged: `--tags fabric\|preflight\|default\|shared\|vrflite\|evpn` |
 
@@ -1984,7 +1984,7 @@ delegates.
 | `setup-bastion-vm` | Creates the bastion VM: preflights free space where the disk will live, expands the prepared RHEL 9 base image into a 256G sparse qcow2, imports it, then discovers its DHCP address and adds it to the in-memory inventory (no reservation, unlike every other VM in this lab) |
 | `setup-bastion` | The in-guest half: build and scan tooling (podman/buildah/skopeo, grype with its db primed, optional trivy), `oc`, the mirror registry's CA and login, and a clone of `sadiquepp/openshift` under `/root/work` |
 | `setup-ceph-vm` | Creates the ceph1-3 + cephadmin VMs and attaches the raw OSD disks |
-| `setup-ceph-prereqs` | Registers the Ceph nodes with subscription-manager (no Satellite), enables the RHCS 9 tools repo, installs cephadm, and installs `pull_secret` as each node's podman authfile |
+| `setup-ceph-prereqs` | Registers the Ceph nodes with subscription-manager (no Satellite), enables the RHCS tools repo for `ceph_version`, installs cephadm, and installs `pull_secret` as each node's podman authfile |
 | `setup-ceph-cluster` | Runs `cephadm bootstrap` on ceph1, expands the cluster onto ceph2/ceph3 + cephadmin, places mon/mgr/osd daemons, and enables msgr2 |
 | `setup-ceph-odf-export` | Creates the RBD pool (+ optional CephFS) and runs the version-matched exporter on cephadmin to produce the connection JSON |
 | `setup-ceph-odf-consumer` | Installs the ODF operator and extracts its exporter script (stage `install`), then creates the external-cluster secret and `StorageCluster` (stage `create`) |

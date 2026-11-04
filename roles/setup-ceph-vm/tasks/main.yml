@@ -1,7 +1,7 @@
 ---
 # Tasks file for setup-ceph-vm
 #
-# Creates the Ceph 9 VMs on the baremetal host (localhost): three
+# Creates the Ceph VMs on the baremetal host (localhost): three
 # all-in-one storage nodes (mon+mgr+osd on each, see setup-ceph-cluster)
 # plus one admin node that only ever holds the admin keyring/ceph.conf
 # (_admin label, no daemons).

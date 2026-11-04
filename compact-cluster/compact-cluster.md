@@ -107,7 +107,7 @@ change:
 Decide this **before you build the cluster**. It changes how the VMs are
 built, not only what is installed on them afterwards.
 
-| | LVM Storage (default) | Ceph 9 via ODF external mode |
+| | LVM Storage (default) | Ceph via ODF external mode |
 |---|---|---|
 | Where the data lives | A 500 GB disk (`vdb`) on each node, local to that node | A separate Ceph cluster: `ceph1`-`ceph3` (`.24`-`.26`) and `cephadmin` (`.27`), built by `ceph/setup_ceph.yaml` |
 | Default StorageClass | `lvms-vg1` | `ocs-external-storagecluster-ceph-rbd` |
@@ -152,8 +152,9 @@ To move a cluster that already has LVM Storage, see
 
 **What Ceph needs** in addition to everything else in this guide:
 
-- **OCP 4.22 or later** on the compact cluster. Below 4.22, a Ceph 9 RBD
-  volume binds but never mounts
+- **OCP 4.22 or later** on the compact cluster when the Ceph cluster is
+  RHCS 9 (`ceph_version: 9`). Below that, an RHCS 9 RBD volume binds but
+  never mounts - build the Ceph cluster with `ceph_version: 8` instead
   ([README, Requirements](../README.md#requirements)). `ocp_major_version` in
   `vars.yaml` is `"4.22"`.
 - **`ceph_dashboard_password`** in `vault.yaml`, next to `org_id`,
@@ -1169,5 +1170,5 @@ virsh list --all | grep -E 'ceph[123]|cephadmin'     # nothing
 | Ceph: `setup_ceph_odf.yaml` fails with `oc: command not found` | No `oc` in `/usr/bin` on a hypervisor that has never built a hub | `cp $WORK/oc /usr/bin/oc` (Step 12b) |
 | Ceph: the ODF CSV is `Failed` with reason `TooManyOperatorGroups` | LVM Storage's OperatorGroup is still in `openshift-storage` | `oc -n openshift-storage get operatorgroup`. Delete `openshift-storage-operatorgroup`, as in Step 12b. |
 | Ceph: the StorageCluster stays `Progressing` | Ceph is not `HEALTH_OK`, or the compact nodes cannot reach the mons on `.24`-`.26` | `ssh root@192.168.122.27 ceph -s`. `oc -n openshift-storage get storagecluster ocs-external-storagecluster -o yaml` shows the conditions. |
-| Ceph: the PVC is `Bound` but the pod stays `ContainerCreating` with `failed to add secret to kernel` or error 524 | The node kernel cannot map a Ceph 9 RBD image: seen on OCP 4.20 | Build with OCP 4.21 or later. See [README, Requirements](../README.md#requirements). |
+| Ceph: the PVC is `Bound` but the pod stays `ContainerCreating` with `failed to add secret to kernel` or error 524 | The node kernel cannot map a Ceph 9 RBD image: seen on OCP 4.20 | Build with OCP 4.21 or later, or build the Ceph cluster with `ceph_version: 8`. See [README, Requirements](../README.md#requirements). |
 | Ceph: hosted cluster etcd or AgentServiceConfig PVCs are on `lvms-vg1` | They were created while `lvms-vg1` was the default StorageClass | Bound PVCs do not move. Remove LVM Storage, attach Ceph, then recreate them (Step 12b). |

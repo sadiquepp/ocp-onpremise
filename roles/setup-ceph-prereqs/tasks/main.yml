@@ -9,7 +9,8 @@
 #
 # RHEL9 doesn't support the cephadm-ansible preflight playbook, so
 # this does by hand what that playbook would do for us on RHEL8:
-# enable the RHCS9 tools repo and install cephadm + dependencies.
+# enable the RHCS tools repo (rhceph_tools_repo, derived from
+# ceph_version) and install cephadm + dependencies.
 # Runs on all four nodes (storage nodes and the admin node alike) -
 # cephadm/ceph-common/podman are needed on every node cephadm will
 # ever touch, admin node included.
@@ -30,7 +31,7 @@
     delay: 5
     timeout: 300
 
-- name: Enable RHEL9 BaseOS/AppStream and the RHCS9 Tools repo
+- name: Enable RHEL9 BaseOS/AppStream and the RHCS {{ ceph_version }} Tools repo
   ansible.builtin.command:
     cmd: >
       subscription-manager repos
