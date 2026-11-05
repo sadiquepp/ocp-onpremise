@@ -1,4 +1,4 @@
-## Exports the Ceph 9 cluster (setup_ceph.yaml) for OpenShift Data
+## Exports the Ceph cluster (setup_ceph.yaml) for OpenShift Data
 ## Foundation (ODF) "external mode" to consume as PVs, then installs
 ## ODF and wires up the external StorageCluster on the target OCP
 ## cluster.
@@ -8,6 +8,12 @@
 ## operator version - an older upstream script emits CSI credentials
 ## under key names a newer operator won't read, which silently leaves
 ## the StorageCluster stuck "Progressing"):
+##   0. (part of play 1) read the target cluster's OCP version and
+##      stop if its node kernel cannot map RBD images from the
+##      ceph_version release (RHCS 9 needs OCP 4.21+; see
+##      ceph_releases in ../vars.yaml). Skip with
+##      -e ceph_odf_skip_krbd_check=true if you will mount through an
+##      rbd-nbd StorageClass instead (README.md, Requirements).
 ##   1. consumer stage 'install' - install ODF, extract the
 ##      version-matched exporter script from the operator CSV
 ##   2. export - create the pool/CephFS on the Ceph cluster and run
@@ -50,6 +56,36 @@
       {{ (target_hub == 'hub2') | ternary(hub2_install_folder, hub_install_folder) }}/auth/kubeconfig
     ceph_odf_consumer_stage: install
   tasks:
+  - name: Read the target cluster's OpenShift version
+    ansible.builtin.command:
+      cmd: oc get clusterversion version -o jsonpath={.status.desired.version}
+    environment:
+      KUBECONFIG: "{{ ceph_odf_target_kubeconfig }}"
+    register: ceph_odf_target_ocp
+    changed_when: false
+    tags:
+      - ceph-odf-install
+
+  - name: Stop if this OCP version cannot mount RBD images from RHCS {{ ceph_version }}
+    ansible.builtin.assert:
+      that:
+        - ceph_odf_target_ocp.stdout is version(ceph_release.min_ocp, '>=')
+      fail_msg: >-
+        The target cluster runs OCP {{ ceph_odf_target_ocp.stdout }}, but
+        ceph_version is {{ ceph_version }} ({{ ceph_release.codename }}),
+        whose RBD images its node kernel cannot map until OCP
+        {{ ceph_release.min_ocp }} - PVCs would bind and then never mount
+        (`failed to add secret to kernel`, CSI error 524). Build the Ceph
+        cluster as ceph_version 8 instead, or rerun with
+        -e ceph_odf_skip_krbd_check=true if you will add an rbd-nbd
+        StorageClass (README.md, Requirements).
+      success_msg: >-
+        OCP {{ ceph_odf_target_ocp.stdout }} can mount RHCS
+        {{ ceph_version }} RBD images.
+    when: not (ceph_odf_skip_krbd_check | default(false) | bool)
+    tags:
+      - ceph-odf-install
+
   - ansible.builtin.import_role:
       name: setup-ceph-odf-consumer
     environment:

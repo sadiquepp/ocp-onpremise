@@ -17,7 +17,7 @@ bond over two NICs.
 
 Both lab clusters get LVM Storage (`lvms-vg1`, the default StorageClass) on
 an empty 500G disk per node by default. The connected cluster can instead use
-the lab's Ceph 9 cluster through ODF external mode
+the lab's Ceph cluster through ODF external mode
 (`ocs-external-storagecluster-ceph-rbd`). That suits hosted control planes,
 whose etcd can then be snapshotted. Choose before building: set
 `use_lvm_storage: false` in `vars.yaml`, and follow

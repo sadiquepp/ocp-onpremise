@@ -86,10 +86,10 @@ rebuild.
 | `.21` | VM | helper VM: DNS (named), haproxy, PXE/HTTP | `ip_list.helper_server` |  |
 | `.22` | VM | mirror registry VM (registry.hub.mylab.com:8443) | `ip_list.registry` |  |
 | `.23` | VM | MinIO VM, the disconnected lab's S3 store (OADP backups, ...) | `ip_list.minio` |  |
-| `.24` | VM | Ceph 9 node 1 | `ip_list.ceph1` |  |
-| `.25` | VM | Ceph 9 node 2 | `ip_list.ceph2` |  |
-| `.26` | VM | Ceph 9 node 3 | `ip_list.ceph3` |  |
-| `.27` | VM | Ceph 9 admin node | `ip_list.cephadmin` |  |
+| `.24` | VM | Ceph node 1 | `ip_list.ceph1` |  |
+| `.25` | VM | Ceph node 2 | `ip_list.ceph2` |  |
+| `.26` | VM | Ceph node 3 | `ip_list.ceph3` |  |
+| `.27` | VM | Ceph admin node | `ip_list.cephadmin` |  |
 | `.28` | VM | hcp-cluster2-d worker1 | `ip_list.c2dworker1` |  |
 | `.29` | VM | hcp-cluster2-d worker2 | `ip_list.c2dworker2` |  |
 | `.30` | VM | hub (hub1) bootstrap | `ip_list.bootstrap` |  |

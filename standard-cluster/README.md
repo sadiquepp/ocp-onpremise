@@ -12,7 +12,7 @@ What a cluster is used for is decided by the playbooks you run on it next:
 - [`hcp/`](../hcp/) builds hosted clusters on such a hub, and
   [`hcp/dr/`](../hcp/dr/) backs one up from cluster1 and restores it onto
   cluster2 - the **DR** use of cluster2.
-- [`ceph/`](../ceph/) attaches Ceph 9 storage through ODF instead of LVM
+- [`ceph/`](../ceph/) attaches Ceph (RHCS 8 or 9, `ceph_version`) storage through ODF instead of LVM
   Storage; [`oadp/`](../oadp/) wires a cluster's OADP to an S3 bucket.
 
 cluster2 is not tied to DR. It is the same kind of cluster as cluster1 on its
@@ -107,12 +107,12 @@ on it:
   500G `storage_worker<N>.qcow2` disks. Good enough to stand up hosted clusters
   and run workloads on them. The SNO (`sno/setup_sno.yaml`) follows the same
   switch: it gets a second disk and LVM Storage after its install.
-- **Ceph 9 via ODF external mode** - set `use_lvm_storage: false`, then build
+- **Ceph (RHCS 8 or 9, `ceph_version`) via ODF external mode** - set `use_lvm_storage: false`, then build
   the Ceph cluster and attach it with the two playbooks in [`ceph/`](../ceph/)
   once the cluster is up, before anything needs a PVC (for a hub: before the
   AgentServiceConfig step in [`acm/`](../acm/README.md#apply-the-agentserviceconfig)).
-  See [ceph/README.md](../ceph/README.md) for the whole flow, its OCP 4.21+
-  requirement, and why the two should not both run on the same cluster.
+  See [ceph/README.md](../ceph/README.md) for the whole flow, which release
+  to pick (`ceph_version` 9 needs OCP 4.21+, use 8 on 4.20), and why the two should not both run on the same cluster.
 
 > **For hosted-cluster backup and restore, pick Ceph.** Restoring a hosted
 > control plane needs a CSI VolumeSnapshot of its etcd volume, and LVM Storage

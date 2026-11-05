@@ -4,8 +4,8 @@
 # Delegated to ceph1 (see ceph/setup_ceph.yaml) - ceph1 is the node
 # cephadm bootstrap runs from, and ends up hosting the first mon/mgr.
 # This role:
-#   1. Bootstraps the cluster on ceph1, pulling the RHCS9 image
-#      straight from registry.redhat.io (or quay.io - see
+#   1. Bootstraps the cluster on ceph1, pulling the RHCS image for
+#      ceph_version straight from registry.redhat.io (or quay.io - see
 #      ceph_container_registry/ceph_container_image in vars.yaml).
 #      No Satellite/local mirror involved, and no separate registry
 #      credentials either - setup-ceph-prereqs already installed
@@ -40,7 +40,37 @@
     path: /etc/ceph/ceph.conf
   register: ceph_bootstrap_status
 
-- name: Bootstrap the Ceph 9 cluster on ceph1
+# Re-running against a live cluster leaves it alone, so a changed
+# ceph_version would otherwise be silently ignored - and the export
+# play would then hand ODF a cluster of the wrong release. Stop and
+# say so instead. `ceph versions` (plural) reports what the daemons
+# run, not the shell container's client; cephadm shell picks the image
+# the local daemons already use, so this needs no image pull.
+- name: Read the running cluster's Ceph version
+  ansible.builtin.command:
+    cmd: cephadm shell -- ceph versions
+  become: true
+  register: ceph_running_version
+  changed_when: false
+  when: ceph_bootstrap_status.stat.exists
+
+- name: Stop if the running cluster is not the release ceph_version asks for
+  ansible.builtin.assert:
+    that:
+      - (ceph_running_version.stdout | regex_search('ceph version (\\d+)\\.', '\\1') | first)
+        == ceph_release.ceph_major
+    fail_msg: >-
+      The cluster on ceph1 runs
+      {{ (ceph_running_version.stdout | from_json).overall.keys() | list | join(', ') }},
+      but ceph_version is {{ ceph_version }} ({{ ceph_release.codename }},
+      Ceph {{ ceph_release.ceph_major }}.x). setup_ceph.yaml does not
+      upgrade or downgrade a live cluster. Either set ceph_version back,
+      or rebuild: from the repository root run
+      `ansible-playbook -i inventory/hosts cleanup.yaml --tags ceph`,
+      then setup_ceph.yaml again (every PV on the old cluster is lost).
+  when: ceph_bootstrap_status.stat.exists
+
+- name: Bootstrap the Ceph {{ ceph_version }} cluster on ceph1
   ansible.builtin.command:
     cmd: >
       cephadm --image {{ ceph_container_image }} bootstrap

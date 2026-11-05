@@ -1,6 +1,6 @@
 galaxy_info:
   author: sadiquepp
-  description: Creates the RBD pool/CephFS filesystem and exports ODF connection details from the Ceph 9 cluster
+  description: Creates the RBD pool/CephFS filesystem and exports ODF connection details from the Ceph cluster
   license: MIT
   min_ansible_version: "2.9"
 

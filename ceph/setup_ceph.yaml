@@ -1,4 +1,5 @@
-## Creates a 3-node all-in-one + 1-node admin Ceph 9 cluster,
+## Creates a 3-node all-in-one + 1-node admin Ceph cluster (Red Hat
+## Ceph Storage 8 or 9 - ceph_version in ../vars.yaml),
 ## independent of the HCP/hub flow (nothing else imports or calls
 ## this - running it is entirely optional and doesn't affect the
 ## rest of the lab). Storage nodes (ceph1-3) each run a mon+mgr+osd
@@ -9,7 +10,7 @@
 ## No Satellite anywhere in this flow: nodes register directly with
 ## subscription-manager (setup-rhsm, org_id/activation_key from
 ## vault.yaml - same as every other VM in this lab), and cephadm
-## pulls the RHCS9 container image straight from registry.redhat.io,
+## pulls the RHCS container image straight from registry.redhat.io,
 ## authenticated using pull_secret (vault.yaml - the same pull secret
 ## setup-hub-cluster/setup-mirror-registry already use, installed as
 ## each node's podman authfile by setup-ceph-prereqs). No separate
@@ -34,6 +35,21 @@
     - ../vars.yaml
     - ../vault.yaml
   tasks:
+  - name: Fail fast if ceph_version is not a release this repo knows
+    ansible.builtin.assert:
+      that:
+        - (ceph_version | string) in ceph_releases
+      fail_msg: >-
+        ceph_version is '{{ ceph_version }}'; set it to one of
+        {{ ceph_releases.keys() | list | join(', ') }} in vars.yaml
+        (8 for OCP 4.20 and older consumers, 9 for 4.21 and later).
+
+  - name: Show which Ceph release this run builds
+    ansible.builtin.debug:
+      msg: >-
+        RHCS {{ ceph_version }} ({{ ceph_release.codename }}) -
+        image {{ ceph_container_image }}, repo {{ rhceph_tools_repo }}
+
   - name: Fail fast if org_id/activation_key are missing from vault.yaml
     ansible.builtin.assert:
       that:

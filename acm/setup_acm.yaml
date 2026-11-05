@@ -39,10 +39,21 @@
 ##     -e target_hub=hub2 -e disconnected_install=true
 ##
 ## Narrower re-runs, against a hub that is already up:
-##   --tags metallb   only the hosted clusters' MetalLB API pools - the step to
-##                    run after adding a hosted cluster to
+##   --tags metallb   the MetalLB operator Subscription (a no-op if already
+##                    there) and the hosted clusters' MetalLB API pools - the
+##                    step to run after adding a hosted cluster to
 ##                    hosted_cluster_metallb_pools
-##   --tags oadp      only the pinned-OADP InstallPlan approval / CSV wait
+##   --tags oadp      the OADP operator Subscription and, when pinned, its
+##                    InstallPlan approval / CSV wait
+##   --tags metallb,oadp  both operators without touching ACM - for a cluster
+##                    whose ACM was installed (or pinned) by hand; a full run
+##                    would re-apply the ACM Subscription on
+##                    acm_operator_channel
+##   --tags asc       render the AgentServiceConfig (plus the Provisioning
+##                    config and, disconnected, the mirror config, staged
+##                    osImages and ClusterImageSets) without touching the ACM
+##                    Subscription or MultiClusterHub - needs the
+##                    MultiClusterHub up already
 ##
 ## On a disconnected run the role also points every Subscription at the
 ## mirrored CatalogSource, publishes the mirror registry CA to openshift-config

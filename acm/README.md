@@ -108,17 +108,31 @@ oc get ipaddresspool,l2advertisement -n metallb-system
 Against a hub that is already up:
 
 ```bash
-# only the hosted clusters' MetalLB API pools - all a hub needs after a hosted
-# cluster is added to hosted_cluster_metallb_pools in vars.yaml
+# the MetalLB operator Subscription (a no-op when it is already there) and the
+# hosted clusters' MetalLB API pools - all a hub needs after a hosted cluster
+# is added to hosted_cluster_metallb_pools in vars.yaml
 ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass --tags metallb
 
-# only the pinned-OADP InstallPlan approval / CSV wait (oadp_operator_starting_csv)
+# the OADP operator Subscription, plus the InstallPlan approval / CSV wait when
+# OADP is pinned (oadp_operator_starting_csv)
 ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass --tags oadp
+
+# both operators, ACM untouched - for a cluster whose ACM was installed by hand
+ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass --tags metallb,oadp
+
+# render the AgentServiceConfig (and apply its prerequisites: the Provisioning
+# config, and disconnected the mirror config / osImages / ClusterImageSets),
+# ACM Subscription and MultiClusterHub untouched - the MultiClusterHub must
+# already be running
+ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass --tags asc
 ```
 
-Add `-e target_hub=hub2` (and/or `-e disconnected_install=true`) to point either
-at another cluster. The whole playbook is idempotent, so re-running it without
-tags is safe too.
+Add `-e target_hub=hub2` (and/or `-e disconnected_install=true`) to point any
+of them at another cluster. The whole playbook is idempotent, so re-running it
+without tags is safe too - with one exception: it re-applies the ACM
+Subscription on `acm_operator_channel` with automatic approval, so on a cluster
+where ACM was installed or pinned by hand, either set `acm_operator_channel` to
+that channel first or stick to the tags above.
 
 ## Disconnected deployment
 
@@ -186,7 +200,9 @@ The AgentServiceConfig configures the Central Infrastructure Management (CIM)
 service that the Agent-platform hosted clusters in [`hcp/`](../hcp/) need. The
 role renders it to `roles/setup-hub-acm/files/.rendered-05-agentserviceconfig.yaml`
 and stops there: review it (customise the `osImages` to the ones you want for
-the hosted clusters) and apply it yourself.
+the hosted clusters) and apply it yourself. On a cluster whose ACM was
+installed by hand, `--tags asc` renders it (and applies its prerequisites)
+without the rest of the playbook.
 
 - Make sure ACM and the `MultiClusterHub` are fully operational first.
 - The hub also needs a **default StorageClass** by this point. The

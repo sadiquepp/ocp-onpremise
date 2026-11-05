@@ -29,7 +29,7 @@ High-Level-Arch
   - [Setup MinIO (disconnected, optional)](#setup-minio-disconnected-optional)
   - [Setup Bastion VM (optional)](#setup-bastion-vm-optional)
 - [Hosted control planes, end to end](#hosted-control-planes-end-to-end)
-- [Ceph 9 Storage for Hub PVs (ODF External Mode)](#ceph-9-storage-for-hub-pvs-odf-external-mode)
+- [Ceph Storage for Hub PVs (ODF External Mode)](#ceph-storage-for-hub-pvs-odf-external-mode)
 - [Three-node compact cluster](#three-node-compact-cluster)
 - [Hosted clusters on the KubeVirt platform](#hosted-clusters-on-the-kubevirt-platform)
 - [GitOps with Argo CD on hub1](#gitops-with-argo-cd-on-hub1)
@@ -53,7 +53,7 @@ High-Level-Arch
 | [`oadp/`](oadp/) | Generic OADP: the S3 bucket and IAM user, `setup_oadp.yaml`, fs vs csi, a hello-openshift smoke test, troubleshooting | [oadp/README.md](oadp/README.md) |
 | [`minio/`](minio/) | MinIO, the disconnected lab's local S3-compatible store - one bucket per consumer: OADP backups now, Loki/Tempo later | [minio/README.md](minio/README.md) |
 | [`bastion/`](bastion/) | A 256G VM for building and scanning container images - optional | [bastion/README.md](bastion/README.md) |
-| [`ceph/`](ceph/) | A standalone Ceph 9 cluster attached to a cluster through ODF external mode, instead of LVM Storage | [ceph/README.md](ceph/README.md) |
+| [`ceph/`](ceph/) | A standalone Ceph cluster (RHCS 8 or 9, `ceph_version`) attached to a cluster through ODF external mode, instead of LVM Storage | [ceph/README.md](ceph/README.md) |
 | [`compact-cluster/`](compact-cluster/) | A three-node compact cluster from one agent ISO, in the lab or on physical servers | [compact-cluster/README.md](compact-cluster/README.md) |
 | [`kubevirt/`](kubevirt/) | Hosted clusters on the KubeVirt platform | [kubevirt/README.md](kubevirt/README.md) |
 | [`gitops/`](gitops/) | OpenShift GitOps (Argo CD) on hub1, step by step | [gitops/README.md](gitops/README.md) |
@@ -98,7 +98,7 @@ replacement hub a hosted cluster is restored onto. Both hubs share the same S3
 bucket, so backups created on cluster1 are visible to cluster2's Velero.
 
 A cluster's PVs come from LVM Storage by default. They can instead come from a
-standalone Ceph 9 cluster running on the same bare-metal host, consumed through
+standalone Ceph cluster (RHCS 8 or 9, `ceph_version` in `vars.yaml`) running on the same bare-metal host, consumed through
 ODF external mode - see [ceph/README.md](ceph/README.md).
 
 ## Prerequisites
@@ -391,7 +391,7 @@ cd acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass
 > and `roles/setup-gitops` are gone (see [`gitops/`](gitops/)). Variable names,
 > `target_hub` values and rendered-file locations under `roles/` are unchanged.
 
-## Ceph 9 Storage for Hub PVs (ODF External Mode)
+## Ceph Storage for Hub PVs (ODF External Mode)
 
 **Lives in [`ceph/`](ceph/).** A standalone Red Hat Ceph Storage 9 cluster -
 `ceph1`-`ceph3` (mon + mgr + osd) and `cephadmin` (`.24`-`.27`) - built on the
@@ -401,7 +401,7 @@ external mode. It replaces LVM Storage as the hub's PV provider
 `csi` backup method needs - see
 [hcp/dr/README.md](hcp/dr/README.md#choose-how-the-control-plane-volumes-are-captured).
 Everything about building, attaching, verifying and tearing it down - sizing,
-the OCP 4.21+ requirement, the `ceph_dashboard_password` vault entry, and why it
+choosing between RHCS 8 and 9 (9 needs OCP 4.21+, use 8 on 4.20), the `ceph_dashboard_password` vault entry, and why it
 should not share `openshift-storage` with LVM Storage - is in
 [ceph/README.md](ceph/README.md).
 
@@ -553,7 +553,7 @@ delegates.
 | `hcp/dr/restore_hosted_cluster.yaml` | Restore a hosted cluster control plane |
 | `standard-cluster/shutdown_cluster.yaml` | Gracefully stop a standard cluster's VMs - cluster1 by default (preserves disks) |
 | `oadp/setup_oadp.yaml` | Wire OADP to S3 (credentials + DPA) |
-| `ceph/setup_ceph.yaml` | Build the standalone Ceph 9 cluster (ceph1-3 + cephadmin) - see [ceph/README.md](ceph/README.md) |
+| `ceph/setup_ceph.yaml` | Build the standalone Ceph cluster (ceph1-3 + cephadmin), RHCS 8 or 9 per `ceph_version` - see [ceph/README.md](ceph/README.md) |
 | `ceph/setup_ceph_odf.yaml` | Install ODF and attach that Ceph cluster to a cluster in external mode |
 | `compact-cluster/setup_compact_cluster.yaml` | The three-node compact cluster - see [compact-cluster/README.md](compact-cluster/README.md) |
 | `kubevirt/setup_hosted_cluster_kubevirt.yaml` | KubeVirt-platform hosted clusters - see [kubevirt/README.md](kubevirt/README.md) |
@@ -578,7 +578,7 @@ the playbook that uses them lives.
 | `setup-bastion-vm` | Creates the bastion VM: preflights free space where the disk will live, expands the prepared RHEL 9 base image into a 256G sparse qcow2, imports it, then discovers its DHCP address and adds it to the in-memory inventory (no reservation, unlike every other VM in this lab) |
 | `setup-bastion` | The in-guest half: build and scan tooling (podman/buildah/skopeo, grype with its db primed, optional trivy), `oc`, the mirror registry's CA and login, and a clone of `sadiquepp/openshift` under `/root/work` |
 | `setup-ceph-vm` | Creates the ceph1-3 + cephadmin VMs and attaches the raw OSD disks |
-| `setup-ceph-prereqs` | Registers the Ceph nodes with subscription-manager (no Satellite), enables the RHCS 9 tools repo, installs cephadm, and installs `pull_secret` as each node's podman authfile |
+| `setup-ceph-prereqs` | Registers the Ceph nodes with subscription-manager (no Satellite), enables the RHCS tools repo for `ceph_version`, installs cephadm, and installs `pull_secret` as each node's podman authfile |
 | `setup-ceph-cluster` | Runs `cephadm bootstrap` on ceph1, expands the cluster onto ceph2/ceph3 + cephadmin, places mon/mgr/osd daemons, and enables msgr2 |
 | `setup-ceph-odf-export` | Creates the RBD pool (+ optional CephFS) and runs the version-matched exporter on cephadmin to produce the connection JSON |
 | `setup-ceph-odf-consumer` | Installs the ODF operator and extracts its exporter script (stage `install`), then creates the external-cluster secret and `StorageCluster` (stage `create`) |

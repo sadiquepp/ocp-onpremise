@@ -1,6 +1,6 @@
 galaxy_info:
   author: sadiquepp
-  description: Enables RHCS9 repos (direct subscription-manager, no Satellite) and installs cephadm
+  description: Enables the RHCS 8 or 9 repos per ceph_version (direct subscription-manager, no Satellite) and installs cephadm
   license: MIT
   min_ansible_version: "2.9"
 
