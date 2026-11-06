@@ -47,6 +47,14 @@ instead.
 - [10. Verify, in this order](#10-verify-in-this-order)
 - [11. The failures that look like success](#11-the-failures-that-look-like-success)
 - [12. What from this repo still applies](#12-what-from-this-repo-still-applies)
+- [13. Test case: a compact cluster and an SNO on one fabric](#13-test-case-a-compact-cluster-and-an-sno-on-one-fabric)
+  - [13.1 The topology](#131-the-topology)
+  - [13.2 What changes per cluster](#132-what-changes-per-cluster)
+  - [13.3 Splitting green between the two clusters](#133-splitting-green-between-the-two-clusters)
+  - [13.4 Test workloads and shell helpers](#134-test-workloads-and-shell-helpers)
+  - [13.5 Test 1: live migration on the compact cluster, watched from the SNO](#135-test-1-live-migration-on-the-compact-cluster-watched-from-the-sno)
+  - [13.6 Test 2: one Layer2 network across both clusters](#136-test-2-one-layer2-network-across-both-clusters)
+  - [13.7 Pass criteria](#137-pass-criteria)
 
 ---
 
@@ -628,14 +636,29 @@ fabric reprograms.
 ### 8.3 Namespaces
 
 The `namespaceSelector` is what attaches a namespace to a network, and it is
-matched **at namespace creation**. Label first, then create workloads:
+matched **at namespace creation**. Create each namespace with its labels
+already on it - labelling an existing namespace afterwards does nothing:
 
 ```bash
 for t in blue red orange green purple; do
-  oc create namespace "$t" --dry-run=client -o yaml | oc apply -f -
-  oc label namespace "$t" "udn-tenant=$t" --overwrite
+  cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $t
+  labels:
+    udn-tenant: $t
+    k8s.ovn.org/primary-user-defined-network: ""
+EOF
 done
 ```
+
+`k8s.ovn.org/primary-user-defined-network` is not optional. Without it the
+CUDN sits at `NetworkCreated=False` (`NetworkAttachmentDefinitionSyncError`)
+while the namespace and its pods come up perfectly happily on the default
+cluster network. Only the key's presence is read; the empty value is
+deliberate. A namespace that was created without either label has to be
+deleted and recreated.
 
 Then confirm each network was realised into a NetworkAttachmentDefinition -
 the CUDN being accepted is not the same as it existing:
@@ -785,3 +808,782 @@ ansible-playbook -i ../inventory/hosts setup_udn_bgp_lab.yaml \
 You would need to replace the `clab_*` values with your fabric's. The
 per-node VTEP policies stay: `Managed` mode, which would make them
 unnecessary, is not implemented - see [6](#6-the-vtep).
+
+---
+
+## 13. Test case: a compact cluster and an SNO on one fabric
+
+A worked test plan for one specific estate: a **three-node compact cluster**
+and a **single-node OpenShift (SNO)** cluster, both attached to the same
+EVPN fabric. It shows two things:
+
+1. **Live migration** - this repo's live-migration test
+   ([bgp-evpn.md](bgp-evpn.md#live-migration-on-the-layer2-tenant),
+   [workshop.md Lab 12](workshop.md#lab-12-live-migration-across-a-stretched-layer2)),
+   moved onto real hardware. A VM moves between the compact cluster's
+   nodes while a pod **in the SNO** pings it.
+2. **Cross-cluster Layer2** - one `green` broadcast domain on L2VNI 400,
+   spanning both clusters. Pods in the two clusters reach each other bridged,
+   with no router between them, while `purple` stays isolated from them.
+
+> **Status: a plan, not a measurement.** The procedure is the one this repo
+> runs on its hub + SNO containerlab lab, where both tests pass (see
+> [HANDOFF.md](HANDOFF.md) and the measured run in
+> [bgp-evpn.md](bgp-evpn.md#measured-a-migration-watched-from-the-other-cluster)).
+> This exact topology - a compact cluster rather than a hub with dedicated
+> workers, and a real fabric rather than FRR containers - has not been run.
+> The outputs below are the **expected shape**, based on the lab's measured
+> output. Replace them with yours on the first run. Fabric-side commands are
+> FRR syntax and marked **[verify on site]**. Your network operating system
+> will have an equivalent for each.
+
+### 13.1 The topology
+
+```
+  +----------------------------------- fabric -----------------------------------+
+  |  leaf(s), AS 64513: transit for VNI 400 / RT 65000:400 (and 500 for purple)  |
+  |  green's external gateway 10.204.255.10, if the network team builds one      |
+  +--------+------------------+------------------+--------------------+----------+
+           |                  |                  |                    |
+     192.168.140.11     192.168.140.12     192.168.140.13       192.168.140.21
+        master-0           master-1           master-2               sno
+   VTEP 100.64.0.11   VTEP 100.64.0.12   VTEP 100.64.0.13     VTEP 100.64.0.21
+   \_______________ compact, AS 64512 _______________/        sno, AS 64515
+     green pods from 10.204.0.0/17                         green pods from 10.204.128.0/17
+     the VM lives here and migrates                        the observer
+```
+
+| | compact | sno |
+|---|---|---|
+| Nodes | `master-0`, `master-1`, `master-2` - control plane **and** worker | `sno` - control plane and worker |
+| Cluster ASN | `64512` | `64515` - **must differ**, see [13.2](#132-what-changes-per-cluster) |
+| Fabric address | `192.168.140.11`-`.13` | `192.168.140.21` |
+| VTEP `/32` | `100.64.0.11`-`.13` | `100.64.0.21` |
+| Tenants | green, purple (blue/red/orange optional) | green, purple |
+| green allocates from | `10.204.0.0/17` | `10.204.128.0/17`, minus the fabric's block |
+| OpenShift Virtualization | yes - three nodes give the VM somewhere to move | no - a single node has no migration target |
+| Role in Test 1 | runs the VM | watches it move |
+
+The addresses are examples in this document's own scheme (section
+[2.2](#22-per-fabric)). Substitute yours, but keep the shape. Both clusters
+can sit behind the same leaf or different leaves. Only the AS paths in the
+expected output change.
+
+**What a compact cluster changes, and what it does not:**
+
+- **Every node is a master.** Constraint 4 in [section 6](#6-the-vtep)
+  ("every node needs a VTEP address, including masters") is therefore not an
+  edge case here - it is all three nodes. Each gets its own `vtep-<node>`
+  policy and its own `/32`, and the leaf needs a route to each `/32`.
+- **Masters must be schedulable**, or no tenant pod, test pod or VM lands
+  anywhere. A compact install sets this. Check it:
+
+  ```bash
+  oc get scheduler cluster -o jsonpath='{.spec.mastersSchedulable}{"\n"}'   # true
+  oc get nodes                                                             # ROLES: control-plane,master,worker
+  ```
+
+- **The test DaemonSet below selects on `node-role.kubernetes.io/worker`.**
+  Compact and SNO nodes both carry that label, so one manifest works on both
+  clusters.
+- **Live-migration traffic shares the masters with etcd.** By default it uses
+  the pod network. On a busy compact cluster, consider a dedicated migration
+  network (`spec.liveMigrationConfig.network` on the `HyperConverged` CR).
+  This test does not need one: a 1Gi idle VM migrates in seconds.
+
+### 13.2 What changes per cluster
+
+Run sections [3](#3-cluster-prerequisites) to [9](#9-advertise-them) on
+**each** cluster on its own. Almost everything is identical. These are the
+only differences, and each one is a silent failure if you get it wrong:
+
+| Object | compact | sno | Why it matters |
+|---|---|---|---|
+| `FRRConfiguration` `spec.bgp.routers[0].asn` | `64512` | `64515` | The leaf passes the compact cluster's routes to the SNO with AS path `64513 64512`. If the SNO were also 64512, it would drop every one of them as a loop. That is what the lab saw: a healthy session, the right routes on the leaf, and an empty table on the far side, with no error anywhere. |
+| Leaf neighbour statements | 3 neighbours, `remote-as 64512` | 1 neighbour, `remote-as 64515` | Four sessions in total on the fabric side. |
+| `vtep-<node>` NNCPs | 3 policies, `.11`-`.13` | 1 policy, `.21` | Every VTEP address unique across **both** clusters. The leaf needs a `/32` route to all four. |
+| `VTEP` CR | `cidrs: [100.64.0.0/24]`, `Unmanaged` | the same | Each cluster's CR only checks its own nodes, so sharing the block is fine. "Exactly one address per node inside the CIDRs" is checked per cluster. |
+| green / purple CUDN `reservedSubnets` | the SNO's half | the compact cluster's half | [13.3](#133-splitting-green-between-the-two-clusters). |
+| green / purple CUDN `evpn.macVRF` | `vni: 400` / `500`, `routeTarget: "65000:400"` / `"65000:500"` | **identical** | This is what makes it one network. **Set `routeTarget` explicitly on both.** FRR's automatic route target is `<ASN>:<VNI>`, so two clusters with different ASNs would export `64512:400` and `64515:400` and never import each other's routes. |
+
+On the fabric side, ask the network team to confirm four things for VNI 400
+and 500 specifically:
+
+1. **Transit leaves keep the routes.** A leaf or spine with no local VNI 400
+   discards every EVPN route whose route target it does not import - unless
+   it is told to keep them (FRR: `bgp retain route-target all` under
+   `address-family l2vpn evpn`, which is what this lab's leaf1 and spine do).
+   This is the most common cause of healthy sessions and an empty table on
+   the far side. **[verify on site]**
+2. **Next hops arrive unchanged.** The compact cluster's type-2 and type-3
+   routes must reach the SNO with the **originating node's VTEP** as next hop
+   (`100.64.0.1x`), never a leaf or spine address. Tunnels go node to node;
+   a rewritten next hop pulls every frame through a box that has no VNI 400
+   to decapsulate it into. In the lab the spine needs `set ip next-hop
+   unchanged` for this. **[verify on site]**
+3. **Every VTEP `/32` is routed** - all three masters, not just the one the
+   VM starts on. Test 1 moves the VM onto every master in turn, and that
+   is how a missing `/32` shows up.
+4. **Duplicate-address detection will see the gateway MAC on more than one
+   VTEP.** See [13.6, check 8](#check-8-the-one-thing-that-is-shared-and-should-not-be).
+   It is expected, and the team should know before it pages anyone.
+
+### 13.3 Splitting green between the two clusters
+
+[Section 2.3](#23-two-things-people-forget) explains why the split is needed:
+each cluster's IPAM allocates from `10.204.0.0/16` without knowing about the
+other. This is the split for this topology.
+
+**Give the multi-node cluster the low half.** OVN-Kubernetes needs addresses
+at the bottom of the subnet in **every** cluster: `.1` is the Layer2 switch's
+gateway, and each node takes a management-port address after it (`.2`, and
+on a three-node cluster `.3` and `.4`). Reserving any of them is
+**fatal**, not rejected:
+
+```
+failed to exclude subnet 10.204.0.2/32 for cluster_udn_green_ovn_layer2_switch:
+  failed to reserve IP 10.204.0.2: provided IP is already allocated
+F failed to run ovnkube
+```
+
+ovnkube-node goes into CrashLoopBackOff, and **all** pod networking on that
+node goes with it, not just green. Put the compact cluster in the low half
+and its infrastructure addresses are inside its own half, with nothing to
+carve out. The SNO goes in the high half and leaves `.1` and `.2` free -
+exactly one node's worth, which is what the lab's SNO runs on.
+
+compact - reserve the SNO's half. The fabric's block `10.204.255.0/24` is
+inside it, so the gateway is covered too:
+
+```yaml
+      reservedSubnets:
+        - 10.204.128.0/17       # the SNO's half, including the fabric's 10.204.255.0/24
+```
+
+sno - reserve the compact cluster's half **except `.1` and `.2`**, then the
+fabric's block a second time, because it is inside this cluster's half:
+
+```yaml
+      reservedSubnets:
+        - 10.204.0.3/32         # .0-.2 stay free: .1 gateway, .2 this node's management port
+        - 10.204.0.4/30
+        - 10.204.0.8/29
+        - 10.204.0.16/28
+        - 10.204.0.32/27
+        - 10.204.0.64/26
+        - 10.204.0.128/25
+        - 10.204.1.0/24
+        - 10.204.2.0/23
+        - 10.204.4.0/22
+        - 10.204.8.0/21
+        - 10.204.16.0/20
+        - 10.204.32.0/19
+        - 10.204.64.0/18
+        - 10.204.255.0/24       # the fabric's block on green: gateway .10, any test hosts
+```
+
+That list is the lab's own (`evpn_l2_excludes.sno` in `vars.yaml`), and it
+is the right size for a reason:
+
+- **Too small, and the node crashes**, as above.
+- **Too big, and the split does nothing.** IPAM hands out the lowest free
+  address, so any address left unreserved in the low half is where the SNO's
+  first pods go - inside the compact cluster's range. A 16-address hole put
+  the lab SNO's pods on `.3` and `.5`.
+
+Do the same for purple with its own fabric block. Two more rules:
+
+- **Decide the split before creating the CUDN.** Changing the network spec
+  of a CUDN that is in use means deleting and recreating it, and every pod
+  on it.
+- **Read the field back after applying it.** The field name differs between
+  topologies, and Kubernetes silently drops a field the CRD does not declare
+  (see the box in [2.3](#23-two-things-people-forget)):
+
+  ```bash
+  oc get ClusterUserDefinedNetwork green -o jsonpath='{.spec.network.layer2.reservedSubnets}{"\n"}'
+  ```
+
+  Empty output means the split is not there, and both clusters will
+  allocate the same low addresses.
+
+### 13.4 Test workloads and shell helpers
+
+Both tests run from one shell holding both kubeconfigs:
+
+```bash
+export COMPACT_KUBECONFIG=/path/to/compact/kubeconfig
+export SNO_KUBECONFIG=/path/to/sno/kubeconfig
+oc_c() { oc --kubeconfig "$COMPACT_KUBECONFIG" "$@"; }
+oc_s() { oc --kubeconfig "$SNO_KUBECONFIG" "$@"; }
+FRR_NS=openshift-frr-k8s
+
+# The tenant address of a pod: ovn-udn1, NOT status.podIP. For a primary UDN,
+# podIP is the cluster-network address on eth0 and has nothing to do with
+# the fabric.
+udnip() { "$1" -n "$2" exec "$3" -- ip -o -4 addr show ovn-udn1 | awk '{split($4,a,"/"); print a[1]}'; }
+
+SNO_NODE=$(oc_s get nodes -o jsonpath='{.items[0].metadata.name}')
+```
+
+Two workloads per tenant per cluster, cut down from the role's
+`templates/workload.yaml.j2` and `templates/webload.yaml.j2`:
+
+- **`udn-test`**, a DaemonSet with ping, curl, `ip` and tcpdump. Every node
+  gets one, so every compact master has a pod to test from.
+- **`udn-web`**, a web page that says **which tenant and which cluster**
+  answered. This matters because green and purple can hold the same address,
+  and a ping reply cannot say which of them answered.
+
+```bash
+cat > udn-test-workload.yaml <<'EOF'
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: udn-test, namespace: @TENANT@}
+---
+# NET_RAW/NET_ADMIN need the privileged SCC. Pod Security labels alone are not
+# enough: without this binding the DaemonSet creates no pods at all.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: udn-test-privileged, namespace: @TENANT@}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: "system:openshift:scc:privileged"}
+subjects: [{kind: ServiceAccount, name: udn-test, namespace: @TENANT@}]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: udn-test, namespace: @TENANT@}
+spec:
+  selector: {matchLabels: {app: udn-test}}
+  template:
+    metadata: {labels: {app: udn-test}}
+    spec:
+      serviceAccountName: udn-test
+      nodeSelector: {node-role.kubernetes.io/worker: ""}   # compact masters and the SNO both match
+      tolerations: [{operator: Exists, effect: NoSchedule}]
+      containers:
+        - name: shell
+          image: registry.redhat.io/rhel9/support-tools:latest
+          command: ["/bin/bash", "-c", "sleep infinity"]
+          securityContext: {capabilities: {add: ["NET_RAW", "NET_ADMIN"]}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: udn-web, namespace: @TENANT@, labels: {app: udn-web}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: udn-web}}
+  template:
+    metadata: {labels: {app: udn-web}}
+    spec:
+      initContainers:
+        - name: render-page
+          image: registry.redhat.io/rhel9/support-tools:latest
+          env: [{name: NODE_NAME, valueFrom: {fieldRef: {fieldPath: spec.nodeName}}}]
+          command:
+            - /bin/bash
+            - -c
+            - |
+              udn=$(ip -o -4 addr show ovn-udn1 | awk '{print $4}')
+              { echo "I am @TENANT@ on @CLUSTER@"; echo
+                echo "tenant:   @TENANT@"; echo "cluster:  @CLUSTER@"
+                echo "node:     $NODE_NAME"; echo "udn:      $udn"; } > /page/index.html
+          volumeMounts: [{name: page, mountPath: /page}]
+      containers:
+        - name: httpd
+          image: registry.access.redhat.com/ubi9/httpd-24:latest   # serves on 8080
+          volumeMounts: [{name: page, mountPath: /var/www/html}]
+      volumes: [{name: page, emptyDir: {}}]
+EOF
+
+for t in green purple; do
+  oc_c label ns "$t" pod-security.kubernetes.io/enforce=privileged --overwrite
+  oc_s label ns "$t" pod-security.kubernetes.io/enforce=privileged --overwrite
+  sed "s/@TENANT@/$t/g; s/@CLUSTER@/compact/g" udn-test-workload.yaml | oc_c apply -f -
+  sed "s/@TENANT@/$t/g; s/@CLUSTER@/sno/g"     udn-test-workload.yaml | oc_s apply -f -
+done
+oc_c -n green get pods -o wide; oc_s -n green get pods -o wide
+```
+
+Expect three `udn-test` pods on the compact cluster (one per master) and one
+on the SNO, plus one `udn-web` in each. `scripts/udn-xcluster-curl.sh` looks
+for exactly these labels and this page format, so Test 2 can use it
+unchanged.
+
+---
+
+### 13.5 Test 1: live migration on the compact cluster, watched from the SNO
+
+**What it proves.** A VM on green moves from one compact master to another,
+and keeps its IP and MAC. A pod in a **different cluster** keeps pinging it
+throughout. When the VM moves, the SNO starts tunnelling to the new
+master's VTEP, because a BGP route told it to. Nothing re-addresses
+anything, and nothing outside the compact cluster is reconfigured.
+
+This is why green is Layer2 with `ipam.lifecycle: Persistent`. A migration
+replaces the `virt-launcher` pod. On a Layer3 network the new node owns a
+different slice of the subnet, so the VM would come back with a different
+address. Persistent IPAM ties the address to the VM, not to the pod.
+
+> Test 1's observer is in the SNO, so it relies on the stretch that Test 2
+> examines in detail. If the ping in step 4 never gets a single reply, run
+> Test 2 checks 1-4 first.
+
+#### Step 1. OpenShift Virtualization on the compact cluster
+
+Install it as in [bgp-evpn.md, "Install OpenShift
+Virtualization"](bgp-evpn.md#install-openshift-virtualization): the
+namespace, OperatorGroup and Subscription, wait for the CSV, then a
+`HyperConverged` with `spec: {}`. Run those blocks with
+`KUBECONFIG=$COMPACT_KUBECONFIG`. On a disconnected cluster, point the
+Subscription at your mirrored catalog. The SNO does not need it.
+
+Then confirm there is somewhere to migrate **to**:
+
+```bash
+oc_c -n openshift-cnv get hyperconverged kubevirt-hyperconverged \
+  -o jsonpath='{.status.conditions[?(@.type=="Available")].status}{"\n"}'   # True
+oc_c get nodes -l kubevirt.io/schedulable=true                              # all three masters
+```
+
+On bare metal, the nested-virtualisation caveat in bgp-evpn.md does not
+apply. If a master is missing from that list, check that virtualisation
+extensions are enabled in its firmware.
+
+#### Step 2. The VM
+
+The lab's VM, unchanged except for the namespace. It uses green, the
+namespace's primary network, through the `l2bridge` binding, so the VM's own
+MAC and IP sit on the UDN switch rather than NATed behind the pod's:
+
+```bash
+cat <<'EOF' | oc_c apply -f -
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: green-vm
+  namespace: green
+spec:
+  runStrategy: Always
+  template:
+    spec:
+      domain:
+        devices:
+          disks:
+            - {name: rootdisk, disk: {bus: virtio}}
+            - {name: cloudinit, disk: {bus: virtio}}
+          interfaces:
+            - name: green-net
+              binding:
+                name: l2bridge          # on the UDN's switch itself - its own MAC and IP
+        resources:
+          requests:
+            memory: 1Gi
+      networks:
+        - name: green-net
+          pod: {}                       # "the namespace's primary network" = green
+      volumes:
+        - name: rootdisk
+          containerDisk:                # immutable and present on every node: migratable
+            image: quay.io/containerdisks/fedora:41
+        - name: cloudinit
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              password: green
+              chpasswd: { expire: False }
+EOF
+oc_c -n green wait vm/green-vm --for=condition=Ready --timeout=10m
+```
+
+If `l2bridge` is rejected as an unknown binding, check `spec.network.binding`
+on the `HyperConverged`. If you use a PVC rather than a `containerDisk`, it
+must be RWX, or the VM is not migratable.
+
+#### Step 3. Before: four views of where the VM is
+
+Save each output. You will run the same commands after the migration and
+compare.
+
+**a. The VM** - address, MAC, node:
+
+```bash
+oc_c -n green get vmi green-vm -o custom-columns=\
+NAME:.metadata.name,IP:.status.interfaces[0].ipAddress,MAC:.status.interfaces[0].mac,NODE:.status.nodeName
+VMIP=$(oc_c -n green get vmi green-vm -o jsonpath='{.status.interfaces[0].ipAddress}')
+MAC=$(oc_c -n green get vmi green-vm -o jsonpath='{.status.interfaces[0].mac}')
+```
+
+```
+NAME       IP           MAC                 NODE
+green-vm   10.204.0.9   0a:58:0a:cc:00:09   master-0
+```
+
+The address is from the compact cluster's half, `10.204.0.0/17`. The MAC is
+derived from it: `0a:58` followed by `10.204.0.9` in hex. That is why a VM
+that keeps its IP also keeps its MAC.
+
+**b. The SNO's VXLAN forwarding table** - which VTEP the *other cluster*
+encapsulates to for that MAC. The device names come from the VTEP CR's name
+(`evpn-vtep`):
+
+```bash
+oc_s debug node/$SNO_NODE --quiet -- chroot /host \
+  bridge fdb show dev evx4-evpn-vtep | grep "$MAC"
+```
+
+```
+0a:58:0a:cc:00:09 vlan 2 extern_learn master evbr-evpn-vtep
+0a:58:0a:cc:00:09 dst 100.64.0.11 src_vni 400 self extern_learn
+```
+
+`dst 100.64.0.11` is master-0's VTEP.
+
+**c. The BGP route behind it**, from the SNO's FRR. FRR runs in the
+frr-k8s pod, not on the host, so `vtysh` under `oc debug` reports "failed to
+connect to any daemons":
+
+```bash
+oc_s -n $FRR_NS exec ds/frr-k8s -c frr -- \
+  vtysh -c 'show bgp l2vpn evpn route type macip' | grep -A2 "$MAC"
+```
+
+```
+ *>  [2]:[0]:[48]:[0a:58:0a:cc:00:09]
+                    100.64.0.11                            0 64513 64512 i
+                    RT:65000:400 ET:8
+ *>  [2]:[0]:[48]:[0a:58:0a:cc:00:09]:[32]:[10.204.0.9]
+                    100.64.0.11                            0 64513 64512 i
+                    RT:65000:400 ET:8
+```
+
+Next hop is master-0's own VTEP (the fabric left it unchanged). The AS path
+`64513 64512` is the leaf, then the compact cluster. If the clusters are
+behind different leaves, the spine's and the other leaf's ASNs appear in
+between. `ET:8` is VXLAN. There is no `MM:` yet: the MAC has never moved.
+
+**d. The fabric's view**, if you have access to the leaf. **[verify on site]**
+
+```bash
+# FRR: show evpn mac vni 400 | grep 0a:58:0a:cc:00:09
+# NX-OS: show l2route evpn mac evi 400 | Arista EOS: show bgp evpn route-type mac-ip 0a58.0acc.0009
+```
+
+The MAC behind `100.64.0.11`.
+
+#### Step 4. Migrate while the SNO pings
+
+Window 1 - start a ping **from the SNO**, across clusters, and leave it
+running:
+
+```bash
+S_POD=$(oc_s -n green get pods -l app=udn-test -o name | head -1)
+oc_s -n green exec "$S_POD" -- ping -D -i 0.2 -w 120 "$VMIP"    # 5/s for two minutes
+```
+
+`-w 120` stops ping by itself after two minutes, so it prints its summary.
+Ctrl-C would kill your local `oc` instead, and the summary would be lost.
+`-D` timestamps each reply, so you can see where any gap fell.
+
+If the network team has built green's external gateway, run a second
+observer **from the fabric** in another window: from `10.204.255.10`, or any
+host in green's bridge domain, `ping -i 0.2 <vm ip>`. That shows that
+nothing outside both clusters noticed the move either. **[verify on site]**
+
+Window 2 - within the two minutes, migrate:
+
+```bash
+cat <<'EOF' | oc_c apply -f -
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstanceMigration
+metadata:
+  name: green-vm-migrate-1
+  namespace: green
+spec:
+  vmiName: green-vm
+EOF
+oc_c -n green get vmim green-vm-migrate-1 -w
+# Scheduling, Scheduled, PreparingTarget, TargetReady, Running, Succeeded - ctrl-c
+```
+
+If it refuses, the reason is on the VMI:
+`oc_c -n green get vmi green-vm -o jsonpath='{.status.conditions}' | python3 -m json.tool`.
+
+#### Step 5. After: the same four views
+
+Re-run 3a-3d. Expected:
+
+```
+NAME       IP           MAC                 NODE
+green-vm   10.204.0.9   0a:58:0a:cc:00:09   master-1
+
+0a:58:0a:cc:00:09 vlan 2 extern_learn master evbr-evpn-vtep
+0a:58:0a:cc:00:09 dst 100.64.0.12 src_vni 400 self extern_learn
+
+ *>  [2]:[0]:[48]:[0a:58:0a:cc:00:09]
+                    100.64.0.12                            0 64513 64512 i
+                    RT:65000:400 ET:8 MM:1
+```
+
+And the ping summary, once the deadline is up. The lab's two measured runs:
+
+```
+144 packets transmitted, 144 received, 0% packet loss               <- 1/s
+597 packets transmitted, 595 received, 0.335008% packet loss        <- -i 0.2 -w 120
+```
+
+| | Before | After | What changed it |
+|---|---|---|---|
+| VM IP / MAC | `10.204.0.9` / `0a:58:0a:cc:00:09` | **the same** | `ipam.lifecycle: Persistent` kept the IP. The MAC follows from the IP |
+| VM node | master-0 | master-1 | the migration |
+| SNO's BGP next hop | `100.64.0.11` | `100.64.0.12` | master-1 now advertises the MAC with its own VTEP, and master-0 withdrew its route |
+| `MM:` | absent | `MM:1` | **MAC Mobility.** The sequence number goes up on every move, so every speaker prefers the newer location even if the old withdraw arrives late |
+| SNO FDB `dst` | `100.64.0.11` | `100.64.0.12` | zebra on the SNO, acting on that route |
+
+`extern_learn` on the FDB entry proves the control plane made the change.
+The VXLAN port has learning turned off, so the data plane *cannot* write
+that entry. Only zebra, acting on a BGP route, can. And nothing between the
+clusters could have redirected the traffic: the fabric only ever sees the
+outer packet, addressed to a VTEP `/32`.
+
+**Expect no loss, or a handful of packets - not a stream.** The cutover is
+the VM pausing for the last memory copy plus the new route reaching the
+SNO. At five pings a second, one or two lost is about 0.4 s. Losses that
+continue after `Succeeded` mean the SNO is still sending to the old master.
+Compare the FDB `dst` with the VM's node.
+
+#### Step 6. Visit every master
+
+Migrate twice more, `green-vm-migrate-2` and `-3`, so the VM lands on each
+master in turn. Keep a ping running for each. One migration only tests the
+two VTEPs involved. Visiting all three tests that the leaf routes **every**
+compact master's `/32`, which is how a missing route on a real fabric shows
+up: the migration reports `Succeeded`, and the cross-cluster ping stops dead
+and does not recover.
+
+| Migration | VM node (example) | SNO FDB `dst` | `MM:` |
+|---|---|---|---|
+| start | master-0 | `100.64.0.11` | absent |
+| 1 | master-1 | `100.64.0.12` | 1 |
+| 2 | master-2 | `100.64.0.13` | 2 |
+| 3 | master-0 | `100.64.0.11` | 3 |
+
+The scheduler picks the target, so your order may differ. If a migration
+picks a node the VM has already been on, run another, or add a temporary
+`nodeSelector` to the VM to steer it.
+
+Leave about a minute between migrations. Fabric duplicate-address detection
+counts MAC moves - FRR's default is 5 moves in 180 s - and three quick
+migrations plus the gateway MAC noise from 13.6 check 8 can get close to
+the limit. A MAC frozen by DAD stops following the VM. **[verify on site]**
+for your NOS's thresholds.
+
+---
+
+### 13.6 Test 2: one Layer2 network across both clusters
+
+**What it proves.** green on the compact cluster and green on the SNO are
+**one broadcast domain**. A pod in one cluster reaches a pod in the other
+on-link, bridged - same subnet, no router hop, the remote pod's own MAC in
+the ARP table. The traffic is carried as VXLAN between node VTEPs, and the
+control plane is EVPN type-3 (flood list) and type-2 (MAC) routes crossing
+from one AS to the other through the fabric. purple uses the same addresses
+on a different VNI and stays completely separate.
+
+Run the checks in order. Each one depends on the one before it.
+
+#### Check 1. Sessions: four peers, both address families
+
+On the leaf: three neighbours in AS 64512 and one in AS 64515, all
+`Established` for IPv4 unicast **and** l2vpn evpn. **[verify on site]**
+(FRR: `show bgp summary`, `show bgp l2vpn evpn summary`.) From each cluster:
+
+```bash
+oc_c get frrnodestate -o wide; oc_s get frrnodestate -o wide
+oc_s -n $FRR_NS exec ds/frr-k8s -c frr -- vtysh -c 'show bgp l2vpn evpn summary'
+```
+
+`NoNeg` for EVPN on the cluster side means no `RouteAdvertisements` has
+selected an EVPN network yet ([section 7](#7-bgp-peering)).
+
+#### Check 2. Underlay: each cluster can reach the other's VTEPs
+
+```bash
+oc_s debug node/$SNO_NODE --quiet -- chroot /host \
+  sh -c 'for v in 100.64.0.11 100.64.0.12 100.64.0.13; do ip route get $v; done'
+oc_c debug node/master-0 --quiet -- chroot /host ip route get 100.64.0.21
+```
+
+Each should resolve via the leaf. If this fails, every check below will
+"form and carry nothing" ([section 11](#11-the-failures-that-look-like-success), first row).
+
+#### Check 3. Type-3: each cluster is in the other's flood list
+
+Type-3 (IMET) routes are what let ARP cross between the clusters, so they
+come before anything else. On the SNO, VNI 400 should list all three compact
+VTEPs, originated by AS 64512:
+
+```bash
+oc_s -n $FRR_NS exec ds/frr-k8s -c frr -- \
+  vtysh -c 'show bgp l2vpn evpn route type multicast' | grep -E '100\.64\.0\.1[123]'
+oc_s debug node/$SNO_NODE --quiet -- chroot /host \
+  bridge fdb show dev evx4-evpn-vtep | grep 00:00:00:00:00:00
+```
+
+```
+00:00:00:00:00:00 dst 100.64.0.11 src_vni 400 self permanent
+00:00:00:00:00:00 dst 100.64.0.12 src_vni 400 self permanent
+00:00:00:00:00:00 dst 100.64.0.13 src_vni 400 self permanent
+```
+
+Plus the fabric's own VTEP(s) if the team built a gateway on VNI 400, and
+the same again for VNI 500. On a compact master, the mirror image: the
+SNO's `100.64.0.21` plus the other two masters.
+
+```bash
+oc_c debug node/master-0 --quiet -- chroot /host \
+  bridge fdb show dev evx4-evpn-vtep | grep 00:00:00:00:00:00
+```
+
+**A cluster missing from the other's flood list is the classic fabric-side
+failure**: a transit leaf without `retain route-target all`, or route
+targets that differ (auto-derived on one side - see
+[13.2](#132-what-changes-per-cluster)). Sessions are healthy and the table
+on the far side is empty.
+
+#### Check 4. The split held
+
+```bash
+for t in green purple; do
+  echo "== $t compact"; oc_c -n $t get pods -l app=udn-test -o name | while read -r p; do udnip oc_c $t $p; done
+  echo "== $t sno";     oc_s -n $t get pods -l app=udn-test -o name | while read -r p; do udnip oc_s $t $p; done
+done
+```
+
+compact's addresses must be in `10.204.0.0/17` and the SNO's in
+`10.204.128.0/17`. An SNO pod on a low address (`10.204.0.x`) means its
+reservation was dropped or is too small ([13.3](#133-splitting-green-between-the-two-clusters)).
+green and purple on the **same** cluster may well hold the **same** address.
+That is intended, and it is why Check 7 uses curl.
+
+#### Check 5. Pod to pod across clusters, bridged
+
+From the SNO's green pod to green on every compact master, then back:
+
+```bash
+S_POD=$(oc_s -n green get pods -l app=udn-test -o name | head -1)
+S_IP=$(udnip oc_s green "$S_POD")
+for p in $(oc_c -n green get pods -l app=udn-test -o name); do
+  ip=$(udnip oc_c green "$p")
+  echo "== sno -> $ip ($p)"; oc_s -n green exec "$S_POD" -- ping -c3 -W1 "$ip" | grep -E 'ttl|loss'
+  echo "== $ip -> sno $S_IP"; oc_c -n green exec "$p" -- ping -c3 -W1 "$S_IP" | grep -E 'ttl|loss'
+done
+```
+
+```
+== sno -> 10.204.0.5 (pod/udn-test-abcde)
+64 bytes from 10.204.0.5: icmp_seq=1 ttl=64 time=0.61 ms
+3 packets transmitted, 3 received, 0% packet loss
+```
+
+**`ttl=64` is the result**, not just the reply. The inner packet crossed
+two clusters and the fabric and was never routed. The ARP table confirms
+it - the remote pod's own MAC, not a router's:
+
+```bash
+oc_s -n green exec "$S_POD" -- ip neigh show dev ovn-udn1
+# 10.204.0.5 lladdr 0a:58:0a:cc:00:05 REACHABLE      <- 0a:58 + the compact pod's own IP
+```
+
+A reply with `ttl=63` or lower means something routed the packet. The two
+pods are then not in one broadcast domain, whatever the configuration says.
+
+#### Check 6. Full-size frames cross
+
+A real fabric is where MTU problems appear. Ping at the UDN interface's
+full MTU with fragmentation forbidden:
+
+```bash
+MTU=$(oc_s -n green exec "$S_POD" -- cat /sys/class/net/ovn-udn1/mtu)
+oc_s -n green exec "$S_POD" -- ping -c3 -M do -s $((MTU - 28)) "$(udnip oc_c green "$(oc_c -n green get pods -l app=udn-test -o name | head -1)")"
+```
+
+Small pings work and this one fails: some link between the two VTEPs has an
+MTU below pod MTU + 50 ([2.2](#22-per-fabric)). TCP connects and then stalls
+on the first full segment. That looks like an application bug, and it
+isn't.
+
+#### Check 7. Type-2 programmed by BGP, and isolation by identity
+
+The compact pod's MAC on the SNO is behind its own master's VTEP, and was
+written by the control plane. Use the MAC `ip neigh` showed in Check 5:
+
+```bash
+oc_s debug node/$SNO_NODE --quiet -- chroot /host \
+  bridge fdb show dev evx4-evpn-vtep | grep 0a:58:0a:cc:00:05
+# 0a:58:0a:cc:00:05 dst 100.64.0.11 src_vni 400 self extern_learn
+```
+
+`dst` is the VTEP of the master that pod runs on (`oc_c -n green get pods
+-o wide`). `extern_learn` means BGP put it there, as in Test 1.
+
+Then the whole matrix, by HTTP, in both directions:
+
+```bash
+scripts/udn-xcluster-curl.sh "$COMPACT_KUBECONFIG" "$SNO_KUBECONFIG"
+```
+
+It detects EVPN mode (a tenant present in two clusters) and curls every
+`udn-web` from every tenant's `udn-test` pod in both clusters. Pass:
+
+- green in each cluster gets **"I am green on compact"** and **"I am green
+  on sno"** - itself, across the boundary, both ways. The same for purple.
+- green never gets an answer from purple, and purple never from green,
+  **including where they hold the same address**. The page names its own
+  tenant, so an address collision is settled, not reported as AMBIG.
+
+This is the isolation that matters for a stretched L2: the VNI and the
+route target are the boundary, not the addresses.
+
+#### Check 8. The one thing that is shared and should not be
+
+Both clusters put green's gateway on `10.204.0.1`, and the SNO's management
+port on `.2` duplicates one of the compact cluster's. OVN-Kubernetes derives
+the MAC from the IP, so **the same MAC (`0a:58:0a:cc:00:01`) is advertised
+from more than one VTEP, in two clusters**:
+
+```bash
+oc_s -n $FRR_NS exec ds/frr-k8s -c frr -- \
+  vtysh -c 'show bgp l2vpn evpn route type macip' | grep -A1 '0a:58:0a:cc:00:01'
+```
+
+This is a known limitation, not a misconfiguration
+([HANDOFF.md](HANDOFF.md), finding 1). `reservedSubnets` cannot fix it,
+because every cluster needs these addresses. What it means for this test
+case:
+
+- **Pod to pod, both checks above, and the live migration are unaffected.**
+  They never use the gateway: same-subnet traffic is on-link.
+- **Traffic leaving green through the cluster's gateway** (`10.204.0.1`) goes
+  to whichever cluster's router answered the ARP. Do not test north-south
+  across the stretch and read the result as an EVPN fault.
+- **The fabric may flag the gateway MAC** as moving, or freeze it under
+  duplicate-address detection. Tell the network team in advance. **[verify on site]**
+
+---
+
+### 13.7 Pass criteria
+
+| # | Test | Pass | Points at, when it fails |
+|---|---|---|---|
+| 1.1 | VM before/after | Node changed. IP and MAC **identical** | `ipam.lifecycle: Persistent` missing on green, or a Layer3 network |
+| 1.2 | SNO ping during migration | 0 to a few packets lost at 5/s. Nothing lost after `Succeeded` | Losses continue: SNO FDB still points at the old VTEP. Check type-2 propagation |
+| 1.3 | SNO FDB / route after | `dst` and next hop = new master's VTEP, `extern_learn`, `MM:` incremented | No `MM:` change: the route did not cross. Next hop is a leaf address: next hop rewritten ([13.2](#132-what-changes-per-cluster) item 2) |
+| 1.4 | All three masters visited | Ping recovers after every migration | Ping dies on one node: the leaf has no `/32` for that master's VTEP |
+| 2.1 | Sessions | 4 peers, IPv4 + EVPN `Established` | [Section 10](#10-verify-in-this-order) step 1, TCP-MD5 row in [11](#11-the-failures-that-look-like-success) |
+| 2.2 | Underlay | `ip route get <remote VTEP>` via the leaf, both ways | Unicast AF missing, or the fabric does not carry the `/32`s |
+| 2.3 | Type-3 | Each cluster's VTEPs in the other's flood list, VNI 400 and 500 | Transit leaf discarding routes (`retain route-target all`), or auto route targets |
+| 2.4 | IPAM split | compact in `10.204.0.0/17`, SNO in `10.204.128.0/17` | `reservedSubnets` pruned (wrong field name) or the hole too large |
+| 2.5 | Pod to pod | Replies both ways, **`ttl=64`**, remote pod's own MAC in `ip neigh` | `ttl` < 64: something is routing. No reply with 2.3 passing: forwarding, [5.3](#53-ip-forwarding) |
+| 2.6 | Full-size frames | DF ping at `MTU - 28` succeeds | Underlay MTU < pod MTU + 50 somewhere on the path |
+| 2.7 | `udn-xcluster-curl.sh` | Same tenant answers across clusters, every cross-tenant cell silent | A cross-tenant answer: VNI / route target shared between green and purple |
+| 2.8 | Gateway MAC | Known and explained, not chased | - |
