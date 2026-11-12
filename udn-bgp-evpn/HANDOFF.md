@@ -3,7 +3,7 @@
 Written at the end of a long session so the next one — possibly on a different
 machine or account — can pick up without re-deriving anything. Everything
 described here is committed and pushed on `claude/dazzling-cannon-t9qwph`,
-merged to `integration`.
+merged to `main`.
 
 Point a new session at this file first, then `bgp-evpn.md` for depth.
 
