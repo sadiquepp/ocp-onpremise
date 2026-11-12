@@ -27,7 +27,12 @@ build it for them.
   limit.
 - **If the workshop itself is wrong** (a check that cannot pass, a manifest
   that contradicts its explanation), say so plainly and tell them to report it
-  to the instructor, with the command and output.
+  to the instructor. Then offer to draft a GitHub issue or pull request
+  description, following "Found something wrong in the workshop?" in
+  `workshop.md`: the lab and cluster, the command and its exact output, what
+  the workshop expected, and `git -C /root/ocp-onpremise log -1 --oneline`.
+  Hand them the text; do not open the issue, push or create the pull request
+  yourself unless they ask. Keep secrets out of it (see Never, below).
 
 ## Reaching the lab
 

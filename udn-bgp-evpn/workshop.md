@@ -48,6 +48,7 @@ afterwards.
 - [Part C - Optional: the same tenants over VRF-Lite](#part-c---optional-the-same-tenants-over-vrf-lite)
 - [The minimal test set](#the-minimal-test-set)
 - [Catching up, checking, and when something is wrong](#catching-up-checking-and-when-something-is-wrong)
+  - [Found something wrong in the workshop?](#found-something-wrong-in-the-workshop)
 - [Tearing it down](#tearing-it-down)
 
 ---
@@ -472,7 +473,8 @@ working out why it chose that command is half of what the workshop teaches.
 Your account's usage limit applies, and long outputs use it up fastest;
 `CLAUDE.md` tells Claude to filter what it reads, and you can ask it for less.
 If the workshop itself looks wrong - a check that cannot pass - tell the
-instructor as well.
+instructor as well, and see
+[Found something wrong in the workshop?](#found-something-wrong-in-the-workshop).
 
 ---
 
@@ -2716,6 +2718,64 @@ and a missing SNAT exclusion.
 
 The long form of every one of these, with how it was found:
 [README.md](README.md#troubleshooting) and [troubleshooting.md](troubleshooting.md).
+
+### Found something wrong in the workshop?
+
+A check that cannot pass, a manifest that contradicts its own explanation, a
+step that is missing: tell the instructor, then put it on GitHub so it gets
+fixed for the next person. You need a GitHub account and nothing else - no
+access to the repository.
+
+**No fix in mind: open an issue** at
+[github.com/sadiquepp/ocp-onpremise/issues/new](https://github.com/sadiquepp/ocp-onpremise/issues/new).
+The issues that get fixed quickly say:
+
+- the lab and cluster - *Lab 4, hub*
+- the command, and what it printed, word for word
+- what the workshop said it should print
+- which version of the workshop you have:
+
+  ```bash
+  git -C /root/ocp-onpremise log -1 --format='%h %cs %s'
+  ```
+
+Never paste anything from `vault.yaml`, the pull secret, a kubeconfig or
+the BGP key. The lab's own addresses (`192.168.140.x`, `100.64.0.x`) are
+fine.
+
+**A fix in hand: open a pull request from a fork.** You cannot push to this
+repository, and do not need to. On github.com, press **Fork** on the
+repository page. Then, in the clone on your laptop from A1:
+
+```bash
+cd ocp-onpremise
+git checkout main && git pull
+git checkout -b fix/lab4-vtep-route        # name it after what it fixes
+```
+
+Make the change, then:
+
+```bash
+git commit -am "workshop: Lab 4 check fails because ..."
+git remote add fork https://github.com/<your-github-user>/ocp-onpremise.git
+git push -u fork fix/lab4-vtep-route
+```
+
+`git push` prints a link to open the pull request; GitHub's **Compare & pull
+request** button on your fork does the same. Put in the description what was
+wrong and how you checked the fix - the lab, the command, before and after.
+With the GitHub CLI, `gh repo fork --remote` and `gh pr create` do the fork,
+remote and pull request steps for you.
+
+Already fixed it on the lab host instead? Carry the change to your laptop
+clone rather than setting up GitHub credentials on the host:
+
+```bash
+ssh lab 'sudo git -C /root/ocp-onpremise diff' | git apply
+```
+
+(`lab` is the ssh alias from A6.) Claude can help with either - ask it to
+draft the issue or the pull request description from what you found.
 
 ---
 
