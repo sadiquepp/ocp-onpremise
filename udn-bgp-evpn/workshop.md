@@ -396,8 +396,10 @@ cd ocp-onpremise && git pull
 ```
 
 Then, in the Claude app, open **Code** and choose the local folder
-`ocp-onpremise/udn-bgp-evpn` - that folder, not the repository root, is what
-loads `CLAUDE.md` from the start.
+`ocp-onpremise/udn-bgp-evpn` - that folder loads `CLAUDE.md` from the start.
+Opened at the repository root instead, or as a cloud session on the
+repository, Claude is pointed to it as soon as you mention the workshop - so
+start with the lab you are on.
 
 Claude can read the whole repository from there: every lab, the automation
 that builds the reference version of each one, and the troubleshooting
