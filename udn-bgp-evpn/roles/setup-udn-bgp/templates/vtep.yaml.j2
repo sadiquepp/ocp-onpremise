@@ -5,9 +5,9 @@
   the addresses already on it that fall inside these CIDRs, and annotates the
   node with what it found. The fabric uses those addresses as the next hop
   for every EVPN route, so they have to be routable from the fabric - which
-  they are, because the nodes advertise {{ udn_bgp_vtep_prefix }}.0/24 over
-  the unicast half of the EVPN session and leaf1 carries a static /32 per
-  node besides.
+  they are, because leaf1 carries a static /32 per node and originates
+  {{ udn_bgp_vtep_prefix }}.0/24 back to every node. The nodes do not
+  advertise the block: see frrconfiguration-evpn.yaml.j2.
 
   Deliberately a block that exists nowhere else in this lab: not
   {{ lab_network_prefix }}.0/24, not {{ clab_fabric_prefix }}.0/24, not any

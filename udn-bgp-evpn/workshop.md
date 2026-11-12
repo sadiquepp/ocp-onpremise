@@ -707,8 +707,6 @@ spec:
   bgp:
     routers:
       - asn: $ASN
-        prefixes:
-          - $VTEP_CIDR
         neighbors:
           - address: $LEAF1_IP
             asn: $LEAF1_ASN
@@ -721,8 +719,7 @@ $BGP_AUTH_YAML
                 mode: all
             toAdvertise:
               allowed:
-                prefixes:
-                  - $VTEP_CIDR
+                mode: filtered        # advertise nothing - not even the VTEPs
 EOF
 oc apply -f "$M/lab04-frrconfiguration-evpn.yaml"
 ```
@@ -730,8 +727,14 @@ oc apply -f "$M/lab04-frrconfiguration-evpn.yaml"
 - **`toReceive: mode: all`** - takes leaf1's `$VTEP_CIDR`. leaf1 originates
   it and holds a static `/32` per node VTEP behind it, so a packet to any VTEP
   goes to leaf1 and leaf1 hands it to the right node.
-- **`prefixes` and `toAdvertise`: `$VTEP_CIDR` only** - an explicit list, not
-  `mode: all`, which would also offer the lab's management network.
+- **`toAdvertise: filtered`, and no `prefixes:` under the router** - the node
+  advertises nothing on this session, its own VTEP included: leaf1 already
+  reaches each node's `/32` by a static route. A node that originated
+  `$VTEP_CIDR` itself would rank its own path above leaf1's (weight 32768
+  against 0), and BGP never installs a route the node originates - so
+  leaf1's would never be installed either, and the `show ip route` check
+  below would say `Network not in table`. Earlier versions of this lab did
+  exactly that.
 - **The label** is how Lab 6's `RouteAdvertisements` finds this
   configuration; it must match exactly one.
 
@@ -791,6 +794,13 @@ leaf1 'show bgp summary'                         # ipv4 unicast: the hub workers
 nodevtysh worker1 "show ip route $VTEP_CIDR"    # B>* ... via 192.168.140.1 - the way to every VTEP
 leaf1 'show bgp l2vpn evpn summary'              # the hub workers: NoNeg - and that is right
 ```
+
+> `% Network not in table` on the node: look at
+> `nodevtysh worker1 "show bgp ipv4 unicast $VTEP_CIDR"`. A `Local` path
+> marked `best (Weight)` next to leaf1's means the `FRRConfiguration` still
+> originates the block (a manifest from an older copy of this lab). Re-apply
+> the one above, or take the prefixes out in place:
+> `oc -n $FRR_NS patch frrconfiguration fabric-peering-evpn --type=json -p '[{"op":"remove","path":"/spec/bgp/routers/0/prefixes"},{"op":"replace","path":"/spec/bgp/routers/0/neighbors/0/toAdvertise","value":{"allowed":{"mode":"filtered"}}}]'`
 
 `NoNeg` means the session is up but the address family was not negotiated:
 leaf1 offers `l2vpn evpn`, the node doesn't yet. From the node's side it

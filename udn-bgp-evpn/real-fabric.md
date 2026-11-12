@@ -423,10 +423,12 @@ device whose `local` address is this one; the dummy only holds the address.
 reaches `100.64.0.<n>` by routing, with the node's fabric-interface address as
 the next hop; Linux accepts a packet for any local address on whichever
 interface it arrives. The FRR configuration in [7](#7-bgp-peering) advertises
-the `/24` aggregate from **every** node, and identical routes to a `/24`
-cannot tell a leaf which node holds which address - so the per-node `/32`s
-must reach the leaf some other way: static routes (what the lab's `leaf1`
-does), the IGP, or a per-node advertisement. **[verify on site]**
+nothing from the nodes, so the per-node `/32`s reach the leaf some other way:
+static routes (what the lab's `leaf1` does), the IGP, or a per-node
+advertisement of the node's own `/32` - never the `/24`, which every node
+would claim identically and which shadows the leaf's route on the node
+itself (see [7](#7-bgp-peering)). The leaf originates the `/24` back to the
+nodes. **[verify on site]**
 
 Four constraints worth knowing before you pick the block:
 
@@ -484,10 +486,7 @@ spec:
                 mode: all
             toAdvertise:
               allowed:
-                prefixes:
-                  - 100.64.0.0/24
-        prefixes:
-          - 100.64.0.0/24
+                mode: filtered          # nothing - see "Advertise nothing" below
   nodeSelector: {}
 ```
 
@@ -509,10 +508,16 @@ Why each part:
   the *other* VTEPs (`toReceive`). Without one the EVPN session comes up,
   routes appear on both sides, and no tunnel ever forms because neither end
   can reach the other's endpoint. That failure looks exactly like a
-  data-plane problem and is not one. If your underlay already provides those
-  routes by IGP, you may not need the cluster to advertise its VTEP prefix -
-  but the node still needs a route to the remote VTEPs from somewhere.
-  **[verify on site]**
+  data-plane problem and is not one.
+- **Advertise nothing - above all not the VTEP block.** No `prefixes:` under
+  the router and no VTEP prefix in `toAdvertise`. A node that originates
+  `100.64.0.0/24` ranks its own path above the leaf's on weight (32768
+  against 0), and BGP never installs a route it originates, so the leaf's
+  route is never installed either: `show ip route 100.64.0.0/24` in the
+  node's frr container says `Network not in table`, while every session is
+  Established. The node only owns one `/32` in the block anyway; the leaf
+  learns the `/32`s some other way (section 6). The lab carried exactly this
+  mistake for a while.
 - **AS-path loops are handled for you.** Every node of a cluster shares its
   ASN, so a route one node originates comes back to another with that ASN
   already in its path. OVN-Kubernetes' generated configuration adds
