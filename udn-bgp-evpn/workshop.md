@@ -383,98 +383,81 @@ on the cluster side answers yet. That is the starting line.
 You can have Claude alongside you for the whole workshop, signed in with your
 own Claude account (Pro or above). The repository carries its instructions in
 [CLAUDE.md](CLAUDE.md): it is a coach, not a substitute. It finds out which
-lab and cluster you are on, explains blocks and errors, checks your lab with
-read-only commands, and goes to the workshop's own troubleshooting tables
-first. It does not type the labs for you, it asks before changing anything,
-and it will not read the vault or run anything that tears the lab down.
+lab and cluster you are on, explains blocks and errors, works through
+problems with you starting from the workshop's own troubleshooting tables,
+and tells you what to run next. It does not type the labs for you, and it
+never touches the vault or anything that tears the lab down.
 
-There are three ways to run it. The first is the most useful, because Claude
-can see your lab for itself instead of guessing from what you paste.
-
-| Where | Sees your lab | Needs |
-| --- | --- | --- |
-| Claude Code on the lab host | directly | a login, once |
-| Claude Code on your laptop (desktop app or CLI) | over ssh | an ssh alias |
-| The Claude app (web, desktop or phone) | only what you paste | a Project, once |
-
-**Claude Code on the lab host.** As root on the host, install it once:
-
-```bash
-curl -fsSL https://claude.ai/install.sh | bash
-```
-
-Give it a tmux window of its own (`ctrl-b c`, then `ctrl-b n` to flip back to
-your lab shell), and start it from this directory - that is what loads
-`CLAUDE.md`:
-
-```bash
-cd /root/ocp-onpremise/udn-bgp-evpn && claude
-```
-
-The first start asks you to log in: choose your Claude account, open the URL
-it prints in your laptop's browser, and paste the code back. The host needs no
-browser of its own.
-
-**Claude Code on your laptop.** The Claude desktop app's Code tab or the
-`claude` CLI, in the clone you made in A1. Update it first, so it has
-`CLAUDE.md`:
+**The usual way: Claude Code in the Claude app on your laptop.** Update the
+clone you made in A1, so it has `CLAUDE.md`:
 
 ```bash
 cd ocp-onpremise && git pull
 ```
 
-Claude reaches the host over ssh with an alias named `lab`. Find the host's
-address:
+Then, in the Claude app, open **Code** and choose the local folder
+`ocp-onpremise/udn-bgp-evpn` - that folder, not the repository root, is what
+loads `CLAUDE.md` from the start.
 
-```bash
-cd ocp-onpremise/terraform && terraform output -json public_ips
-```
+Claude can read the whole repository from there: every lab, the automation
+that builds the reference version of each one, and the troubleshooting
+guides. It cannot reach your lab, so it works through you: it tells you which
+commands to run in your lab shell, and you paste back what they print. That
+is deliberate - you run every command, and you see every answer. It will not
+run `oc` or the helpers on your laptop, which may well be logged in to some
+other cluster.
 
-and add it to `~/.ssh/config`, with the key from your `terraform.tfvars`:
-
-```text
-Host lab
-    HostName <the address>
-    User ec2-user
-    IdentityFile ~/.ssh/id_ed25519
-```
-
-Check that it works without a prompt:
-
-```bash
-ssh lab 'sudo -i hostname'
-```
-
-Then open the `ocp-onpremise/udn-bgp-evpn` folder in Claude Code. It sends
-each command through `ssh lab`, so you approve it on your laptop and it runs
-on the host.
-
-**The Claude app, with no Claude Code.** On the web, the desktop app's chat
-or your phone. Claude cannot run anything here, so it asks you for specific
-output and you paste it back. Set it up once, from your laptop's clone:
-
-1. Create a Project (Projects, then New project) - call it *UDN workshop*.
-2. Paste the whole of `udn-bgp-evpn/CLAUDE.md` into the Project's
-   instructions.
-3. Add `udn-bgp-evpn/workshop.md` and `udn-bgp-evpn/troubleshooting.md` as
-   Project files.
-
-Start every question in a new chat inside that Project.
-
-**Asking well** - whichever way you run it. Say the lab, the cluster, what
-you ran and what came back, word for word:
+**Asking well.** Say the lab, the cluster, what you ran and what came back,
+word for word:
 
 > I'm on Lab 4, on the hub. The check
 > `nodevtysh worker1 "show ip route $VTEP_CIDR"` says
 > `% Network not in table`.
 
-When Claude Code asks to run a command, read it before you allow it -
-working out why it chose that command is half of what the workshop teaches.
-Your account's usage limit applies, and long outputs use it up fastest;
-`CLAUDE.md` tells Claude to filter what it reads, and you can ask it for less.
-If the workshop itself looks wrong - a check that cannot pass - tell the
-instructor as well, and see
+Paste output as text rather than a screenshot, and only the part you were
+asked for: your account's usage limit applies, and long pastes use it up
+fastest. If the workshop itself looks wrong - a check that cannot pass - tell
+the instructor as well, and see
 [Found something wrong in the workshop?](#found-something-wrong-in-the-workshop).
+
+**Optional: let Claude run the checks itself.** Two ways, if you prefer it
+to look rather than ask:
+
+- *From your laptop, over ssh.* Find the host's address
+  (`cd ocp-onpremise/terraform && terraform output -json public_ips`) and add
+  an alias to `~/.ssh/config`, with the key from your `terraform.tfvars`:
+
+  ```text
+  Host lab
+      HostName <the address>
+      User ec2-user
+      IdentityFile ~/.ssh/id_ed25519
+  ```
+
+  `ssh lab 'sudo -i hostname'` should answer without a prompt. Tell Claude
+  the alias is set up; it sends each command through it, and you approve
+  each one before it runs.
+- *On the lab host.* As root, install Claude Code and start it in a tmux
+  window of its own (`ctrl-b c`; `ctrl-b n` flips back to your lab shell):
+
+  ```bash
+  curl -fsSL https://claude.ai/install.sh | bash
+  ```
+
+  ```bash
+  cd /root/ocp-onpremise/udn-bgp-evpn && claude
+  ```
+
+  The first start prints a login URL: open it in your laptop's browser,
+  sign in, and paste the code back.
+
+Either way, read each command before you allow it - working out why Claude
+chose it is half of what the workshop teaches.
+
+**No Claude Code at all?** A Claude chat works too, with less to go on. Create
+a Project, paste the whole of `udn-bgp-evpn/CLAUDE.md` into its instructions,
+and add `udn-bgp-evpn/workshop.md` and `udn-bgp-evpn/troubleshooting.md` as
+Project files. Start each question in a new chat inside that Project.
 
 ---
 
@@ -2774,7 +2757,8 @@ clone rather than setting up GitHub credentials on the host:
 ssh lab 'sudo git -C /root/ocp-onpremise diff' | git apply
 ```
 
-(`lab` is the ssh alias from A6.) Claude can help with either - ask it to
+(`lab` is the ssh alias from A6; without it, use
+`ssh -i <your key> ec2-user@<the host's address>`.) Claude can help with either - ask it to
 draft the issue or the pull request description from what you found.
 
 ---
