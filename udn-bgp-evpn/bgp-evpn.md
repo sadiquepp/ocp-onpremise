@@ -3865,19 +3865,19 @@ spec:
             keepaliveTime: 3s
             port: 179
             toReceive: { allowed: { mode: all } }
-            toAdvertise:
-              allowed:
-                prefixes:
-                  - 100.64.0.0/24
-        prefixes:
-          - 100.64.0.0/24
+            toAdvertise: { allowed: { mode: filtered } }
   nodeSelector: {}
 EOF
 ```
 
 The session's own job is the underlay: the node takes leaf1's route for the
 VTEP block, so it can find the other VTEPs — without a route to a node's VTEP
-there is no tunnel to it, whatever the EVPN table says. It does **not** name
+there is no tunnel to it, whatever the EVPN table says. The node advertises
+nothing on it. An earlier version also originated `100.64.0.0/24` from every
+node (`prefixes:`); each node then preferred its own path on weight, never
+installed it (BGP does not install what it originates), and so never
+installed leaf1's either: `show ip route 100.64.0.0/24` in the node's frr
+container said `Network not in table`. It does **not** name
 the `l2vpn evpn` family, because the `FRRConfiguration` neighbor has no field
 for it. OVN-Kubernetes activates EVPN on this neighbor in its own generated
 configuration once the `RouteAdvertisements` below selects EVPN networks and

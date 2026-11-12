@@ -392,6 +392,54 @@
       carrying each tenant's VNI.
   when: udn_phase == 'evpn'
 
+# The leaf holding the VTEP routes is half of the underlay. The other half is
+# every node installing the leaf's route for the VTEP block. A node that
+# originates the block itself (`prefixes:` in the EVPN FRRConfiguration) keeps
+# its own path on weight, which BGP never installs, so the leaf's path is
+# never installed either: `show ip route` on the node says "Network not in
+# table", while every session and every CR stays green.
+- name: Check each node installed the leaf's route to the VTEP block
+  ansible.builtin.shell:
+    cmd: >-
+      pod=$(oc -n {{ udn_bgp_frrk8s_namespace }} get pods -l component=frr-k8s
+      --field-selector spec.nodeName={{ udn_bgp_node_names[item.ip_key] }} -o name | head -1)
+      && oc -n {{ udn_bgp_frrk8s_namespace }} exec "$pod" -c frr --
+      vtysh -c 'show ip route {{ udn_bgp_vtep_prefix }}.0/24'
+  loop: "{{ udn_bgp_cluster_nodes }}"
+  loop_control:
+    label: "{{ item.ip_key }}"
+  register: udn_bgp_vtep_route
+  changed_when: false
+  failed_when: false
+  until: >-
+    udn_bgp_vtep_route.stdout | default('') is search('Known via "bgp"')
+    and udn_bgp_vtep_route.stdout | default('') is search(
+      (clab_fabric_prefix ~ '.' ~ clab_fabric_router_octet) | regex_escape)
+  retries: "{{ udn_bgp_session_check_retries }}"
+  delay: "{{ udn_bgp_session_check_delay }}"
+  when: udn_phase == 'evpn'
+
+- name: Fail with the node that has no route to the other VTEPs
+  ansible.builtin.assert:
+    that:
+      - item.stdout | default('') is search('Known via "bgp"')
+      - item.stdout | default('') is search(
+          (clab_fabric_prefix ~ '.' ~ clab_fabric_router_octet) | regex_escape)
+    fail_msg: >-
+      {{ udn_bgp_node_names[item.item.ip_key] | default(item.item.ip_key) }}
+      has no BGP route to {{ udn_bgp_vtep_prefix }}.0/24 via
+      {{ clab_fabric_prefix }}.{{ clab_fabric_router_octet }}; its bgpd says
+      '{{ item.stdout | default('') | trim | regex_replace('\s+', ' ') }}'.
+      Without it the node has no route to the other nodes' VTEPs, so no
+      tunnel to them forms. "Network not in table" with the leaf's path
+      present in `show bgp ipv4 unicast {{ udn_bgp_vtep_prefix }}.0/24` next
+      to a "Local" one means the node originates the block itself: remove
+      `prefixes:` from the fabric-peering-evpn FRRConfiguration.
+  loop: "{{ udn_bgp_vtep_route.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.ip_key }}"
+  when: udn_phase == 'evpn'
+
 - name: Show which VTEP address each node was assigned
   ansible.builtin.command:
     cmd: >-

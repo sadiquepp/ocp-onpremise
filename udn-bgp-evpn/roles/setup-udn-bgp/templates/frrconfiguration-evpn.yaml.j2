@@ -4,9 +4,10 @@
   What it carries is the VTEP block: the node takes leaf1's route for
   {{ udn_bgp_vtep_prefix }}.0/24 (toReceive), which is how its VXLAN packets
   reach the other VTEPs - leaf1 holds a static /32 per node VTEP behind that
-  aggregate. Without it the EVPN routes appear on both sides and no tunnel
-  ever forms, because neither end can reach the other's tunnel endpoint. That
-  looks exactly like a data-plane problem and is not one.
+  aggregate. Without that route the EVPN routes appear on both sides and no
+  tunnel ever forms, because neither end can reach the other's tunnel
+  endpoint. That looks exactly like a data-plane problem and is not one. The
+  node advertises nothing on this session itself - see toAdvertise below.
 
   It does NOT activate l2vpn evpn, and cannot: the FRRConfiguration neighbor
   has no address-family field (`oc explain
@@ -64,13 +65,16 @@ spec:
                 mode: all
             toAdvertise:
               allowed:
-                # The VTEP block is what the far end needs in order to build
-                # a tunnel back to this node. It is advertised explicitly
-                # rather than with mode 'all', which would also put
-                # {{ lab_network_prefix }}.0/24 - the lab's management
-                # network - into the fabric.
-                prefixes:
-                  - {{ udn_bgp_vtep_prefix }}.0/24
-        prefixes:
-          - {{ udn_bgp_vtep_prefix }}.0/24
+                # Nothing of our own. In particular NOT the VTEP block, and no
+                # router-level `prefixes:` for it: a node that originates
+                # {{ udn_bgp_vtep_prefix }}.0/24 itself prefers that path
+                # (weight 32768) over leaf1's, BGP never installs a locally
+                # originated route, and so leaf1's route is never installed
+                # either - `show ip route {{ udn_bgp_vtep_prefix }}.0/24` on
+                # the node says "Network not in table". It is also not the
+                # node's to claim: it owns one /32 in the block, and leaf1
+                # already reaches each /32 by a static route. Not mode 'all'
+                # either, which would put {{ lab_network_prefix }}.0/24 - the
+                # lab's management network - into the fabric.
+                mode: filtered
   nodeSelector: {}

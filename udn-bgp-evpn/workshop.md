@@ -30,6 +30,7 @@ afterwards.
   - [A3. One command: helper, clusters, fabric](#a3-one-command-helper-clusters-fabric)
   - [A4. While it runs: the five ideas](#a4-while-it-runs-the-five-ideas)
   - [A5. When it finishes](#a5-when-it-finishes)
+  - [A6. Getting help from Claude](#a6-getting-help-from-claude)
 - [Part B - Hands-on: EVPN](#part-b---hands-on-evpn)
   - [Lab 1. Turn on BGP in OVN-Kubernetes](#lab-1-turn-on-bgp-in-ovn-kubernetes)
   - [Lab 2. Peer every node with the fabric](#lab-2-peer-every-node-with-the-fabric)
@@ -47,6 +48,7 @@ afterwards.
 - [Part C - Optional: the same tenants over VRF-Lite](#part-c---optional-the-same-tenants-over-vrf-lite)
 - [The minimal test set](#the-minimal-test-set)
 - [Catching up, checking, and when something is wrong](#catching-up-checking-and-when-something-is-wrong)
+  - [Found something wrong in the workshop?](#found-something-wrong-in-the-workshop)
 - [Tearing it down](#tearing-it-down)
 
 ---
@@ -375,6 +377,87 @@ leaf1 'show bgp summary'         # every node listed, none Established
 
 leaf1 already expects a session from every node on `192.168.140.x`; nothing
 on the cluster side answers yet. That is the starting line.
+
+### A6. Getting help from Claude
+
+You can have Claude alongside you for the whole workshop, signed in with your
+own Claude account (Pro or above). The repository carries its instructions in
+[CLAUDE.md](CLAUDE.md): it is a coach, not a substitute. It finds out which
+lab and cluster you are on, explains blocks and errors, works through
+problems with you starting from the workshop's own troubleshooting tables,
+and tells you what to run next. It does not type the labs for you, and it
+never touches the vault or anything that tears the lab down.
+
+**The usual way: Claude Code in the Claude app on your laptop.** Update the
+clone you made in A1, so it has `CLAUDE.md`:
+
+```bash
+cd ocp-onpremise && git pull
+```
+
+Then, in the Claude app, open **Code** and choose the local folder
+`ocp-onpremise/udn-bgp-evpn` - that folder, not the repository root, is what
+loads `CLAUDE.md` from the start.
+
+Claude can read the whole repository from there: every lab, the automation
+that builds the reference version of each one, and the troubleshooting
+guides. It cannot reach your lab, so it works through you: it tells you which
+commands to run in your lab shell, and you paste back what they print. That
+is deliberate - you run every command, and you see every answer. It will not
+run `oc` or the helpers on your laptop, which may well be logged in to some
+other cluster.
+
+**Asking well.** Say the lab, the cluster, what you ran and what came back,
+word for word:
+
+> I'm on Lab 4, on the hub. The check
+> `nodevtysh worker1 "show ip route $VTEP_CIDR"` says
+> `% Network not in table`.
+
+Paste output as text rather than a screenshot, and only the part you were
+asked for: your account's usage limit applies, and long pastes use it up
+fastest. If the workshop itself looks wrong - a check that cannot pass - tell
+the instructor as well, and see
+[Found something wrong in the workshop?](#found-something-wrong-in-the-workshop).
+
+**Optional: let Claude run the checks itself.** Two ways, if you prefer it
+to look rather than ask:
+
+- *From your laptop, over ssh.* Find the host's address
+  (`cd ocp-onpremise/terraform && terraform output -json public_ips`) and add
+  an alias to `~/.ssh/config`, with the key from your `terraform.tfvars`:
+
+  ```text
+  Host lab
+      HostName <the address>
+      User ec2-user
+      IdentityFile ~/.ssh/id_ed25519
+  ```
+
+  `ssh lab 'sudo -i hostname'` should answer without a prompt. Tell Claude
+  the alias is set up; it sends each command through it, and you approve
+  each one before it runs.
+- *On the lab host.* As root, install Claude Code and start it in a tmux
+  window of its own (`ctrl-b c`; `ctrl-b n` flips back to your lab shell):
+
+  ```bash
+  curl -fsSL https://claude.ai/install.sh | bash
+  ```
+
+  ```bash
+  cd /root/ocp-onpremise/udn-bgp-evpn && claude
+  ```
+
+  The first start prints a login URL: open it in your laptop's browser,
+  sign in, and paste the code back.
+
+Either way, read each command before you allow it - working out why Claude
+chose it is half of what the workshop teaches.
+
+**No Claude Code at all?** A Claude chat works too, with less to go on. Create
+a Project, paste the whole of `udn-bgp-evpn/CLAUDE.md` into its instructions,
+and add `udn-bgp-evpn/workshop.md` and `udn-bgp-evpn/troubleshooting.md` as
+Project files. Start each question in a new chat inside that Project.
 
 ---
 
@@ -707,8 +790,6 @@ spec:
   bgp:
     routers:
       - asn: $ASN
-        prefixes:
-          - $VTEP_CIDR
         neighbors:
           - address: $LEAF1_IP
             asn: $LEAF1_ASN
@@ -721,8 +802,7 @@ $BGP_AUTH_YAML
                 mode: all
             toAdvertise:
               allowed:
-                prefixes:
-                  - $VTEP_CIDR
+                mode: filtered        # advertise nothing - not even the VTEPs
 EOF
 oc apply -f "$M/lab04-frrconfiguration-evpn.yaml"
 ```
@@ -730,8 +810,14 @@ oc apply -f "$M/lab04-frrconfiguration-evpn.yaml"
 - **`toReceive: mode: all`** - takes leaf1's `$VTEP_CIDR`. leaf1 originates
   it and holds a static `/32` per node VTEP behind it, so a packet to any VTEP
   goes to leaf1 and leaf1 hands it to the right node.
-- **`prefixes` and `toAdvertise`: `$VTEP_CIDR` only** - an explicit list, not
-  `mode: all`, which would also offer the lab's management network.
+- **`toAdvertise: filtered`, and no `prefixes:` under the router** - the node
+  advertises nothing on this session, its own VTEP included: leaf1 already
+  reaches each node's `/32` by a static route. A node that originated
+  `$VTEP_CIDR` itself would rank its own path above leaf1's (weight 32768
+  against 0), and BGP never installs a route the node originates - so
+  leaf1's would never be installed either, and the `show ip route` check
+  below would say `Network not in table`. Earlier versions of this lab did
+  exactly that.
 - **The label** is how Lab 6's `RouteAdvertisements` finds this
   configuration; it must match exactly one.
 
@@ -791,6 +877,13 @@ leaf1 'show bgp summary'                         # ipv4 unicast: the hub workers
 nodevtysh worker1 "show ip route $VTEP_CIDR"    # B>* ... via 192.168.140.1 - the way to every VTEP
 leaf1 'show bgp l2vpn evpn summary'              # the hub workers: NoNeg - and that is right
 ```
+
+> `% Network not in table` on the node: look at
+> `nodevtysh worker1 "show bgp ipv4 unicast $VTEP_CIDR"`. A `Local` path
+> marked `best (Weight)` next to leaf1's means the `FRRConfiguration` still
+> originates the block (a manifest from an older copy of this lab). Re-apply
+> the one above, or take the prefixes out in place:
+> `oc -n $FRR_NS patch frrconfiguration fabric-peering-evpn --type=json -p '[{"op":"remove","path":"/spec/bgp/routers/0/prefixes"},{"op":"replace","path":"/spec/bgp/routers/0/neighbors/0/toAdvertise","value":{"allowed":{"mode":"filtered"}}}]'`
 
 `NoNeg` means the session is up but the address family was not negotiated:
 leaf1 offers `l2vpn evpn`, the node doesn't yet. From the node's side it
@@ -2566,6 +2659,9 @@ And one command that checks the control plane of a whole cluster:
 
 ## Catching up, checking, and when something is wrong
 
+**Stuck?** Ask Claude - [A6](#a6-getting-help-from-claude) sets it up. It
+knows this table and the troubleshooting guides below.
+
 **Fallen behind?** The automation can do any lab's work for you, on both
 clusters, and you carry on from there:
 
@@ -2605,6 +2701,65 @@ and a missing SNAT exclusion.
 
 The long form of every one of these, with how it was found:
 [README.md](README.md#troubleshooting) and [troubleshooting.md](troubleshooting.md).
+
+### Found something wrong in the workshop?
+
+A check that cannot pass, a manifest that contradicts its own explanation, a
+step that is missing: tell the instructor, then put it on GitHub so it gets
+fixed for the next person. You need a GitHub account and nothing else - no
+access to the repository.
+
+**No fix in mind: open an issue** at
+[github.com/sadiquepp/ocp-onpremise/issues/new](https://github.com/sadiquepp/ocp-onpremise/issues/new).
+The issues that get fixed quickly say:
+
+- the lab and cluster - *Lab 4, hub*
+- the command, and what it printed, word for word
+- what the workshop said it should print
+- which version of the workshop you have:
+
+  ```bash
+  git -C /root/ocp-onpremise log -1 --format='%h %cs %s'
+  ```
+
+Never paste anything from `vault.yaml`, the pull secret, a kubeconfig or
+the BGP key. The lab's own addresses (`192.168.140.x`, `100.64.0.x`) are
+fine.
+
+**A fix in hand: open a pull request from a fork.** You cannot push to this
+repository, and do not need to. On github.com, press **Fork** on the
+repository page. Then, in the clone on your laptop from A1:
+
+```bash
+cd ocp-onpremise
+git checkout main && git pull
+git checkout -b fix/lab4-vtep-route        # name it after what it fixes
+```
+
+Make the change, then:
+
+```bash
+git commit -am "workshop: Lab 4 check fails because ..."
+git remote add fork https://github.com/<your-github-user>/ocp-onpremise.git
+git push -u fork fix/lab4-vtep-route
+```
+
+`git push` prints a link to open the pull request; GitHub's **Compare & pull
+request** button on your fork does the same. Put in the description what was
+wrong and how you checked the fix - the lab, the command, before and after.
+With the GitHub CLI, `gh repo fork --remote` and `gh pr create` do the fork,
+remote and pull request steps for you.
+
+Already fixed it on the lab host instead? Carry the change to your laptop
+clone rather than setting up GitHub credentials on the host:
+
+```bash
+ssh lab 'sudo git -C /root/ocp-onpremise diff' | git apply
+```
+
+(`lab` is the ssh alias from A6; without it, use
+`ssh -i <your key> ec2-user@<the host's address>`.) Claude can help with either - ask it to
+draft the issue or the pull request description from what you found.
 
 ---
 

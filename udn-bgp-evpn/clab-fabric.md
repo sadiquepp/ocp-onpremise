@@ -601,8 +601,8 @@ The spine holds both:
 ```
 
 The aggregate is leaf1's, originated against the blackhole. The per-node `/32`s
-are **not** configured anywhere in this repo - `frrconfiguration-evpn.yaml.j2`
-advertises only `100.64.0.0/24` from each node. They are reaching the fabric
+are **not** advertised by anything this repo renders - `frrconfiguration-evpn.yaml.j2`
+advertises nothing from the nodes. They are reaching the fabric
 by some other route, most likely the second, OVN-Kubernetes-generated
 `FRRConfiguration` that the template mentions but this repo never renders.
 
