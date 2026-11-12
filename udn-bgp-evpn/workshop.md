@@ -30,6 +30,7 @@ afterwards.
   - [A3. One command: helper, clusters, fabric](#a3-one-command-helper-clusters-fabric)
   - [A4. While it runs: the five ideas](#a4-while-it-runs-the-five-ideas)
   - [A5. When it finishes](#a5-when-it-finishes)
+  - [A6. Getting help from Claude](#a6-getting-help-from-claude)
 - [Part B - Hands-on: EVPN](#part-b---hands-on-evpn)
   - [Lab 1. Turn on BGP in OVN-Kubernetes](#lab-1-turn-on-bgp-in-ovn-kubernetes)
   - [Lab 2. Peer every node with the fabric](#lab-2-peer-every-node-with-the-fabric)
@@ -375,6 +376,103 @@ leaf1 'show bgp summary'         # every node listed, none Established
 
 leaf1 already expects a session from every node on `192.168.140.x`; nothing
 on the cluster side answers yet. That is the starting line.
+
+### A6. Getting help from Claude
+
+You can have Claude alongside you for the whole workshop, signed in with your
+own Claude account (Pro or above). The repository carries its instructions in
+[CLAUDE.md](CLAUDE.md): it is a coach, not a substitute. It finds out which
+lab and cluster you are on, explains blocks and errors, checks your lab with
+read-only commands, and goes to the workshop's own troubleshooting tables
+first. It does not type the labs for you, it asks before changing anything,
+and it will not read the vault or run anything that tears the lab down.
+
+There are three ways to run it. The first is the most useful, because Claude
+can see your lab for itself instead of guessing from what you paste.
+
+| Where | Sees your lab | Needs |
+| --- | --- | --- |
+| Claude Code on the lab host | directly | a login, once |
+| Claude Code on your laptop (desktop app or CLI) | over ssh | an ssh alias |
+| The Claude app (web, desktop or phone) | only what you paste | a Project, once |
+
+**Claude Code on the lab host.** As root on the host, install it once:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+Give it a tmux window of its own (`ctrl-b c`, then `ctrl-b n` to flip back to
+your lab shell), and start it from this directory - that is what loads
+`CLAUDE.md`:
+
+```bash
+cd /root/ocp-onpremise/udn-bgp-evpn && claude
+```
+
+The first start asks you to log in: choose your Claude account, open the URL
+it prints in your laptop's browser, and paste the code back. The host needs no
+browser of its own.
+
+**Claude Code on your laptop.** The Claude desktop app's Code tab or the
+`claude` CLI, in the clone you made in A1. Update it first, so it has
+`CLAUDE.md`:
+
+```bash
+cd ocp-onpremise && git pull
+```
+
+Claude reaches the host over ssh with an alias named `lab`. Find the host's
+address:
+
+```bash
+cd ocp-onpremise/terraform && terraform output -json public_ips
+```
+
+and add it to `~/.ssh/config`, with the key from your `terraform.tfvars`:
+
+```text
+Host lab
+    HostName <the address>
+    User ec2-user
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+Check that it works without a prompt:
+
+```bash
+ssh lab 'sudo -i hostname'
+```
+
+Then open the `ocp-onpremise/udn-bgp-evpn` folder in Claude Code. It sends
+each command through `ssh lab`, so you approve it on your laptop and it runs
+on the host.
+
+**The Claude app, with no Claude Code.** On the web, the desktop app's chat
+or your phone. Claude cannot run anything here, so it asks you for specific
+output and you paste it back. Set it up once, from your laptop's clone:
+
+1. Create a Project (Projects, then New project) - call it *UDN workshop*.
+2. Paste the whole of `udn-bgp-evpn/CLAUDE.md` into the Project's
+   instructions.
+3. Add `udn-bgp-evpn/workshop.md` and `udn-bgp-evpn/troubleshooting.md` as
+   Project files.
+
+Start every question in a new chat inside that Project.
+
+**Asking well** - whichever way you run it. Say the lab, the cluster, what
+you ran and what came back, word for word:
+
+> I'm on Lab 4, on the hub. The check
+> `nodevtysh worker1 "show ip route $VTEP_CIDR"` says
+> `% Network not in table`.
+
+When Claude Code asks to run a command, read it before you allow it -
+working out why it chose that command is half of what the workshop teaches.
+Your account's usage limit applies, and long outputs use it up fastest;
+`CLAUDE.md` tells Claude to filter what it reads, and you can ask it for less.
+If the workshop itself looks wrong - a check that cannot pass - tell the
+instructor as well.
 
 ---
 
@@ -2575,6 +2673,9 @@ And one command that checks the control plane of a whole cluster:
 ---
 
 ## Catching up, checking, and when something is wrong
+
+**Stuck?** Ask Claude - [A6](#a6-getting-help-from-claude) sets it up. It
+knows this table and the troubleshooting guides below.
 
 **Fallen behind?** The automation can do any lab's work for you, on both
 clusters, and you carry on from there:
