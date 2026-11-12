@@ -25,3 +25,10 @@ root_volume_size = 1000
 ## specific. See "If the AMI lookup returns nothing" in README.md - and pin it
 ## for a workshop, so every host is built from the same image.
 # ami_id = "ami-0123456789abcdef0"
+
+## Where the bootstrap clones the lab from. Point these at a fork and/or a
+## feature branch to build the lab from work that is not on main yet. Read
+## once, at first clone: a re-run never switches an existing checkout, so
+## change branches on the host with git, not here.
+# repo_url    = "https://github.com/sadiquepp/ocp-onpremise.git"
+# repo_branch = "main"
