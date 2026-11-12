@@ -143,7 +143,7 @@ variable "repo_url" {
 variable "repo_branch" {
   description = "Branch to check out."
   type        = string
-  default     = "integration"
+  default     = "main"
 }
 
 variable "base_image_dir" {
