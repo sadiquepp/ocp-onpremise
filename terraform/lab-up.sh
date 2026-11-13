@@ -61,14 +61,16 @@ preflight() {
         red "No $TFVARS."
         cat >&2 <<EOF
 
-Start from the example and fill in the three values that have no default:
+Start from the example and fill in the two values that have no default:
 
     cp terraform.tfvars.example $TFVARS
     \$EDITOR $TFVARS
 
-    allowed_ssh_cidrs    your own address - curl -s https://checkip.amazonaws.com
     ssh_public_key       contents of ~/.ssh/id_ed25519.pub
     ssh_private_key_path path to the matching private key
+
+and, recommended, narrow allowed_ssh_cidrs from 0.0.0.0/0 to your own address
+(curl -s https://checkip.amazonaws.com).
 EOF
         exit 1
     fi
@@ -91,6 +93,16 @@ EOF
     if [[ -n $key ]]; then
         key="${key/#\~/$HOME}"
         [[ -f $key ]] || die "ssh_private_key_path points at $key, which does not exist."
+    fi
+
+    # Not an error - the default is open on purpose - but said every time, so
+    # it stays a choice rather than something nobody noticed.
+    if ! grep -Eq '^[[:space:]]*allowed_ssh_cidrs[[:space:]]*=' "$TFVARS" \
+        || grep -Eq '^[[:space:]]*allowed_ssh_cidrs[[:space:]]*=.*0\.0\.0\.0/0' "$TFVARS"; then
+        bold "Note: SSH is open to the whole internet (allowed_ssh_cidrs = 0.0.0.0/0)."
+        echo "      Login is by key only, but narrowing it to your own address is"
+        echo "      recommended: set allowed_ssh_cidrs = [\"<ip>/32\"] in $TFVARS, where"
+        echo "      <ip> is what curl -s https://checkip.amazonaws.com prints."
     fi
 }
 

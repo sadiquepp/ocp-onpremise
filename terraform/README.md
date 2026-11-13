@@ -55,15 +55,24 @@ the foreground. Using `terraform` directly still works exactly as before.
 | Root volume | `root_volume_size`, default **1000 GiB** gp3 |
 | Key pair | from `ssh_public_key` |
 
-### `allowed_ssh_cidrs` has no default, on purpose
+### `allowed_ssh_cidrs`: open by default, narrow it if you can
 
-It opens a port to the internet. `0.0.0.0/0` "because it was the default" is
-how a lab host ends up permanently open, so Terraform will not plan until you
-name a CIDR.
+It defaults to `0.0.0.0/0`, so the lab comes up from any network - a laptop
+that moves, a VPN, a workshop room - without anyone first looking up an
+address. Port 22 is the only port opened and login is by key only, but the
+recommendation is still to narrow it to your own address:
 
 ```bash
 curl -s https://checkip.amazonaws.com
 ```
+
+```hcl
+allowed_ssh_cidrs = ["<that address>/32"]
+```
+
+`lab-up.sh` reminds you on every run while it is `0.0.0.0/0`. It is a
+security-group rule, so changing it later - when your address changes, too -
+is a quick `terraform apply` that leaves the instance alone.
 
 ### Everything except SSH is tunnelled
 

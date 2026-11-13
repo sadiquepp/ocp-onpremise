@@ -1,8 +1,10 @@
 ## Copy to terraform.tfvars and edit. terraform.tfvars is gitignored.
 
-## YOUR address, not 0.0.0.0/0. Find it with:
+## Who can reach SSH. Open to anywhere by default - recommended: replace it
+## with your own address, which you can find with
 ##   curl -s https://checkip.amazonaws.com
-allowed_ssh_cidrs = ["203.0.113.4/32"]
+## and write as ["<that address>/32"].
+allowed_ssh_cidrs = ["0.0.0.0/0"]
 
 ## The public key to install, and the private half this machine will use for
 ## the Ansible bootstrap.

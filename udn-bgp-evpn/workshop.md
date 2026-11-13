@@ -110,17 +110,24 @@ cd ocp-onpremise/terraform
 cp terraform.tfvars.example terraform.tfvars
 ```
 
-Edit `terraform.tfvars`. Three settings matter:
+Edit `terraform.tfvars`. Two settings are required:
 
 ```hcl
-allowed_ssh_cidrs = ["<your ip>/32"]        # curl -s https://checkip.amazonaws.com
 ssh_public_key       = "ssh-ed25519 AAAA... you@laptop"
 ssh_private_key_path = "~/.ssh/id_ed25519"
 ```
 
+and one is recommended. `allowed_ssh_cidrs` defaults to `0.0.0.0/0` - SSH
+from anywhere - so the lab works from any network. Narrow it to your own
+address if you can:
+
+```hcl
+allowed_ssh_cidrs = ["<your ip>/32"]        # curl -s https://checkip.amazonaws.com
+```
+
 Leave the rest: one `c5.metal`, a 1000 GiB root volume, and worker sizing that
-fits 192 GiB. `allowed_ssh_cidrs` has no default on purpose - SSH is the only
-port opened, and everything else is tunnelled over it.
+fits 192 GiB. SSH is the only port opened, and everything else is tunnelled
+over it.
 
 ```bash
 ./lab-up.sh                                                # plan, apply, bootstrap
