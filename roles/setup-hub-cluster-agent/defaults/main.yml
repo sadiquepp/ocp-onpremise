@@ -14,15 +14,19 @@
 #   folders           hub_vm_folder, hub_install_folder
 #
 # platform: none, so there is no API VIP and no ingress VIP: the load balancer
-# and the DNS names are the ones the UPI hub uses. The only address this
-# pattern adds to the lab is the nodes' default gateway (lab_node_gateway in
-# vars.yaml) when clab_fabric_uplink is 'primary'.
+# and the DNS names are the ones the UPI hub uses. This role uses no address
+# the UPI hub does not already have.
 #
-# What differs from the UPI role, and why this one exists: the nodes'
-# addressing is STATIC and written before they boot, so the default gateway is
-# a value in agent-config.yaml rather than whatever libvirt's DHCP hands out.
-# That is what lets br-ex face the BGP/EVPN fabric - see
-# udn-bgp-evpn/primary-uplink.md.
+# What differs from the UPI role: the nodes' addressing is STATIC and written
+# before they boot, so there is no bootstrap VM, no dependence on DHCP, and
+# the default gateway is a value (hub_agent_gateway) rather than whatever
+# libvirt hands out.
+#
+# The role is self-contained. It reads the lab-wide basics (ip_list, the
+# hub_* names and folders, the sizing, the pull secret) and its own
+# hub_agent_* values, and nothing else - in particular nothing from any lab
+# built on top of the cluster. With every default left alone it builds a
+# plain agent-based hub whose gateway is libvirt.
 
 ## The six nodes. 'hostname' is the node's name in the cluster and its record
 ## in the hub zone; 'ip_key' is its ip_list entry; 'domain' is its libvirt
@@ -69,13 +73,19 @@ hub_agent_installation_disk: /dev/vda
 ## Addressing. Static: the rendezvous address has to be known before the nodes
 ## boot, which a DHCP lease is not.
 ##
-## The gateway is the one value that makes this role worth having.
-## lab_node_gateway (vars.yaml) is {{ lab_network_prefix }}.1 - libvirt - when
-## clab_fabric_uplink is 'secondary', and the border leaf's address on this
-## network when it is 'primary'. In the second case the FABRIC HAS TO BE UP
-## BEFORE THE NODES BOOT: they pull their release payload through that
-## gateway. Pre-flight pings it and says so.
-hub_agent_gateway: "{{ lab_node_gateway | default(lab_network_prefix ~ '.1') }}"
+## The default gateway is libvirt, like every other VM on this network. Set
+## hub_agent_gateway to route the nodes through something else on the lab
+## network instead. Two things follow from doing that:
+##   - whatever holds that address has to be UP BEFORE THE NODES BOOT. This is
+##     a connected install; the nodes pull their release payload through it.
+##     Pre-flight pings it (hub_agent_require_gateway).
+##   - it is an install-time choice. br-ex is built over this NIC and its
+##     default route cannot be changed afterwards; moving it is a rebuild.
+hub_agent_gateway: "{{ lab_network_prefix }}.1"
+## Optional text appended to the pre-flight failure when the gateway does not
+## answer - for whoever set hub_agent_gateway to say what provides it and how
+## to bring it up. Empty by default.
+hub_agent_gateway_hint: ""
 hub_agent_prefix_length: 24
 
 ## libvirt's dnsmasq, which forwards the hub zone to the helper - the resolver

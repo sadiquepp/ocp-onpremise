@@ -2023,6 +2023,20 @@ clab_fabric_uplink: secondary
 lab_node_gateway: >-
   {{ lab_network_prefix }}.{{ ip_list.fabric_gw if clab_fabric_uplink == 'primary' else 1 }}
 
+## The agent-based hub (standard-cluster/setup_cluster1_agent.yaml) takes its
+## gateway from the switch above. This line, and sno_gateway further up, are
+## the ONLY coupling between the cluster builds and this lab: the roles
+## themselves default to libvirt and know nothing about a fabric. Delete this
+## line, or set clab_fabric_uplink: secondary, and the hub is a plain
+## agent-based cluster on {{ lab_network_prefix }}.1.
+hub_agent_gateway: "{{ lab_node_gateway }}"
+hub_agent_gateway_hint: >-
+  {{ "It is the border leaf's leg on the lab network (clab_fabric_uplink: primary),"
+     ~ " so build the fabric first, from udn-bgp-evpn/: ansible-playbook -i"
+     ~ " ../inventory/hosts setup_udn_bgp_lab.yaml --ask-vault-pass --tags fabric"
+     ~ " -e clab_topology=evpn"
+     if clab_fabric_uplink == 'primary' else '' }}
+
 ## leaf1's leg on the lab network (clab_fabric_uplink: primary only).
 ##
 ## In vm mode the containerlab VM gets one more NIC on the libvirt 'default'

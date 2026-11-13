@@ -140,9 +140,8 @@
       cluster       {{ hub_name }}.{{ base_domain }}  (platform none, agent-based)
       api, api-int  {{ hub_agent_lb_ip }}  (helper haproxy -> masters)
       *.apps        {{ hub_agent_lb_ip }}  (helper haproxy -> workers)
-      gateway       {{ hub_agent_gateway }}  {{ '(the border leaf: br-ex faces the fabric)'
-                                                 if hub_agent_gateway != lab_network_prefix ~ '.1'
-                                                 else '(libvirt)' }}
+      gateway       {{ hub_agent_gateway }}  {{ '(libvirt)' if hub_agent_gateway == lab_network_prefix ~ '.1'
+                                                 else '(hub_agent_gateway - not libvirt; must already be up)' }}
       resolver      {{ hub_agent_dns_server }}
       {% for h in hub_agent_hosts %}
       {{ '%-9s' | format(h.hostname) }} {{ '%-7s' | format(h.role) }} {{ h.ip }}  {{ hub_agent_primary_nic }} {{ h.mac }}  ({{ h.domain }})
@@ -206,9 +205,9 @@
          if (hub_agent_lb.state | default('')) == 'started' else
          ("NOT listening on " ~ hub_agent_lb_ip ~ ":6443 - carrying on because hub_agent_require_lb is false.") }}
 
-# Only when the gateway is not libvirt's own address. Then it is the border
-# leaf, a container in the containerlab fabric, and it has to exist before the
-# nodes boot: a connected install pulls its release payload through it.
+# Only when the gateway is not libvirt's own address, which is always there.
+# Anything else has to exist before the nodes boot: a connected install pulls
+# its release payload through it.
 - name: Ping the nodes' default gateway
   ansible.builtin.command:
     cmd: "ping -c2 -W2 {{ hub_agent_gateway }}"
@@ -222,12 +221,10 @@
     that: not (hub_agent_require_gateway | bool) or hub_agent_gw_ping.rc == 0
     fail_msg: >-
       The nodes' default gateway {{ hub_agent_gateway }} does not answer.
-      clab_fabric_uplink is '{{ clab_fabric_uplink | default('secondary') }}',
-      so that address is the border leaf's leg on the lab network, and the
-      fabric has to be built BEFORE this cluster: the nodes reach quay.io
-      through it. From udn-bgp-evpn/:
-        ansible-playbook -i ../inventory/hosts setup_udn_bgp_lab.yaml \
-          --ask-vault-pass --tags fabric -e clab_topology=evpn
+      hub_agent_gateway is set to something other than libvirt's
+      {{ lab_network_prefix }}.1, so whatever holds that address has to be up
+      BEFORE this cluster is built: the nodes reach quay.io through it.
+      {{ hub_agent_gateway_hint }}
       To build anyway, pass -e hub_agent_require_gateway=false.
     success_msg: >-
       {{ ("The default gateway " ~ hub_agent_gateway ~ " answers.")

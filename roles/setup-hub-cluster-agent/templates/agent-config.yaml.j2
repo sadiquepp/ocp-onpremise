@@ -9,14 +9,10 @@
   networkConfig. One ISO therefore boots all six.
 
   networkConfig is nmstate. One NIC, one static address, and a default route
-  whose next hop is hub_agent_gateway:
-
-    {{ hub_agent_gateway }}
-
-  With clab_fabric_uplink 'primary' that is the border leaf, on this same
-  network - so br-ex, which OVN-Kubernetes builds over this NIC, faces the
-  fabric, and the leaf is both the node's gateway and its BGP peer. The
-  resolver stays libvirt's dnsmasq, which is on-link either way.
+  whose next hop is hub_agent_gateway ({{ hub_agent_gateway }}). OVN-Kubernetes
+  builds br-ex over this NIC and carries the route across, so this is where
+  the node's default gateway is decided, once. The resolver is libvirt's
+  dnsmasq, which is on-link whatever the gateway is.
 
   rootDeviceHints keeps RHCOS on the first disk; a worker's second disk is
   for LVM Storage and must stay empty.

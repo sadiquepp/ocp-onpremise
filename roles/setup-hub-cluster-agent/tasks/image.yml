@@ -58,7 +58,7 @@
     dest: "{{ hub_install_folder }}"
     remote_src: true
 
-# The rest of the lab calls plain `oc` (setup-lvm-storage, the UDN roles), and
+# The rest of the lab calls plain `oc` (setup-lvm-storage, for one), and
 # on a host where the UPI role never ran there is none on PATH. Installed only
 # if absent, exactly as the UPI role does.
 - name: Check whether oc is on the system PATH

@@ -9,8 +9,8 @@
 ##   method             UPI: bootstrap VM +        agent ISO, no bootstrap VM
 ##                      ignition over fw_cfg
 ##   node addressing    DHCP reservations          static, in agent-config.yaml
-##   default gateway    whatever libvirt's DHCP    lab_node_gateway (vars.yaml)
-##                      hands out ({{ lab_network_prefix }}.1)
+##   default gateway    whatever libvirt's DHCP    hub_agent_gateway
+##                      hands out                  (libvirt unless set)
 ##   name, zone, IPs, VM names, api/*.apps load balancer, install folder:
 ##                      identical. Nothing else in the lab can tell them apart.
 ##
@@ -18,23 +18,18 @@
 ## are the helper's haproxy on ip_list.hublb, exactly as for the UPI hub. This
 ## playbook uses no address the UPI hub does not already have.
 ##
-## WHY IT EXISTS. With clab_fabric_uplink: primary (vars.yaml) the nodes'
-## default gateway is the BGP/EVPN fabric's border leaf, on the lab network
-## itself, so br-ex is the interface that faces the fabric - no second NIC.
-## A gateway can only be chosen at install time, and only where addressing is
-## static, which the UPI hub's is not. See ../udn-bgp-evpn/primary-uplink.md.
+## It stands on its own: an agent-based hub with libvirt as its gateway, and
+## no dependency on any lab built on top of the cluster. The one thing the
+## UPI build cannot do is choose the nodes' default gateway, which here is
+## hub_agent_gateway. vars.yaml points that at lab_node_gateway, so it is
+## still libvirt unless the UDN/BGP lab's clab_fabric_uplink is 'primary'
+## (../udn-bgp-evpn/primary-uplink.md) - the only place this build and that
+## lab meet, and it is in vars.yaml, not in the role.
 ##
-## It works with clab_fabric_uplink: secondary too: lab_node_gateway is then
-## {{ lab_network_prefix }}.1 and this is simply an agent-based hub.
-##
-## BEFORE RUNNING IT:
-##   - DNS and the load balancer, from the repository root:
-##       ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns,lb --ask-vault-pass
-##   - with clab_fabric_uplink: primary, the FABRIC, from ../udn-bgp-evpn/ -
-##     the nodes pull their release payload through the border leaf:
-##       ansible-playbook -i ../inventory/hosts setup_udn_bgp_lab.yaml \
-##         --ask-vault-pass --tags fabric -e clab_topology=evpn
-##   Pre-flight checks all three and names the command for whichever is missing.
+## BEFORE RUNNING IT - DNS and the load balancer, from the repository root:
+##   ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns,lb --ask-vault-pass
+## If hub_agent_gateway is not libvirt's address, whatever holds it must be up
+## too. Pre-flight checks all of it and says what is missing.
 ##
 ## Run from inside standard-cluster/ (its ansible.cfg puts the shared ../roles
 ## on the role search path):
@@ -95,7 +90,7 @@
     ansible.builtin.debug:
       msg: >-
         cluster1 is up ({{ hub_kubeconfig }}), default gateway
-        {{ lab_node_gateway | default(lab_network_prefix ~ '.1') }}.
-        {{ 'Wire it into the fabric from ../udn-bgp-evpn/: ansible-playbook -i ../inventory/hosts setup_udn_bgp_lab.yaml --ask-vault-pass --tags evpn -e clab_topology=evpn -e udn_bgp_cluster=hub'
-           if (clab_fabric_uplink | default('secondary')) == 'primary' else
-           'To make it a hosted-control-plane hub: cd ../acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass' }}
+        {{ hub_agent_gateway | default(lab_network_prefix ~ '.1') }}. To make
+        it a hosted-control-plane hub, install ACM/MCE, MetalLB and the OADP
+        operator with 'cd ../acm && ansible-playbook -i ../inventory/hosts
+        setup_acm.yaml --ask-vault-pass'.

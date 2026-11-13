@@ -65,9 +65,8 @@
 # --import with an explicit hd,cdrom boot order, not --cdrom: the node must
 # prefer the disk once RHCOS is on it, or it reboots back into the agent.
 #
-# One NIC, on the default network, with the lab's usual MAC. Nothing else: with
-# clab_fabric_uplink 'primary' this NIC - and br-ex over it - is the node's
-# only link, to the fabric and to everything else.
+# One NIC, on the default network, with the lab's usual MAC. br-ex is built
+# over it and it is the node's only link.
 - name: Define and start each node
   ansible.builtin.shell:
     cmd: |
