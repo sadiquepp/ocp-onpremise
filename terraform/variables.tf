@@ -1,17 +1,21 @@
 ## ---------------------------------------------------------------------------
-## Required
+## Access
 ## ---------------------------------------------------------------------------
 
-# No default, deliberately. This opens SSH to the internet on a host that will
-# be running an OpenShift lab, and "0.0.0.0/0 because it was the default" is
-# how that ends up permanently open. Put your own address here:
+# Open to the internet by default, so the lab comes up from wherever you are -
+# a laptop that changes networks, a VPN, a workshop room. Login is by key only
+# (the AMI disables passwords) and port 22 is the only one opened, but narrow
+# it to your own address when you can:
 #
-#   allowed_ssh_cidrs = ["203.0.113.4/32"]
+#   allowed_ssh_cidrs = ["<your ip>/32"]    # curl -s https://checkip.amazonaws.com
 #
-# curl -s https://checkip.amazonaws.com will tell you what it is.
+# It is a security-group rule, so changing it later is a quick
+# `terraform apply` that leaves the instance alone. lab-up.sh says so on every
+# run while it is still 0.0.0.0/0.
 variable "allowed_ssh_cidrs" {
-  description = "CIDRs allowed to reach port 22. Your own /32, not 0.0.0.0/0."
+  description = "CIDRs allowed to reach port 22. Defaults to anywhere; narrow it to your own /32 when you can."
   type        = list(string)
+  default     = ["0.0.0.0/0"]
 
   validation {
     condition     = length(var.allowed_ssh_cidrs) > 0
