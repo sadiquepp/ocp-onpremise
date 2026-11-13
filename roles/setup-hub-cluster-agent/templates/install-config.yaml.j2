@@ -1,0 +1,40 @@
+{#
+  install-config.yaml for cluster1 (hub) as an agent-based install.
+
+  Three control-plane replicas and three compute. With workers present the
+  installer leaves the masters unschedulable, which is what the UPI role
+  sets by hand in cluster-scheduler-02-config.yml.
+
+  platform: none, the same as the UPI hub. No apiVIPs and no ingressVIPs:
+  api and api-int resolve to the helper's haproxy, which balances 6443 and
+  22623 across the three masters, and *.apps resolves to the same address,
+  balanced across the three workers on 80 and 443 (roles/setup-lb, roles/
+  setup-dns). The agent installer checks those names from every node before
+  it installs anything, so both have to be in place first.
+
+  machineNetwork must contain the nodes' addresses, or the installer cannot
+  work out which interface is the machine network.
+#}
+apiVersion: v1
+baseDomain: {{ base_domain }}
+compute:
+- name: worker
+  replicas: {{ hub_agent_hosts | selectattr('role', 'equalto', 'worker') | list | length }}
+controlPlane:
+  name: master
+  replicas: {{ hub_agent_hosts | selectattr('role', 'equalto', 'master') | list | length }}
+metadata:
+  name: {{ hub_name }}
+networking:
+  clusterNetwork:
+  - cidr: {{ hub_agent_cluster_network_cidr }}
+    hostPrefix: {{ hub_agent_cluster_network_host_prefix }}
+  machineNetwork:
+  - cidr: {{ lab_network_prefix }}.0/{{ hub_agent_prefix_length }}
+  networkType: OVNKubernetes
+  serviceNetwork:
+  - {{ hub_agent_service_network_cidr }}
+platform:
+  none: {}
+pullSecret: '{{ pull_secret }}'
+sshKey: '{{ hub_agent_ssh_key }}'

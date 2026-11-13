@@ -35,6 +35,9 @@
     loop_var: node_entry
     label: "{{ node_entry.ip_key }}"
   delegate_to: localhost
+  # Nothing to address with clab_fabric_uplink 'primary': the uplink is br-ex,
+  # and the install gave it its address.
+  when: not (udn_bgp_uplink_primary | default(false) | bool)
 
 # network.transport is immutable, so an EVPN tenant has to be CREATED with
 # transport: EVPN - applying the plain CUDN first and patching it afterwards

@@ -26,6 +26,12 @@ how to build the whole fabric by hand.
 just want to build it: pick shared VRF, VRF-Lite or EVPN up front, and it names
 the sections for that path with the test and expected output after each one.
 
+**[primary-uplink.md](primary-uplink.md)** is the alternate wiring: `br-ex`
+faces the fabric instead of a second NIC. One switch in `vars.yaml`
+(`clab_fabric_uplink: primary`), EVPN only, with the hub built from an agent
+ISO so the border leaf can be the nodes' default gateway. Everything else in
+this README describes the default, second-NIC wiring.
+
 **[real-fabric.md](real-fabric.md)** is for the other case: no containerlab at
 all, a real fabric the network team has already configured for the tenants.
 The cluster-side objects on their own, with the lab scaffolding removed and

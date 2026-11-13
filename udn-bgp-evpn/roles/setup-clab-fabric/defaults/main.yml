@@ -30,6 +30,27 @@ clab_version_pin: "0.68.0"
 ## this is unused.
 clab_guest_bridge: br-fabric
 
+## What leaf1 uses to reach the nodes of the first fabric segment, derived
+## from clab_fabric_uplink (vars.yaml). The templates name THESE for anything
+## node-facing - the neighbour addresses, the VTEP next hops - and keep
+## clab_fabric_prefix for what is genuinely on the fabric bridge: leaf1's
+## address there and the client segments.
+##
+##   secondary  the fabric bridge: <clab_fabric_prefix>.<octet> via eth1.
+##              Identical to what the templates rendered before these existed.
+##   primary    the lab network: <lab_network_prefix>.<octet> via eth2, the
+##              leg leaf1 takes on virbr0. The node's address is the one it
+##              already has; there is no second NIC.
+##
+## A cluster on a further segment (fabric_segment, rack2) is not covered by
+## these - its leaf and its addressing come from clab_fabric_segments, and it
+## keeps its own NIC on its own bridge whatever this says.
+clab_uplink_primary: "{{ (clab_fabric_uplink | default('secondary')) == 'primary' }}"
+clab_node_prefix: "{{ lab_network_prefix if (clab_uplink_primary | bool) else clab_fabric_prefix }}"
+clab_node_netmask_bits: "{{ 24 if (clab_uplink_primary | bool) else clab_fabric_netmask_bits }}"
+clab_node_router_octet: "{{ ip_list.fabric_gw if (clab_uplink_primary | bool) else clab_fabric_router_octet }}"
+clab_node_if: "{{ 'eth2' if (clab_uplink_primary | bool) else 'eth1' }}"
+
 ## Which containerlab topology to build:
 ##   bgp  - one border leaf (leaf1) plus a per-tenant external endpoint.
 ##          Everything phases 1 to 3 need.

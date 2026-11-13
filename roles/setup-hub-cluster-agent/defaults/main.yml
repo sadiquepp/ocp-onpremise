@@ -1,0 +1,111 @@
+---
+# cluster1 (hub) as a six-node agent-based install: three masters and three
+# workers booted from one agent ISO, every address static.
+#
+# The same cluster as roles/setup-hub-cluster builds, by a different method.
+# Everything that identifies it is unchanged, so nothing around it has to
+# know which role built it:
+#
+#   name, zone        hub_name / hub_domain (hub.<base_domain>)
+#   node addresses    ip_list.master1-3, ip_list.worker1-3
+#   libvirt domains   hub_master1-3, hub_worker1-3
+#   api, *.apps       the helper's haproxy on ip_list.hublb (roles/setup-lb)
+#   DNS               the hub zone the helper already serves (roles/setup-dns)
+#   folders           hub_vm_folder, hub_install_folder
+#
+# platform: none, so there is no API VIP and no ingress VIP: the load balancer
+# and the DNS names are the ones the UPI hub uses. The only address this
+# pattern adds to the lab is the nodes' default gateway (lab_node_gateway in
+# vars.yaml) when clab_fabric_uplink is 'primary'.
+#
+# What differs from the UPI role, and why this one exists: the nodes'
+# addressing is STATIC and written before they boot, so the default gateway is
+# a value in agent-config.yaml rather than whatever libvirt's DHCP hands out.
+# That is what lets br-ex face the BGP/EVPN fabric - see
+# udn-bgp-evpn/primary-uplink.md.
+
+## The six nodes. 'hostname' is the node's name in the cluster and its record
+## in the hub zone; 'ip_key' is its ip_list entry; 'domain' is its libvirt
+## domain. The FIRST master is the rendezvous host: it runs the assisted
+## service, the other five register with it, and it installs itself last.
+hub_agent_nodes:
+  - {hostname: master1, ip_key: master1, domain: hub_master1, role: master}
+  - {hostname: master2, ip_key: master2, domain: hub_master2, role: master}
+  - {hostname: master3, ip_key: master3, domain: hub_master3, role: master}
+  - {hostname: worker1, ip_key: worker1, domain: hub_worker1, role: worker}
+  - {hostname: worker2, ip_key: worker2, domain: hub_worker2, role: worker}
+  - {hostname: worker3, ip_key: worker3, domain: hub_worker3, role: worker}
+
+## ip_list key of the helper haproxy address that fronts api, api-int and
+## *.apps for this cluster.
+hub_agent_lb_key: hublb
+
+## Sizing follows the lab-wide hub sizes (vars.yaml), so a hub built this way
+## is the same size as one built by the UPI role.
+hub_agent_master_memory: "{{ master_memory }}"
+hub_agent_master_vcpus: "{{ master_cpu }}"
+hub_agent_worker_memory: "{{ worker_memory }}"
+hub_agent_worker_vcpus: "{{ worker_cpu }}"
+hub_agent_disk_gb: 120
+hub_agent_os_variant: rhel9.4
+
+## virt-install's cache= for every disk: none, or unsafe with
+## hub_disk_cache_unsafe (vars.yaml) - the same switch the UPI role reads.
+hub_agent_disk_cache: "{{ 'unsafe' if (hub_disk_cache_unsafe | default(false) | bool) else 'none' }}"
+
+## An empty second disk on each WORKER, for LVM Storage (roles/setup-lvm-storage,
+## run by the playbook after the install) or anything else that wants a raw
+## device. Same path the UPI role uses - <hub_vm_folder>/storage_<hostname>.qcow2
+## - so cleanup.yaml --tags hub removes it. Thin, so the size is a ceiling.
+## Set to 0 for no storage disk.
+hub_agent_storage_disk_gb: 500
+
+## The node's one NIC, as RHCOS names the first virtio device. The agent maps
+## by MAC, but nmstate's route names the interface, so keep it right.
+hub_agent_primary_nic: enp1s0
+hub_agent_mac_prefix: "52:54:00:e2:54"
+hub_agent_installation_disk: /dev/vda
+
+## Addressing. Static: the rendezvous address has to be known before the nodes
+## boot, which a DHCP lease is not.
+##
+## The gateway is the one value that makes this role worth having.
+## lab_node_gateway (vars.yaml) is {{ lab_network_prefix }}.1 - libvirt - when
+## clab_fabric_uplink is 'secondary', and the border leaf's address on this
+## network when it is 'primary'. In the second case the FABRIC HAS TO BE UP
+## BEFORE THE NODES BOOT: they pull their release payload through that
+## gateway. Pre-flight pings it and says so.
+hub_agent_gateway: "{{ lab_node_gateway | default(lab_network_prefix ~ '.1') }}"
+hub_agent_prefix_length: 24
+
+## libvirt's dnsmasq, which forwards the hub zone to the helper - the resolver
+## the UPI hub's nodes get from DHCP. Always on-link, whatever the gateway is.
+hub_agent_dns_server: "{{ lab_network_prefix }}.1"
+
+## Cluster-internal networks - what the UPI hub's install-config carries.
+hub_agent_cluster_network_cidr: 10.128.0.0/14
+hub_agent_cluster_network_host_prefix: 23
+hub_agent_service_network_cidr: 172.30.0.0/16
+
+## Refuse to rebuild over existing VMs unless this is set. A rebuild wipes the
+## generated state in hub_install_folder, including auth/kubeconfig.
+hub_agent_force_reinstall: false
+
+## Block until the cluster is up. Six nodes take longer than three: the five
+## others install from the rendezvous host, then it installs itself.
+hub_agent_wait_for_install: true
+hub_agent_bootstrap_timeout_min: 75
+hub_agent_install_timeout_min: 120
+## When `agent wait-for install-complete` gives up, how much longer to keep
+## asking the CLUSTER whether ClusterVersion went Available before failing.
+hub_agent_settle_extra_min: 30
+
+hub_agent_ssh_public_key_file: "~/.ssh/lab_rsa.pub"
+
+## Whether a missing DNS zone or an unreachable load balancer is fatal. Both
+## are owned by setup_bm_host.yaml (--tags dns,lb), not by this role.
+hub_agent_require_dns: true
+hub_agent_require_lb: true
+## Whether an unreachable default gateway is fatal. Only checked when the
+## gateway is not libvirt's own address.
+hub_agent_require_gateway: true

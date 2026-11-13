@@ -100,6 +100,59 @@
       {{ udn_bgp_peer_leaf_container }}), VTEPs in {{ udn_bgp_vtep_prefix }}.0/24.
   when: clab_clusters[udn_bgp_cluster].fabric_segment is defined
 
+# clab_fabric_uplink 'primary' (vars.yaml): br-ex faces the fabric. The node
+# has no second NIC; it peers with leaf1 from the address it already has, over
+# the lab network, where leaf1 holds ip_list.fabric_gw - and that address is
+# its default gateway too, set when the cluster was installed.
+#
+# Done the same way as the segment above, and for the same reason: everything
+# below - the FRRConfiguration's neighbour, the session checks against leaf1,
+# the stale-nexthop repair, the workshop's environment file - reads the first
+# segment's clab_fabric_* names. Repointing them here is what lets all of it
+# run unchanged. What is NOT unchanged is everything that exists only because
+# the fabric NIC is a second, hot-plugged, unmanaged interface: finding it by
+# MAC, addressing it with an NNCP, repairing its forwarding and rp_filter.
+# br-ex is created and kept forwarding by OVN-Kubernetes, and it is addressed
+# by the install. Those steps are skipped on udn_bgp_uplink_primary.
+#
+# Not for a cluster on a further segment: it keeps its own NIC on its own
+# bridge behind its own leaf, whatever the first segment does.
+- name: Decide which interface faces the fabric on this cluster
+  ansible.builtin.set_fact:
+    udn_bgp_uplink_primary: >-
+      {{ (clab_fabric_uplink | default('secondary')) == 'primary'
+         and clab_clusters[udn_bgp_cluster].fabric_segment is not defined }}
+
+- name: Fail if a primary-uplink cluster is asked for a non-EVPN phase
+  ansible.builtin.assert:
+    that: udn_phase in ['preflight', 'prep', 'enable', 'evpn', 'web']
+    fail_msg: >-
+      clab_fabric_uplink is 'primary' - br-ex faces the fabric - and this run
+      is the '{{ udn_phase }}' phase. That uplink is EVPN only: VRF-Lite needs
+      a VLAN per tenant on the node's uplink, which cannot be added under
+      br-ex after install, and the default and shared phases are not built
+      for it. Run --tags prep, evpn or web, or set clab_fabric_uplink:
+      secondary in vars.yaml and rebuild for the other phases.
+  when: udn_bgp_uplink_primary | bool
+
+- name: Point the fabric addressing at the lab network
+  ansible.builtin.set_fact:
+    clab_fabric_prefix: "{{ lab_network_prefix }}"
+    clab_fabric_netmask_bits: 24
+    clab_fabric_router_octet: "{{ ip_list.fabric_gw }}"
+  when: udn_bgp_uplink_primary | bool
+
+- name: Say which interface faces the fabric
+  ansible.builtin.debug:
+    msg: >-
+      '{{ udn_bgp_cluster }}' reaches the fabric over br-ex: its nodes peer
+      from their {{ clab_fabric_prefix }}.x addresses with leaf1 at
+      {{ clab_fabric_prefix }}.{{ clab_fabric_router_octet }}
+      (AS {{ clab_leaf1_asn }}), which is also their default gateway. No
+      fabric NIC, no fabric NNCP. VTEPs stay in {{ udn_bgp_vtep_prefix }}.0/24
+      on {{ udn_bgp_vtep_iface }}.
+  when: udn_bgp_uplink_primary | bool
+
 # Every tenant the lab declares, captured before the narrowing below
 # overwrites udn_bgp_tenants. Two readers need the whole list rather than
 # this cluster's slice of it: the teardown (see "Remove test namespaces left
@@ -605,7 +658,9 @@
   # that include is what SETS udn_bgp_node_names, so any task referencing it
   # has to be gated identically. Without this the task runs under --tags web,
   # where node-names.yml never ran, and dies on an undefined variable.
-  when: udn_phase not in ['preflight', 'web']
+  when:
+    - udn_phase not in ['preflight', 'web']
+    - not (udn_bgp_uplink_primary | bool)
 
 # Two different failures, reported separately, because they have nothing to do
 # with each other and only one of them is about the NIC.
@@ -628,7 +683,9 @@
   loop: "{{ udn_bgp_fabric_nic_present.results | default([]) }}"
   loop_control:
     label: "{{ item.item.ip_key | default('?') }}"
-  when: item.skipped is not defined
+  when:
+    - item.skipped is not defined
+    - not (udn_bgp_uplink_primary | bool)
 
 - name: Fail with the command that fixes it if a fabric NIC is missing
   ansible.builtin.assert:
@@ -663,7 +720,9 @@
   loop: "{{ udn_bgp_fabric_nic_present.results | default([]) }}"
   loop_control:
     label: "{{ item.item.ip_key | default('?') }}"
-  when: udn_phase not in ['preflight', 'web']
+  when:
+    - udn_phase not in ['preflight', 'web']
+    - not (udn_bgp_uplink_primary | bool)
 
 # A NodeNetworkConfigurationEnactment that has failed does not retry. It is
 # keyed on the policy's metadata.generation, so nmstate re-enacts only when the
@@ -694,7 +753,9 @@
   register: udn_bgp_nnce_state
   changed_when: false
   failed_when: false
-  when: udn_phase not in ['preflight', 'web']
+  when:
+    - udn_phase not in ['preflight', 'web']
+    - not (udn_bgp_uplink_primary | bool)
 
 - name: Delete a failed policy so nmstate enacts it again
   ansible.builtin.command:
@@ -704,6 +765,7 @@
     label: "{{ item.item.ip_key | default('?') }}"
   when:
     - udn_phase not in ['preflight', 'web']
+    - not (udn_bgp_uplink_primary | bool)
     - item.stdout | default('') is search('Failing=True')
 
 - name: Address the fabric NICs
@@ -712,7 +774,9 @@
   loop: "{{ udn_bgp_cluster_nodes }}"
   loop_control:
     label: "{{ item.ip_key }}"
-  when: udn_phase not in ['preflight', 'web']
+  when:
+    - udn_phase not in ['preflight', 'web']
+    - not (udn_bgp_uplink_primary | bool)
 
 - name: Wait for the fabric NIC policies to be applied
   ansible.builtin.command:
@@ -722,7 +786,9 @@
   loop: "{{ udn_bgp_cluster_nodes }}"
   loop_control:
     label: "{{ item.ip_key }}"
-  when: udn_phase not in ['preflight', 'web']
+  when:
+    - udn_phase not in ['preflight', 'web']
+    - not (udn_bgp_uplink_primary | bool)
   changed_when: false
 
 # Forwarding on the fabric NIC. See tasks/fabric-forwarding.yml for why this
@@ -731,7 +797,9 @@
 # only reads.
 - name: Repair forwarding on the fabric NICs
   ansible.builtin.include_tasks: fabric-forwarding.yml
-  when: udn_phase not in ['preflight', 'web']
+  when:
+    - udn_phase not in ['preflight', 'web']
+    - not (udn_bgp_uplink_primary | bool)
 
 # Before the first FRRConfiguration that may reference it. A neighbor whose
 # passwordSecret names a Secret that does not exist yet does not come up, and

@@ -1,0 +1,102 @@
+---
+# The six VMs: for each, a disk and a domain with one NIC on the default
+# network, booting the agent ISO. Workers also get an empty storage disk.
+#
+# No DHCP reservation is added here. setup-bm-host already reserves every
+# ip_list address against 52:54:00:e2:54:<octet>, which is the MAC each node
+# is given below, so libvirt will not hand these addresses to anything else.
+# The nodes do not use the lease: their addressing is static, from
+# agent-config.yaml.
+
+# No --remove-all-storage: all six domains share the agent ISO as their cdrom,
+# and libvirt may count it as the domain's storage - the first undefine would
+# then delete the ISO this run is about to boot. Disks are removed by path.
+- name: Remove stale domains if rebuilding
+  ansible.builtin.shell:
+    cmd: |
+      virsh destroy {{ item }} >/dev/null 2>&1 || true
+      virsh undefine {{ item }} >/dev/null 2>&1 || true
+  loop: "{{ hub_agent_existing_vms }}"
+  changed_when: true
+
+# Always fresh disks. A disk left over from an earlier install still holds a
+# bootable RHCOS, and with boot order hd,cdrom the node would boot THAT rather
+# than the agent ISO - so it would never register, and nothing would say why.
+# The storage disk is replaced too: LVM Storage only takes an empty one.
+- name: Remove any previous node disks
+  ansible.builtin.file:
+    path: "{{ hub_vm_folder }}/{{ item.domain }}.qcow2"
+    state: absent
+  loop: "{{ hub_agent_hosts }}"
+  loop_control:
+    label: "{{ item.domain }}"
+
+- name: Remove any previous storage disks
+  ansible.builtin.file:
+    path: "{{ hub_vm_folder }}/storage_{{ item.hostname }}.qcow2"
+    state: absent
+  loop: "{{ hub_agent_hosts | selectattr('role', 'equalto', 'worker') | list }}"
+  loop_control:
+    label: "{{ item.domain }}"
+
+- name: Create each node's disk
+  ansible.builtin.command:
+    cmd: >-
+      qemu-img create -f qcow2
+      {{ hub_vm_folder }}/{{ item.domain }}.qcow2 {{ hub_agent_disk_gb }}G
+  loop: "{{ hub_agent_hosts }}"
+  loop_control:
+    label: "{{ item.domain }}"
+  changed_when: true
+
+# Attached SECOND, so it is vdb and the rootDeviceHints pin on /dev/vda keeps
+# RHCOS off it.
+- name: Create each worker's storage disk
+  ansible.builtin.command:
+    cmd: >-
+      qemu-img create -f qcow2 -o preallocation=metadata
+      {{ hub_vm_folder }}/storage_{{ item.hostname }}.qcow2 {{ hub_agent_storage_disk_gb }}G
+  loop: "{{ hub_agent_hosts | selectattr('role', 'equalto', 'worker') | list }}"
+  loop_control:
+    label: "{{ item.domain }}"
+  when: hub_agent_storage_disk_gb | int > 0
+  changed_when: true
+
+# --import with an explicit hd,cdrom boot order, not --cdrom: the node must
+# prefer the disk once RHCOS is on it, or it reboots back into the agent.
+#
+# One NIC, on the default network, with the lab's usual MAC. Nothing else: with
+# clab_fabric_uplink 'primary' this NIC - and br-ex over it - is the node's
+# only link, to the fabric and to everything else.
+- name: Define and start each node
+  ansible.builtin.shell:
+    cmd: |
+      virt-install \
+      --import \
+      --name "{{ item.domain }}" \
+      --memory "{{ hub_agent_master_memory if item.role == 'master' else hub_agent_worker_memory }}" \
+      --vcpus "{{ hub_agent_master_vcpus if item.role == 'master' else hub_agent_worker_vcpus }}" \
+      --cpu host-passthrough \
+      --os-variant={{ hub_agent_os_variant }} \
+      --disk "{{ hub_vm_folder }}/{{ item.domain }}.qcow2",format=qcow2,cache={{ hub_agent_disk_cache }},bus=virtio \
+      {% if item.role == 'worker' and hub_agent_storage_disk_gb | int > 0 %}
+      --disk "{{ hub_vm_folder }}/storage_{{ item.hostname }}.qcow2",format=qcow2,cache={{ hub_agent_disk_cache }},bus=virtio \
+      {% endif %}
+      --disk "{{ hub_install_folder }}/agent.x86_64.iso",device=cdrom,bus=sata,readonly=on \
+      --boot hd,cdrom \
+      --network network:default,mac={{ item.mac }},model=virtio \
+      --memballoon model=virtio,freePageReporting=on \
+      --noautoconsole
+  loop: "{{ hub_agent_hosts }}"
+  loop_control:
+    label: "{{ item.domain }}"
+  changed_when: true
+
+- name: Report how to watch the install
+  ansible.builtin.debug:
+    msg:
+      - "{{ hub_agent_hosts | map(attribute='domain') | join(', ') }} are booting the agent ISO."
+      - "Rendezvous host: {{ hub_agent_hosts[0].hostname }} at {{ hub_agent_rendezvous_ip }}"
+      - "Console:   virsh console {{ hub_agent_hosts[0].domain }}"
+      - "Agent UI:  http://{{ hub_agent_rendezvous_ip }}:8080  (once the agent is up)"
+      - "Progress:  {{ hub_install_folder }}/openshift-install --dir {{ hub_install_folder }} agent wait-for install-complete"

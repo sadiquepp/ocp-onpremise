@@ -63,6 +63,14 @@ router bgp {{ clab_leaf1_asn }}
  neighbor 10.0.0.254 password {{ udn_bgp_password }}
 {% endif %}
  !
+{% if clab_uplink_primary | bool %}
+ ! clab_fabric_uplink is 'primary': the nodes below are addressed on the lab
+ ! network itself and reached over eth2, leaf1's leg on it. There is no
+ ! second NIC on the node - this session and the VXLAN underlay ride br-ex -
+ ! and this address is the nodes' default gateway as well as their peer.
+ ! LAB-MGMT above still keeps {{ lab_network_prefix }}.0/24 out of BGP in both
+ ! directions: it is connected on both ends and must never be learned.
+{% endif %}
  ! The OCP nodes. One session each, carrying BOTH address families: ipv4
  ! unicast so the node can learn its way to the other VTEPs, and l2vpn evpn
  ! for the tenant routes. The node side of this is the FRRConfiguration
@@ -71,10 +79,10 @@ router bgp {{ clab_leaf1_asn }}
  ! RouteAdvertisements selects an EVPN network. Until then this side shows the
  ! node as NoNeg in "show bgp l2vpn evpn summary".
 {% for n in clab_fabric_nodes %}
- neighbor {{ clab_fabric_prefix }}.{{ ip_list[n.ip_key] }} remote-as {{ n.asn | default(clab_cluster_asn) }}
- neighbor {{ clab_fabric_prefix }}.{{ ip_list[n.ip_key] }} description {{ n.ip_key }} [{{ n.cluster | default('?') }}]
+ neighbor {{ clab_node_prefix }}.{{ ip_list[n.ip_key] }} remote-as {{ n.asn | default(clab_cluster_asn) }}
+ neighbor {{ clab_node_prefix }}.{{ ip_list[n.ip_key] }} description {{ n.ip_key }} [{{ n.cluster | default('?') }}]
 {% if udn_bgp_password | default('') | length > 0 %}
- neighbor {{ clab_fabric_prefix }}.{{ ip_list[n.ip_key] }} password {{ udn_bgp_password }}
+ neighbor {{ clab_node_prefix }}.{{ ip_list[n.ip_key] }} password {{ udn_bgp_password }}
 {% endif %}
 {% endfor %}
  !
@@ -86,9 +94,9 @@ router bgp {{ clab_leaf1_asn }}
   network {{ udn_bgp_vtep_prefix }}.0/24
   neighbor 10.1.0.2 activate
 {% for n in clab_fabric_nodes %}
-  neighbor {{ clab_fabric_prefix }}.{{ ip_list[n.ip_key] }} activate
-  neighbor {{ clab_fabric_prefix }}.{{ ip_list[n.ip_key] }} route-map FROM-CLUSTER in
-  neighbor {{ clab_fabric_prefix }}.{{ ip_list[n.ip_key] }} route-map TO-CLUSTER out
+  neighbor {{ clab_node_prefix }}.{{ ip_list[n.ip_key] }} activate
+  neighbor {{ clab_node_prefix }}.{{ ip_list[n.ip_key] }} route-map FROM-CLUSTER in
+  neighbor {{ clab_node_prefix }}.{{ ip_list[n.ip_key] }} route-map TO-CLUSTER out
 {% endfor %}
   ! The spine's EVPN session carries l2vpn evpn only. Activating it for ipv4
   ! unicast as well is a common way to end up with two paths for one prefix
@@ -100,8 +108,8 @@ router bgp {{ clab_leaf1_asn }}
   neighbor 10.0.0.254 activate
   neighbor 10.0.0.254 allowas-in origin
 {% for n in clab_fabric_nodes %}
-  neighbor {{ clab_fabric_prefix }}.{{ ip_list[n.ip_key] }} activate
-  neighbor {{ clab_fabric_prefix }}.{{ ip_list[n.ip_key] }} allowas-in origin
+  neighbor {{ clab_node_prefix }}.{{ ip_list[n.ip_key] }} activate
+  neighbor {{ clab_node_prefix }}.{{ ip_list[n.ip_key] }} allowas-in origin
 {% endfor %}
   ! See the note at the top - without this, leaf1 drops every EVPN route it
   ! is supposed to be passing along, because it holds no tenant VRF whose

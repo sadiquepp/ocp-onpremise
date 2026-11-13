@@ -469,6 +469,13 @@ ip_list:
   worker2: 35
   worker3: 36
   hublb: 139
+  ## The BGP/EVPN fabric's border leaf (leaf1) on THIS network, used only when
+  ## clab_fabric_uplink is 'primary' (UDN + BGP lab, further down). It is the
+  ## cluster nodes' default gateway and their BGP peer, so br-ex faces the
+  ## fabric. Not a VM and not a VIP: an address on a container interface, with
+  ## no MAC of the lab's scheme and no DHCP reservation. The only address the
+  ## primary-uplink pattern adds.
+  fabric_gw: 38
   ## The single-node cluster (setup-sno). Two constraints, both load-bearing:
   ## clear of every hosted_cluster_metallb_pools address below (all in
   ## .100-.199), because an address MetalLB may hand out is one the SNO would lose
@@ -868,6 +875,17 @@ sno_name: sno
 ## rather than left to roles/setup-sno/defaults so that setup_udn_bgp_lab.yaml,
 ## which does not import setup-sno, can still resolve it.
 sno_install_folder: "{{ download_dir }}/sno_install"
+
+## The SNO's default gateway, written into its agent-config.yaml. libvirt
+## ({{ lab_network_prefix }}.1) normally; the fabric's border leaf when
+## clab_fabric_uplink is 'primary', which is what puts the SNO's br-ex on the
+## fabric. Install-time only: changing it means rebuilding the SNO.
+##
+## Only for THIS SNO. sno2 and sno3 are built by the same role with sno_name
+## overridden, and this is evaluated with that override in place, so they keep
+## libvirt as their gateway: sno2 reaches the fabric through its own NIC on
+## rack2, and sno3 is not on the fabric at all.
+sno_gateway: "{{ lab_node_gateway if sno_name == 'sno' else lab_network_prefix ~ '.1' }}"
 
 ## SNO minimums are 8 vCPU / 16GiB / 120GB. These are comfortable rather than
 ## minimal - an SNO at exactly the minimum spends its life under memory
@@ -1967,6 +1985,64 @@ ceph_odf_export_dir: "{{ playbook_dir }}/ceph-odf"
 ## default gateway anywhere is moved.
 ## ===========================================================================
 
+## Which node interface faces the fabric. ONE switch for the whole lab: the
+## fabric, both clusters and build-lab.sh all read it from here, so it is set
+## once and never passed on a command line.
+##
+##   secondary - the design in the paragraph above. A second NIC per node on
+##               virbr1; the node's default route never moves. Every phase
+##               (default, shared, vrflite, evpn) works.
+##
+##   primary   - br-ex faces the fabric. No second NIC. leaf1 takes a leg on
+##               the lab network itself ({{ lab_network_prefix }}.<ip_list.fabric_gw>)
+##               and is BOTH the nodes' default gateway and their BGP peer,
+##               which is the shape a production cluster has: one uplink, and
+##               the top-of-rack switch at the other end of it. The VXLAN
+##               underlay and the BGP session ride br-ex.
+##
+##               EVPN ONLY. VRF-Lite needs a VLAN per tenant on the uplink,
+##               and an interface under br-ex cannot be given one after
+##               install; the shared and default phases are not built for it
+##               either. The cluster half refuses those tags.
+##
+##               A node's gateway can only be chosen at install time, so the
+##               clusters have to be BUILT for it - and built AFTER the fabric,
+##               because they reach quay.io through leaf1:
+##                 hub  standard-cluster/setup_cluster1_agent.yaml  (agent-based;
+##                      the UPI hub takes its gateway from DHCP)
+##                 sno  sno/setup_sno.yaml                          (sno_gateway)
+##               Both read lab_node_gateway below. build-lab.sh orders the
+##               steps accordingly. See udn-bgp-evpn/primary-uplink.md.
+##
+## Switching an existing lab from one to the other is a rebuild of the fabric
+## and of both clusters: cleanup.yaml --tags udnlab,hub,sno first.
+clab_fabric_uplink: secondary
+
+## The default gateway the lab's statically addressed clusters are installed
+## with: libvirt, or leaf1's leg on the lab network. Derived - do not set it.
+lab_node_gateway: >-
+  {{ lab_network_prefix }}.{{ ip_list.fabric_gw if clab_fabric_uplink == 'primary' else 1 }}
+
+## leaf1's leg on the lab network (clab_fabric_uplink: primary only).
+##
+## In vm mode the containerlab VM gets one more NIC on the libvirt 'default'
+## network, MAC <clab_uplink_mac_prefix>:<its octet>, enslaved to an in-guest
+## bridge that leaf1 joins - the same mechanics as the fabric NIC and the rack
+## segments, which is why the prefix must differ from clab_fabric_mac_prefix
+## (e2:55) and from every clab_fabric_segments mac_prefix (rack2 is e2:56).
+## In host mode leaf1 joins clab_uplink_bridge directly.
+##
+## MTU 1500, not clab_fabric_mtu: this IS the lab network, and nothing on it is
+## jumbo. A pod's 1400-byte packet plus 50 bytes of VXLAN fits with room to
+## spare; it is the external endpoints, on 9000-byte links behind leaf2, that
+## can send something that does not - the same ceiling clab_client_mtu
+## describes below.
+clab_uplink_network: default
+clab_uplink_bridge: virbr0
+clab_uplink_guest_bridge: br-uplink
+clab_uplink_mac_prefix: "52:54:00:e2:57"
+clab_uplink_mtu: 1500
+
 ## Where containerlab itself runs.
 ##   vm   - a dedicated RHEL9 VM (clab_vm_name) with two NICs: virbr0 for
 ##          management/ssh and virbr1 for the fabric. Keeps Docker's iptables
@@ -2339,6 +2415,22 @@ customized_lab_base_image: "{{ rhel9_kvm_image }}"
 ## hostname at install time, so the role looks it up instead: it matches
 ## ip_list's address against the nodes' InternalIP. See
 ## udn-bgp-evpn/roles/setup-udn-bgp/tasks/node-names.yml.
+## hub1's nodes, as clab_clusters.hub.nodes below consumes them.
+clab_hub_worker_nodes:
+  - domain: hub_worker1
+    ip_key: worker1
+  - domain: hub_worker2
+    ip_key: worker2
+  - domain: hub_worker3
+    ip_key: worker3
+clab_hub_master_nodes:
+  - domain: hub_master1
+    ip_key: master1
+  - domain: hub_master2
+    ip_key: master2
+  - domain: hub_master3
+    ip_key: master3
+
 clab_clusters:
   ## hub1 is a plain standalone cluster whose Network.operator.openshift.io CR
   ## you can patch directly, which is what every phase needs. Hosted-cluster
@@ -2387,13 +2479,12 @@ clab_clusters:
       - purple
       - violet
 
-    nodes:
-      - domain: hub_worker1
-        ip_key: worker1
-      - domain: hub_worker2
-        ip_key: worker2
-      - domain: hub_worker3
-        ip_key: worker3
+    ## The workers always. The masters too when clab_fabric_uplink is
+    ## 'primary': br-ex is then every node's uplink, so the masters are on the
+    ## fabric whether or not anything lists them - and leaving them out would
+    ## have them dial leaf1, on-link, for a session it has no neighbour for.
+    ## With them in, all six sessions establish and every VTEP is routable.
+    nodes: "{{ clab_hub_worker_nodes + (clab_hub_master_nodes if clab_fabric_uplink == 'primary' else []) }}"
 
   ## The replacement hub from the OADP flow. Not in clab_fabric_clusters
   ## below, so nothing is built for it - it is declared so that the old

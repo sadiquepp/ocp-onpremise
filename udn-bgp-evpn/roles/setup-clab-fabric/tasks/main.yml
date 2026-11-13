@@ -159,6 +159,45 @@
 # built separately, in roles/setup-udn-bgp/tasks/main.yml, from the same
 # source. See the long note in vars.yaml for why reading one from the other
 # does not work.
+# clab_fabric_uplink (vars.yaml) decides which node interface faces the
+# fabric. Unlike clab_topology it is NOT a command-line flag: it is read from
+# vars.yaml by this role, by the cluster half and by the cluster builds, so
+# the three cannot disagree with each other.
+- name: Validate clab_fabric_uplink
+  ansible.builtin.assert:
+    that: (clab_fabric_uplink | default('secondary')) in ['secondary', 'primary']
+    fail_msg: >-
+      clab_fabric_uplink must be 'secondary' or 'primary', got
+      '{{ clab_fabric_uplink | default('(unset)') }}'.
+  tags: [always]
+
+# With br-ex as the uplink there is one link per node, and VRF-Lite needs a
+# VLAN on it per tenant - which cannot be added under br-ex after install. So
+# the primary uplink is built for EVPN and nothing else, and the 'bgp'
+# topology, whose leaf1 exists to terminate those VLANs, has nothing to do.
+- name: Fail if the primary uplink is asked for a topology it does not have
+  ansible.builtin.assert:
+    that:
+      - clab_topology == 'evpn'
+      - "'fabric_gw' in ip_list"
+    fail_msg: >-
+      {{ "clab_fabric_uplink is 'primary' and this run has clab_topology=" ~ clab_topology
+         ~ ". With br-ex facing the fabric the lab is EVPN only: add -e clab_topology=evpn"
+         ~ " (build-lab.sh --evpn), or set clab_fabric_uplink: secondary in vars.yaml for"
+         ~ " the shared and VRF-Lite phases."
+         if clab_topology != 'evpn' else
+         "clab_fabric_uplink is 'primary' and ip_list in vars.yaml has no fabric_gw -"
+         ~ " the address leaf1 takes on the lab network, which is the nodes' default"
+         ~ " gateway and their BGP peer." }}
+    success_msg: >-
+      br-ex faces the fabric: leaf1 takes
+      {{ clab_node_prefix }}.{{ clab_node_router_octet }} on the lab network
+      ({{ clab_uplink_network }}) and the nodes get no second NIC.
+  when:
+    - clab_uplink_primary | bool
+    - clab_renders_fabric | bool
+  tags: [always]
+
 - name: Validate that every fabric cluster is declared
   ansible.builtin.assert:
     that: item in (clab_clusters | default({}))
@@ -394,11 +433,17 @@
       tags: [fabric, network]
   tags: [fabric, network]
 
+# Not with clab_fabric_uplink 'primary': the node's uplink is the NIC it
+# already has, under br-ex, and it gets nothing else. That is also what lets
+# the fabric be built BEFORE the clusters exist, which that mode needs - the
+# nodes install through leaf1 - where this step would fail on a missing VM.
+# A rack's nodes (rack.yml) still get their NIC on their own bridge.
 - name: Attach a fabric NIC to each OCP node VM
   ansible.builtin.include_tasks:
     file: node-nics.yml
     apply:
       tags: [fabric, nodenics]
+  when: not (clab_uplink_primary | bool)
   tags: [fabric, nodenics]
 
 - name: Build the containerlab VM
@@ -477,6 +522,18 @@
       delegate_to: "{{ clab_exec_host }}"
       tags: [fabric, clabinstall]
   tags: [fabric, clabinstall]
+
+# clab_fabric_uplink 'primary' only: extend the LAB network into the
+# containerlab host, so the topology below can put leaf1 on it. Before the
+# deploy, because containerlab's 'bridge' kind attaches to a bridge that
+# already exists and fails the whole deploy on one that does not.
+- name: Give the containerlab host a bridge onto the lab network
+  ansible.builtin.include_tasks:
+    file: uplink.yml
+    apply:
+      tags: [fabric, clabdeploy, uplink]
+  when: clab_uplink_primary | bool
+  tags: [fabric, clabdeploy, uplink]
 
 - name: Render the topology and deploy the fabric
   ansible.builtin.include_tasks:

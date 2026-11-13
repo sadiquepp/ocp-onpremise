@@ -1,0 +1,135 @@
+---
+# Two waits, because they fail for different reasons - see
+# roles/setup-sno/tasks/wait.yml. Then one check this role exists for: that
+# every node's default route really points at the gateway it was given.
+
+- name: Wait for bootstrap to complete (up to {{ hub_agent_bootstrap_timeout_min }}m)
+  ansible.builtin.command:
+    cmd: >-
+      {{ hub_install_folder }}/openshift-install --dir {{ hub_install_folder }}
+      agent wait-for bootstrap-complete --log-level=info
+  register: hub_agent_bootstrap
+  changed_when: false
+  failed_when: false
+  timeout: "{{ (hub_agent_bootstrap_timeout_min | int) * 60 }}"
+
+- name: Report the bootstrap result
+  ansible.builtin.debug:
+    msg: "{{ (hub_agent_bootstrap.stderr_lines | default([], true) + hub_agent_bootstrap.stdout_lines | default([], true))[-25:] }}"
+
+# Deliberately NOT fatal: bootstrap-complete is a milestone as the INSTALLER
+# sees it, and it gives up on things the cluster recovers from by itself. The
+# install wait below asks the same question of the whole cluster and cannot
+# pass if bootstrap really never finished.
+- name: Note that bootstrap did not report complete
+  ansible.builtin.debug:
+    msg: >-
+      bootstrap-complete gave up after {{ hub_agent_bootstrap_timeout_min }}m.
+      Not fatal on its own - carrying on to wait for the install to finish.
+      If that times out too, start with the rendezvous host:
+        virsh console {{ hub_agent_hosts[0].domain }}
+        ssh -i ~/.ssh/lab_rsa core@{{ hub_agent_rendezvous_ip }} 'sudo journalctl -u assisted-service -u agent'
+      Hosts that register but stay Insufficient usually fail one of the
+      agent's own checks: api / api-int / *.apps.{{ hub_domain }} must resolve
+      to {{ hub_agent_lb_ip }} from the node, and the node must reach quay.io
+      through its gateway {{ hub_agent_gateway }}.
+  when: hub_agent_bootstrap.rc != 0
+
+- name: Wait for the install to complete (up to {{ hub_agent_install_timeout_min }}m)
+  ansible.builtin.command:
+    cmd: >-
+      {{ hub_install_folder }}/openshift-install --dir {{ hub_install_folder }}
+      agent wait-for install-complete --log-level=info
+  register: hub_agent_complete
+  changed_when: false
+  failed_when: false
+  timeout: "{{ (hub_agent_install_timeout_min | int) * 60 }}"
+
+- name: Report the install result
+  ansible.builtin.debug:
+    msg: "{{ (hub_agent_complete.stderr_lines | default([], true) + hub_agent_complete.stdout_lines | default([], true))[-25:] }}"
+
+# Last resort, and the authoritative one: the installer's wait exits non-zero
+# on transients, so when it gives up, ask the cluster.
+- name: Ask the cluster itself whether it became Available (up to {{ hub_agent_settle_extra_min }}m more)
+  ansible.builtin.command:
+    cmd: >-
+      oc get clusterversion version
+      -o 'jsonpath={.status.conditions[?(@.type=="Available")].status}'
+  environment:
+    KUBECONFIG: "{{ hub_install_folder }}/auth/kubeconfig"
+    PATH: "{{ hub_install_folder }}:{{ lookup('env', 'PATH') }}"
+  register: hub_agent_settled
+  retries: "{{ [1, ((hub_agent_settle_extra_min | int) * 3)] | max }}"
+  delay: 20
+  until: hub_agent_settled.stdout | trim == 'True'
+  changed_when: false
+  failed_when: false
+  when: hub_agent_complete.rc != 0
+
+- name: Fail if the cluster never came up
+  ansible.builtin.assert:
+    that: hub_agent_complete.rc == 0 or (hub_agent_settled.stdout | default('') | trim) == 'True'
+    fail_msg: >-
+      {{ hub_name }} did not come up: the install wait timed out and
+      ClusterVersion was still not Available {{ hub_agent_settle_extra_min }}m
+      later. Look at it directly - it may still be reachable:
+        export KUBECONFIG={{ hub_install_folder }}/auth/kubeconfig
+        oc get nodes ; oc get clusteroperators
+      Degraded ingress or console operators usually mean the helper's haproxy
+      is not reaching the workers on 80/443, or *.apps.{{ hub_domain }} does
+      not resolve to {{ hub_agent_lb_ip }}. Image pulls failing on every node
+      mean the gateway {{ hub_agent_gateway }} is not forwarding.
+      {{ ('Bootstrap did not report complete either, so start further back: '
+          if hub_agent_bootstrap.rc != 0 else '') }}
+        virsh console {{ hub_agent_hosts[0].domain }}
+        ssh -i ~/.ssh/lab_rsa core@{{ hub_agent_rendezvous_ip }} 'sudo journalctl -u assisted-service -u agent'
+      Nothing after this step has run - LVM Storage above all. Once
+      `oc get clusterversion` does report Available, finish the build with:
+        cd standard-cluster && ansible-playbook -i ../inventory/hosts
+        setup_cluster1_agent.yaml --ask-vault-pass --tags lvm
+    success_msg: >-
+      {{ hub_name }} is installed{{ ''
+         if hub_agent_complete.rc == 0
+         else " - the installer's wait gave up, but ClusterVersion reports
+               Available, so the build carries on" }}.
+
+# Read from the kernel, over ssh. The route is the whole point of building the
+# hub this way, and a node that came up on the wrong gateway works for
+# everything except the thing being tested.
+- name: Read each node's default route
+  ansible.builtin.command:
+    cmd: >-
+      ssh -i {{ hub_agent_ssh_public_key_file | regex_replace('[.]pub$', '') }}
+      -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+      -o ConnectTimeout=10 core@{{ item.ip }}
+      ip -4 route show default
+  register: hub_agent_routes
+  changed_when: false
+  failed_when: false
+  loop: "{{ hub_agent_hosts }}"
+  loop_control:
+    label: "{{ item.hostname }}"
+
+- name: Fail if a node's default route is not through the gateway it was given
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - ('default via ' ~ hub_agent_gateway ~ ' dev br-ex') in item.stdout
+    fail_msg: >-
+      {{ item.item.hostname }} ({{ item.item.ip }}) does not route by
+      {{ hub_agent_gateway }} on br-ex:
+      {{ (item.stdout_lines | default([])) + (item.stderr_lines | default([])) }}
+      The cluster itself is up, but nothing after this step has run.
+    success_msg: >-
+      {{ item.item.hostname }}: {{ item.stdout | trim }}
+  loop: "{{ hub_agent_routes.results }}"
+  loop_control:
+    label: "{{ item.item.hostname }}"
+
+- name: Report how to use the cluster
+  ansible.builtin.debug:
+    msg:
+      - "export KUBECONFIG={{ hub_install_folder }}/auth/kubeconfig"
+      - "kubeadmin password: {{ hub_install_folder }}/auth/kubeadmin-password"
+      - "console: https://console-openshift-console.apps.{{ hub_domain }}"

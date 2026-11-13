@@ -76,6 +76,15 @@
 # leaf come from the playbooks reading the same flag. EVPN only: under
 # --vrflite or --shared the script turns it off for the run and says so.
 #
+# THE UPLINK. clab_fabric_uplink in ../vars.yaml decides which node interface
+# faces the fabric, and this script follows it - there is no flag for it,
+# because the fabric, the clusters and the cluster half all read it from the
+# same place. With 'primary', br-ex faces the fabric (primary-uplink.md): the
+# hub is built by ../standard-cluster/setup_cluster1_agent.yaml instead of the
+# UPI playbook, the fabric step runs BEFORE the clusters step because the
+# nodes install through leaf1, and only the EVPN mode is accepted. The steps
+# keep their names; --list shows the order in force.
+#
 # RUN IT UNDER tmux (or screen). A full build installs two OpenShift
 # clusters and takes hours; if the ssh session drops, the shell gets
 # SIGHUP and takes the build with it, usually mid-install, leaving VMs
@@ -128,6 +137,8 @@ KUBECONFIG_HUB="${KUBECONFIG_HUB:-/var/lib/libvirt/images/hub_install/auth/kubec
 KUBECONFIG_SNO="${KUBECONFIG_SNO:-/var/lib/libvirt/images/sno_install/auth/kubeconfig}"
 KUBECONFIG_SNO2="${KUBECONFIG_SNO2:-/var/lib/libvirt/images/sno2_install/auth/kubeconfig}"
 SNO2=0                                  # sno2_enabled, resolved below
+UPLINK="secondary"                      # clab_fabric_uplink, resolved below
+HUB_PLAYBOOK="../standard-cluster/setup_cluster1.yaml"
 LOGDIR="${LOGDIR:-./build-logs}"
 PARALLEL_TENANTS=0
 REBUILD_CLUSTERS=0
@@ -165,7 +176,9 @@ list_steps() {
   bmhost     the helper VM: DNS, load balancer, the generated inventory
   clusters   hub (cluster1, no ACM) and the SNO, IN PARALLEL - and sno2,
              when sno2_enabled is true
-  fabric     containerlab leaf1/spine/leaf2, virbr1, the node NICs
+  fabric     containerlab leaf1/spine/leaf2, virbr1, the node NICs. With
+             clab_fabric_uplink: primary it runs BEFORE clusters, attaches no
+             node NICs, and puts leaf1 on the lab network as the nodes' gateway
   preflight  report what the clusters can do; changes nothing
   tenants    the cluster half, hub then sno (--parallel-tenants to overlap).
              --tags evpn under --evpn, --tags vrflite under --vrflite
@@ -291,6 +304,47 @@ if sno2_from_vars; then
     fi
 fi
 if (( SNO2 && WORKSHOP )); then EXTRA_STEPS+=(check-sno2); fi
+
+# clab_fabric_uplink as the playbooks will see it, asked the same way as
+# sno2_enabled above and for the same reason. It is a vars.yaml setting, not a
+# flag: the fabric, the cluster half and both cluster builds read it there, so
+# this script only has to follow it.
+#
+# 'primary' - br-ex faces the fabric - changes three things here:
+#   - the hub is built by setup_cluster1_agent.yaml, because the nodes' default
+#     gateway is leaf1 and a gateway can only be set where addressing is
+#     static. The SNO's playbook is the same one; it reads sno_gateway.
+#   - the FABRIC is built BEFORE the clusters. They install through leaf1, and
+#     the fabric no longer needs them to exist, since it attaches no NIC to
+#     them. With the default uplink it is the other way round.
+#   - it is EVPN only.
+uplink_from_vars() {
+    if command -v ansible >/dev/null 2>&1; then
+        ANSIBLE_LOCALHOST_WARNING=False ANSIBLE_INVENTORY_UNPARSED_WARNING=False \
+            ansible localhost -c local -i localhost, -m ansible.builtin.debug \
+            -a "msg={{ 'UPLINK_PRIMARY' if (clab_fabric_uplink | default('secondary')) == 'primary' else 'UPLINK_SECONDARY' }}" \
+            -e @../vars.yaml "${EXTRA_VARS[@]}" 2>/dev/null | grep -q UPLINK_PRIMARY
+    else
+        grep -qE '^clab_fabric_uplink:[[:space:]]*"?primary"?[[:space:]]*$' ../vars.yaml
+    fi
+}
+if uplink_from_vars; then
+    UPLINK="primary"
+    HUB_PLAYBOOK="../standard-cluster/setup_cluster1_agent.yaml"
+    if [[ "$MODE" != "evpn" ]]; then
+        echo "clab_fabric_uplink is 'primary' (br-ex faces the fabric), which is EVPN only." >&2
+        echo "Run without --$MODE, or set clab_fabric_uplink: secondary in vars.yaml." >&2
+        exit 1
+    fi
+    # Swap the two steps where they stand, so the workshop's shorter list and
+    # the full one are both reordered by the same line.
+    for i in "${!STEPS[@]}"; do
+        case "${STEPS[$i]}" in
+            clusters) STEPS[$i]="fabric" ;;
+            fabric)   STEPS[$i]="clusters" ;;
+        esac
+    done
+fi
 TOTAL=${#STEPS[@]}
 
 (( WANT_LIST )) && { list_steps; exit 0; }
@@ -459,16 +513,24 @@ guard_clusters() {
         done
     fi
     (( ${#found[@]} == 0 )) && return 0
+    # With the primary uplink the fabric step comes BEFORE the clusters step,
+    # so "--from fabric" would walk straight back into this refusal.
+    local RESUME_HINT="./build-lab.sh --from fabric        build the UDN lab on the clusters you have"
+    if [[ "$UPLINK" == "primary" ]]; then
+        RESUME_HINT="./build-lab.sh --only fabric        (re)build the fabric, then
+  ./build-lab.sh --from preflight     build the UDN lab on the clusters you have"
+    fi
     cat >&2 <<EOF
 
 REFUSING to rebuild the clusters - this lab looks already built:
 $(printf '  - %s\n' "${found[@]}")
 
-standard-cluster/setup_cluster1.yaml and sno/setup_sno.yaml are not idempotent. qemu-img create
-overwrites an existing disk and virt-install fails on an existing domain, so
-re-running them against a live cluster destroys it rather than skipping.
+The cluster playbooks ($HUB_PLAYBOOK, sno/setup_sno.yaml) must not be
+re-run against a live cluster: the UPI hub's qemu-img create overwrites an
+existing disk and virt-install fails on an existing domain, and the agent
+builds refuse outright.
 
-  ./build-lab.sh --from fabric        build the UDN lab on the clusters you have
+  $RESUME_HINT
   ./build-lab.sh --rebuild-clusters   run cleanup.yaml, then build from scratch
 
 EOF
@@ -495,10 +557,20 @@ run_step() {
     clusters)
         guard_clusters
         say "$(pos clusters)  hub and SNO$( (( SNO2 )) && echo ' and sno2'), in parallel"
-        play_bg hub ../standard-cluster/setup_cluster1.yaml
+        # HUB_PLAYBOOK is the UPI build, or the agent-based one when
+        # clab_fabric_uplink is 'primary' - same cluster, same names and
+        # addresses, static gateway.
+        play_bg hub "$HUB_PLAYBOOK"
         play_bg sno ../sno/setup_sno.yaml
         if (( SNO2 )); then play_bg sno2 ../sno/setup_sno2.yaml; fi
-        wait_all ;;
+        wait_all
+        # With the primary uplink the fabric was built before any cluster
+        # existed, and it left the racks out (below): a rack's node still gets
+        # a NIC on its own bridge, which needs its VM. Add them now.
+        if [[ "$UPLINK" == "primary" ]] && (( SNO2 )); then
+            say "$(pos clusters)  rack segments, now that their nodes exist"
+            play setup_udn_bgp_lab.yaml --tags rack -e "clab_topology=$TOPOLOGY"
+        fi ;;
     image-publish)
         say "publish the lab image to S3, for other hosts to pull"
         play publish-lab-image.yaml ;;
@@ -524,6 +596,9 @@ run_step() {
         # refuses, because a forgotten flag looks exactly like a switch.
         local -a switch=()
         if (( SWITCH_TOPOLOGY )); then switch=(-e clab_topology_switch=true); fi
+        # Primary uplink: this runs BEFORE the clusters, so a rack - whose
+        # node VM does not exist yet - is left for the clusters step.
+        if [[ "$UPLINK" == "primary" ]] && (( SNO2 )); then switch+=(--skip-tags rack); fi
         play setup_udn_bgp_lab.yaml --tags fabric -e "clab_topology=$TOPOLOGY" "${switch[@]}" ;;
     preflight)
         say "$(pos preflight)  pre-flight - changes nothing"

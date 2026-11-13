@@ -54,6 +54,14 @@
 ##                      phase 2 only - in phase 3 each tenant has its own VRF
 ##                      on the leaf and this client reaches none of them.
 ##
+## THE UPLINK. Everything above describes clab_fabric_uplink: secondary, the
+## default. With clab_fabric_uplink: primary in vars.yaml, br-ex faces the
+## fabric instead: no node NICs, leaf1 takes an address on the lab network and
+## is the nodes' default gateway as well as their BGP peer, the fabric is built
+## BEFORE the clusters, and only --tags prep, evpn and web are accepted by the
+## cluster half. It is read from vars.yaml, never passed with -e. See
+## primary-uplink.md.
+##
 ## WHERE TO RUN IT. Both plays are `hosts: localhost`, so there is no
 ## delegation to fall back on and the tag decides which machine you must be on:
 ##

@@ -1,0 +1,62 @@
+{#
+  agent-config.yaml for cluster1 (hub) as an agent-based install.
+
+  rendezvousIP is the first master's address. That node runs the assisted
+  service, the other five register with it, and it installs itself last.
+
+  Per host, 'interfaces' is how the agent recognises the machine it booted
+  on: it matches the MAC against the real NIC and applies that host's
+  networkConfig. One ISO therefore boots all six.
+
+  networkConfig is nmstate. One NIC, one static address, and a default route
+  whose next hop is hub_agent_gateway:
+
+    {{ hub_agent_gateway }}
+
+  With clab_fabric_uplink 'primary' that is the border leaf, on this same
+  network - so br-ex, which OVN-Kubernetes builds over this NIC, faces the
+  fabric, and the leaf is both the node's gateway and its BGP peer. The
+  resolver stays libvirt's dnsmasq, which is on-link either way.
+
+  rootDeviceHints keeps RHCOS on the first disk; a worker's second disk is
+  for LVM Storage and must stay empty.
+#}
+apiVersion: v1alpha1
+kind: AgentConfig
+metadata:
+  name: {{ hub_name }}
+rendezvousIP: {{ hub_agent_rendezvous_ip }}
+hosts:
+{% for h in hub_agent_hosts %}
+  - hostname: {{ h.hostname }}
+    role: {{ h.role }}
+    interfaces:
+      - name: {{ hub_agent_primary_nic }}
+        macAddress: {{ h.mac }}
+    rootDeviceHints:
+      deviceName: {{ hub_agent_installation_disk }}
+    networkConfig:
+      interfaces:
+        - name: {{ hub_agent_primary_nic }}
+          type: ethernet
+          state: up
+          mac-address: {{ h.mac }}
+          ipv4:
+            enabled: true
+            dhcp: false
+            address:
+              - ip: {{ h.ip }}
+                prefix-length: {{ hub_agent_prefix_length }}
+          ipv6:
+            enabled: false
+      dns-resolver:
+        config:
+          server:
+            - {{ hub_agent_dns_server }}
+      routes:
+        config:
+          - destination: 0.0.0.0/0
+            next-hop-address: {{ hub_agent_gateway }}
+            next-hop-interface: {{ hub_agent_primary_nic }}
+            table-id: 254
+{% endfor %}

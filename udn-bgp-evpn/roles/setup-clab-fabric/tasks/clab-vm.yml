@@ -13,6 +13,12 @@
 #   2. virbr1, no address - the fabric. Enslaved to an in-guest bridge that
 #      containerlab attaches FRR nodes to.
 #
+# With clab_fabric_uplink 'primary' there is a third:
+#   3. virbr0 again, no address - leaf1's leg on the lab network. A second NIC
+#      on the same network as the management one, enslaved to its own in-guest
+#      bridge; tasks/uplink.yml builds that bridge and hot-plugs this NIC into
+#      a VM that was created before the switch was flipped.
+#
 # NIC order is the order they are given to virt-install, so the fabric NIC is
 # the second PCI device and RHEL9 names it enp2s0. clab-install.yml matches on
 # MAC rather than trusting that, for the same reason the NMState policies do.
@@ -55,7 +61,9 @@
       --noautoconsole \
       --cpu host-passthrough \
       --network network:default,mac=52:54:00:e2:54:{{ ip_list.clab }} \
-      --network network:{{ clab_fabric_network }},model=virtio,mac={{ clab_fabric_mac_prefix }}:{{ ip_list.clab }}
+      --network network:{{ clab_fabric_network }},model=virtio,mac={{ clab_fabric_mac_prefix }}:{{ ip_list.clab }}{% if clab_uplink_primary | bool %} \
+      --network network:{{ clab_uplink_network }},model=virtio,mac={{ clab_uplink_mac_prefix }}:{{ ip_list.clab }}{% endif %}
+
   when: clab_vm_state.stdout == ''
 
 - name: Wait for the containerlab VM to accept ssh

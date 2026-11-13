@@ -1,0 +1,42 @@
+---
+# cluster1 (hub): three masters and three workers from one agent ISO, static
+# addressing, platform none behind the helper's haproxy. Connected only.
+#
+# The same four stages as roles/setup-compact-cluster, each runnable by tag:
+#
+#   hubagentpreflight   everything knowable before anything is built
+#   hubagentimage       get the installer, render the manifests, build the ISO
+#   hubagentvm          the six libvirt domains, booting the ISO
+#   hubagentwait        block until the cluster is up
+#
+# `apply: tags` on every include, not just `tags`: a tag on a dynamic include
+# selects the include itself but NOT the tasks it brings in.
+
+- name: Pre-flight
+  ansible.builtin.include_tasks:
+    file: preflight.yml
+    apply:
+      tags: [hubagent, hubagentpreflight, hubagentimage, hubagentvm, hubagentwait]
+  tags: [hubagent, hubagentpreflight, hubagentimage, hubagentvm, hubagentwait]
+
+- name: Build the agent ISO
+  ansible.builtin.include_tasks:
+    file: image.yml
+    apply:
+      tags: [hubagent, hubagentimage]
+  tags: [hubagent, hubagentimage]
+
+- name: Build the six VMs
+  ansible.builtin.include_tasks:
+    file: vm.yml
+    apply:
+      tags: [hubagent, hubagentvm]
+  tags: [hubagent, hubagentvm]
+
+- name: Wait for the cluster
+  ansible.builtin.include_tasks:
+    file: wait.yml
+    apply:
+      tags: [hubagent, hubagentwait]
+  when: hub_agent_wait_for_install | bool
+  tags: [hubagent, hubagentwait]

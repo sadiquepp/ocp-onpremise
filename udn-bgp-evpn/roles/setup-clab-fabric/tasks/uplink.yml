@@ -1,0 +1,144 @@
+---
+# leaf1's leg on the lab network (clab_fabric_uplink: primary).
+#
+#   nodes' br-ex -- virbr0 --+-- lab host .1 (NAT, DNS)
+#                            +-- containerlab VM: <uplink NIC> -- br-uplink -- leaf1:eth2
+#
+# containerlab's 'bridge' kind attaches a veth to a bridge that already
+# exists. In host mode that bridge is virbr0 itself and there is nothing to
+# build. In vm mode the containerlab VM needs a bridge of its own ON the lab
+# network - the same construction as the fabric bridge (clab-install.yml) and
+# each rack's (rack.yml), with one difference: this network is the one the
+# VM's management NIC is already on. So it is a SECOND NIC on that network,
+# never the management NIC itself - enslaving that one would take the VM's
+# ssh address down with it - and the bridge script is told so, which makes it
+# flush any DHCP lease off the port and stop the bridge answering ARP for the
+# management address (templates/clab-fabric-bridge.sh.j2).
+#
+# Everything here is additive and repeatable. It runs on the lab host and
+# delegates the in-guest half, like rack.yml.
+
+- name: Read the containerlab VM's interfaces
+  ansible.builtin.command:
+    cmd: "virsh domiflist {{ clab_vm_name }}"
+  register: clab_uplink_vm_ifs
+  changed_when: false
+  when: clab_deploy_mode == 'vm'
+
+# clab-vm.yml gives a NEW VM this NIC at creation. This covers the VM that
+# already existed when clab_fabric_uplink was switched to 'primary': hot-plug,
+# so the routers in it keep running.
+- name: Hot-plug a NIC on the lab network into the containerlab VM
+  ansible.builtin.command:
+    cmd: >-
+      virsh attach-interface {{ clab_vm_name }}
+      --type network --source {{ clab_uplink_network }}
+      --model virtio
+      --mac {{ clab_uplink_mac_prefix }}:{{ ip_list.clab }}
+      --live --config
+  when:
+    - clab_deploy_mode == 'vm'
+    - (clab_uplink_mac_prefix ~ ':' ~ ip_list.clab) | lower not in (clab_uplink_vm_ifs.stdout | lower)
+
+- name: Install the uplink bridge script
+  ansible.builtin.template:
+    src: clab-fabric-bridge.sh.j2
+    dest: /usr/local/sbin/clab-fabric-bridge-uplink.sh
+    mode: '0755'
+  vars:
+    clab_guest_bridge: "{{ clab_uplink_guest_bridge }}"
+    clab_fabric_mac_prefix: "{{ clab_uplink_mac_prefix }}"
+    clab_fabric_network: "{{ clab_uplink_network }}"
+    clab_fabric_mtu: "{{ clab_uplink_mtu }}"
+    clab_bridge_on_lab_network: true
+  delegate_to: "{{ clab_exec_host }}"
+  when: clab_deploy_mode == 'vm'
+
+- name: Create the uplink bridge and enslave its NIC
+  ansible.builtin.command:
+    cmd: /usr/local/sbin/clab-fabric-bridge-uplink.sh
+  register: clab_uplink_bridge_setup
+  changed_when: false
+  delegate_to: "{{ clab_exec_host }}"
+  when: clab_deploy_mode == 'vm'
+
+- name: Report the uplink bridge
+  ansible.builtin.debug:
+    msg: "{{ clab_uplink_bridge_setup.stdout_lines }}"
+  when: clab_deploy_mode == 'vm'
+
+# Before docker.service, like the fabric bridge's unit: a reboot must not
+# bring containerlab's containers back onto a bridge with no uplink.
+- name: Make the uplink bridge survive a reboot
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/clab-fabric-bridge-uplink.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Lab-network bridge for leaf1 of the containerlab UDN/BGP lab
+      After=network-pre.target
+      Before=docker.service
+      Wants=network-pre.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/clab-fabric-bridge-uplink.sh
+
+      [Install]
+      WantedBy=multi-user.target
+  delegate_to: "{{ clab_exec_host }}"
+  when: clab_deploy_mode == 'vm'
+
+- name: Enable the uplink bridge unit
+  ansible.builtin.systemd:
+    name: clab-fabric-bridge-uplink
+    enabled: true
+    daemon_reload: true
+  delegate_to: "{{ clab_exec_host }}"
+  when: clab_deploy_mode == 'vm'
+
+# The VM's own way to the lab host must still be its management NIC. If the
+# uplink port kept a lease, there would be two default routes here and the
+# second is through a bridge port.
+- name: Read the containerlab VM's default routes
+  ansible.builtin.command:
+    cmd: ip -4 route show default
+  register: clab_uplink_vm_routes
+  changed_when: false
+  delegate_to: "{{ clab_exec_host }}"
+  when: clab_deploy_mode == 'vm'
+
+- name: Fail if the containerlab VM picked up a second default route
+  ansible.builtin.assert:
+    that: clab_uplink_vm_routes.stdout_lines | length == 1
+    fail_msg: >-
+      The containerlab VM has {{ clab_uplink_vm_routes.stdout_lines | length }}
+      default routes: {{ clab_uplink_vm_routes.stdout_lines }}. It should have
+      exactly one, through its management NIC. The NIC behind
+      {{ clab_uplink_guest_bridge }} is on the lab network, which has a DHCP
+      server, and something leased an address on it. On the VM:
+      `nmcli device status` should show that NIC as unmanaged; re-run
+      /usr/local/sbin/clab-fabric-bridge-uplink.sh and check again.
+    success_msg: "The containerlab VM's one default route: {{ clab_uplink_vm_routes.stdout | trim }}"
+  when: clab_deploy_mode == 'vm'
+
+# virbr0 is libvirt's, and in host mode leaf1's veth joins it directly. Check
+# it is there rather than let containerlab report a missing bridge.
+- name: Check the lab network's bridge exists on this host
+  ansible.builtin.command:
+    cmd: "ip link show {{ clab_uplink_bridge }}"
+  register: clab_uplink_host_bridge
+  changed_when: false
+  failed_when: false
+  when: clab_deploy_mode == 'host'
+
+- name: Fail if it does not
+  ansible.builtin.assert:
+    that: clab_uplink_host_bridge.rc == 0
+    fail_msg: >-
+      There is no {{ clab_uplink_bridge }} on this host. clab_uplink_bridge
+      (vars.yaml) must name the bridge of the libvirt '{{ clab_uplink_network }}'
+      network: `virsh net-info {{ clab_uplink_network }}`.
+    success_msg: "leaf1 joins {{ clab_uplink_bridge }} directly."
+  when: clab_deploy_mode == 'host'

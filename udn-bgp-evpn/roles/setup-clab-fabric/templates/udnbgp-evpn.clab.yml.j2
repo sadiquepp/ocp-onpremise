@@ -57,6 +57,14 @@ topology:
   nodes:
     {{ clab_bridge_for_topology }}:
       kind: bridge
+{% if clab_uplink_primary | bool %}
+
+    ## The lab network, as containerlab sees it: virbr0 itself in host mode,
+    ## the in-guest bridge enslaving the containerlab VM's NIC on it in vm
+    ## mode (tasks/uplink.yml).
+    {{ clab_uplink_bridge_for_topology }}:
+      kind: bridge
+{% endif %}
 
     leaf1:
       kind: linux
@@ -65,6 +73,18 @@ topology:
         - leaf1/frr.conf:/etc/frr/frr.conf
         - leaf1/daemons:/etc/frr/daemons
         - leaf1/vtysh.conf:/etc/frr/vtysh.conf
+{% if clab_uplink_primary | bool %}
+      ## A gateway on a stick: a node's packet for the internet comes in eth2
+      ## and goes straight back out of it to {{ lab_network_prefix }}.1. The
+      ## kernel's answer to that is an ICMP redirect telling the node to use
+      ## .1 itself - correct, and exactly what this design does not want. Off
+      ## in 'all' AND 'default': the effective value is the OR of 'all' and
+      ## the interface's own, and eth2 does not exist yet when these are set,
+      ## so it has to inherit a 0.
+      sysctls:
+        net.ipv4.conf.all.send_redirects: 0
+        net.ipv4.conf.default.send_redirects: 0
+{% endif %}
       exec:
         - ip link add lo0 type dummy
         - ip addr add 10.0.0.1/32 dev lo0
@@ -73,6 +93,24 @@ topology:
         - ip addr add {{ clab_fabric_prefix }}.{{ clab_fabric_router_octet }}/{{ clab_fabric_netmask_bits }} dev eth1
         - ip link set eth10 mtu {{ clab_fabric_mtu }} up
         - ip addr add 10.1.0.1/30 dev eth10
+{% if clab_uplink_primary | bool %}
+        ## clab_fabric_uplink: primary. eth2 is leaf1's leg on the LAB network
+        ## ({{ clab_uplink_network }}), the one the nodes' br-ex is on. It makes
+        ## leaf1 the top-of-rack switch of a single-uplink cluster: the nodes'
+        ## BGP peer AND their default gateway, at one address.
+        ##
+        ## MTU {{ clab_uplink_mtu }}, the lab network's, not the fabric's
+        ## {{ clab_fabric_mtu }}: nothing else on that bridge is jumbo.
+        - ip link set eth2 mtu {{ clab_uplink_mtu }} up
+        - ip addr add {{ clab_node_prefix }}.{{ clab_node_router_octet }}/{{ clab_node_netmask_bits }} dev eth2
+        ## Where the nodes' off-subnet traffic goes next: libvirt's NAT, on
+        ## the same network. This REPLACES the container's default route (the
+        ## containerlab management network), which leaf1 has no use for - it
+        ## pulls nothing. Replies come back from {{ lab_network_prefix }}.1
+        ## straight to the node, on-link, not through leaf1; that asymmetry is
+        ## one L2 segment wide and nothing filters on it.
+        - ip route replace default via {{ lab_network_prefix }}.1 dev eth2
+{% endif %}
         ## Underlay reachability to each node's VTEP. The nodes are directly
         ## adjacent on the fabric, but their VTEP addresses live on dummy
         ## interfaces, so leaf1 has to be told the way in. Written from the
@@ -80,7 +118,7 @@ topology:
         ## because the VTEP CR runs in Unmanaged mode - see
         ## roles/setup-udn-bgp/templates/vtep.yaml.j2.
 {% for n in clab_fabric_nodes %}
-        - ip route replace {{ udn_bgp_vtep_prefix }}.{{ ip_list[n.ip_key] }}/32 via {{ clab_fabric_prefix }}.{{ ip_list[n.ip_key] }} dev eth1
+        - ip route replace {{ udn_bgp_vtep_prefix }}.{{ ip_list[n.ip_key] }}/32 via {{ clab_node_prefix }}.{{ ip_list[n.ip_key] }} dev {{ clab_node_if }}
 {% endfor %}
         ## A blackhole for the aggregate so FRR's 'network {{ udn_bgp_vtep_prefix }}.0/24'
         ## has a matching route to originate. Forwarding is done by the /32s
@@ -248,6 +286,11 @@ topology:
 
   links:
     - endpoints: ["leaf1:eth1", "{{ clab_bridge_for_topology }}:leaf1-fab"]
+{% if clab_uplink_primary | bool %}
+    ## leaf1 onto the lab network - the link the nodes' br-ex is at the other
+    ## end of.
+    - endpoints: ["leaf1:eth2", "{{ clab_uplink_bridge_for_topology }}:leaf1-upl"]
+{% endif %}
     - endpoints: ["leaf1:eth10", "spine:eth1"]
     - endpoints: ["leaf2:eth10", "spine:eth2"]
 {% if udn_client_segments | default({}) %}

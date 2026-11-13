@@ -76,8 +76,15 @@
 # weaken it: what it now asserts is that the value STAYS set, which is the
 # property the data path actually needs, and a node that fails it is one where
 # something is zeroing the knob repeatedly rather than once.
+#
+# None of this with clab_fabric_uplink 'primary'. There is no fabric NIC: the
+# uplink is br-ex, which OVN-Kubernetes creates and keeps forwarding itself,
+# and the path is symmetric - the leaf is the node's gateway - so strict
+# reverse-path filtering passes on its own merits. The four tasks below are
+# about an interface that does not exist there.
 - name: Repair forwarding on the fabric NICs before checking it
   ansible.builtin.include_tasks: fabric-forwarding.yml
+  when: not (udn_bgp_uplink_primary | default(false) | bool)
 
 - name: Check the fabric NIC forwards on each node
   ansible.builtin.command:
@@ -122,6 +129,7 @@
   until: udn_bgp_fwd.stdout | default('') is search('^\S+ 1(\s|$)')
   retries: "{{ udn_bgp_fwd_check_retries }}"
   delay: "{{ udn_bgp_fwd_check_delay }}"
+  when: not (udn_bgp_uplink_primary | default(false) | bool)
 
 - name: Fail if a fabric NIC has forwarding disabled
   ansible.builtin.assert:
@@ -160,6 +168,7 @@
   loop: "{{ udn_bgp_fwd.results }}"
   loop_control:
     label: "{{ item.item.ip_key }}"
+  when: not (udn_bgp_uplink_primary | default(false) | bool)
 
 # Strict reverse-path filtering on the fabric NIC drops the request at INPUT,
 # before it is given an output device - so forwarding, the ip rules, the route
@@ -222,6 +231,7 @@
   loop: "{{ udn_bgp_fwd.results }}"
   loop_control:
     label: "{{ item.item.ip_key }}"
+  when: not (udn_bgp_uplink_primary | default(false) | bool)
 
 - name: Show BGP sessions from the border leaf's point of view
   ansible.builtin.command:

@@ -164,6 +164,36 @@
       To build the ISO anyway without a zone, pass -e sno_require_dns=false.
     success_msg: "api.{{ sno_cluster_domain }} -> {{ sno_api_dns.stdout }}"
 
+# Only when the gateway is not libvirt's own address - that is, when
+# clab_fabric_uplink is 'primary' and sno_gateway (vars.yaml) is the fabric's
+# border leaf. The leaf is a container in the containerlab fabric, and a
+# connected install pulls its release payload through it, so it has to answer
+# before the node boots.
+- name: Ping the SNO's default gateway
+  ansible.builtin.command:
+    cmd: "ping -c2 -W2 {{ sno_gateway }}"
+  register: sno_gw_ping
+  changed_when: false
+  failed_when: false
+  when: sno_gateway != lab_network_prefix ~ '.1'
+
+- name: Fail if the default gateway does not answer
+  ansible.builtin.assert:
+    that: sno_gw_ping.rc == 0 or not (sno_require_gateway | default(true) | bool)
+    fail_msg: >-
+      {{ sno_name }}'s default gateway {{ sno_gateway }} does not answer. It
+      is the border leaf's leg on the lab network (clab_fabric_uplink:
+      primary), so the fabric has to be built BEFORE this cluster - the node
+      reaches quay.io through it. From udn-bgp-evpn/:
+        ansible-playbook -i ../inventory/hosts setup_udn_bgp_lab.yaml \
+          --ask-vault-pass --tags fabric -e clab_topology=evpn
+      To build anyway, pass -e sno_require_gateway=false.
+    success_msg: >-
+      {{ ("The default gateway " ~ sno_gateway ~ " answers.")
+         if sno_gw_ping.rc == 0 else
+         ("The default gateway " ~ sno_gateway ~ " does NOT answer - carrying on because sno_require_gateway is false.") }}
+  when: sno_gateway != lab_network_prefix ~ '.1'
+
 - name: Check whether the SNO VM already exists
   ansible.builtin.shell:
     cmd: "virsh dominfo {{ sno_name }} 2>/dev/null | awk '/State/ {print $2}'"

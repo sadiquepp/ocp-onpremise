@@ -37,6 +37,7 @@ purpose that needs a second cluster.
 | File                  | Purpose |
 | --------------------- | ------- |
 | `setup_cluster1.yaml` | Build cluster1 - connected (`hub`) or, with `disconnected_install: true`, disconnected (`hubd`) - plus LVM Storage when `use_lvm_storage: true` |
+| `setup_cluster1_agent.yaml` | Build the same connected cluster1 (`hub`) from an agent ISO instead: six nodes, static addressing, `platform: none` behind the same helper haproxy and DNS names, no new addresses. An alternative to `setup_cluster1.yaml`, not an addition - build one or the other. It exists so the nodes' default gateway can be chosen at install time, which is what puts `br-ex` on the BGP/EVPN fabric ([../udn-bgp-evpn/primary-uplink.md](../udn-bgp-evpn/primary-uplink.md)) |
 | `setup_cluster2.yaml` | Build cluster2 - connected (`hub2`) or disconnected (`hub2d`) - plus LVM Storage when `use_lvm_storage: true` |
 | `shutdown_cluster.yaml` | Stop a cluster's VMs without deleting anything - cluster1 by default, any of the four with `target_hub` / `disconnected_install` |
 | `ansible.cfg`         | Mirrors the root `ansible.cfg` and adds `../roles` to `roles_path` |

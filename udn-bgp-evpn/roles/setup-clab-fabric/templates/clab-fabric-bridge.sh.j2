@@ -67,6 +67,25 @@ ip link set "$BRIDGE" up
 nmcli device set "$NIC" managed no >/dev/null 2>&1 || true
 ip link set "$NIC" mtu "$MTU"
 ip link set "$NIC" up
+{% if clab_bridge_on_lab_network | default(false) | bool %}
+
+# This NIC is on a network that HAS a DHCP server - the lab's own - so
+# NetworkManager may have taken a lease on it before the line above let go of
+# it. A bridge port has no business holding an address, and this one would be
+# a second address for this VM on the network its management NIC is already
+# on.
+ip -4 addr flush dev "$NIC"
+
+# The same trap from the other side. This VM already has an address on this
+# network, on its management NIC, and Linux answers ARP for any local address
+# on any interface by default. So the bridge would answer for the management
+# address too, with its own MAC; whoever learned that one would send the VM's
+# ssh traffic in through the bridge, where strict reverse-path filtering drops
+# it - an intermittent ssh failure to this VM that depends on which reply won.
+# arp_ignore=1: answer only for an address configured on the interface asked,
+# and the bridge has none.
+sysctl -q -w "net.ipv4.conf.${BRIDGE}.arp_ignore=1" "net.ipv4.conf.${NIC}.arp_ignore=1"
+{% endif %}
 
 CURRENT_MASTER=$(ip -o link show "$NIC" | grep -o 'master [^ ]*' | awk '{print $2}' || true)
 if [ "$CURRENT_MASTER" != "$BRIDGE" ]; then

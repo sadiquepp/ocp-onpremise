@@ -1,0 +1,101 @@
+## Installs cluster1 (hub) as a six-node AGENT-BASED cluster: three masters and
+## three workers booted from one agent ISO, every address static, and - when
+## use_lvm_storage is true - LVM Storage on it as its default StorageClass.
+##
+## It is the same cluster setup_cluster1.yaml builds, by a different method,
+## and the two are alternatives - build one or the other:
+##
+##                      setup_cluster1.yaml        setup_cluster1_agent.yaml
+##   method             UPI: bootstrap VM +        agent ISO, no bootstrap VM
+##                      ignition over fw_cfg
+##   node addressing    DHCP reservations          static, in agent-config.yaml
+##   default gateway    whatever libvirt's DHCP    lab_node_gateway (vars.yaml)
+##                      hands out ({{ lab_network_prefix }}.1)
+##   name, zone, IPs, VM names, api/*.apps load balancer, install folder:
+##                      identical. Nothing else in the lab can tell them apart.
+##
+## platform: none, so no API VIP and no ingress VIP - api, api-int and *.apps
+## are the helper's haproxy on ip_list.hublb, exactly as for the UPI hub. This
+## playbook uses no address the UPI hub does not already have.
+##
+## WHY IT EXISTS. With clab_fabric_uplink: primary (vars.yaml) the nodes'
+## default gateway is the BGP/EVPN fabric's border leaf, on the lab network
+## itself, so br-ex is the interface that faces the fabric - no second NIC.
+## A gateway can only be chosen at install time, and only where addressing is
+## static, which the UPI hub's is not. See ../udn-bgp-evpn/primary-uplink.md.
+##
+## It works with clab_fabric_uplink: secondary too: lab_node_gateway is then
+## {{ lab_network_prefix }}.1 and this is simply an agent-based hub.
+##
+## BEFORE RUNNING IT:
+##   - DNS and the load balancer, from the repository root:
+##       ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns,lb --ask-vault-pass
+##   - with clab_fabric_uplink: primary, the FABRIC, from ../udn-bgp-evpn/ -
+##     the nodes pull their release payload through the border leaf:
+##       ansible-playbook -i ../inventory/hosts setup_udn_bgp_lab.yaml \
+##         --ask-vault-pass --tags fabric -e clab_topology=evpn
+##   Pre-flight checks all three and names the command for whichever is missing.
+##
+## Run from inside standard-cluster/ (its ansible.cfg puts the shared ../roles
+## on the role search path):
+##   ansible-playbook -i ../inventory/hosts setup_cluster1_agent.yaml --ask-vault-pass
+##
+## Useful subsets:
+##   --tags hubagentpreflight  the checks only; builds nothing
+##   --tags hubagentimage      rebuild the agent ISO without touching the VMs
+##   --tags hubagentvm         rebuild the VMs from the ISO already built
+##   --tags hubagentwait       just block until an install already running finishes
+##   --tags lvm                just add LVM Storage to a cluster that is up
+##
+## Rebuilding over an existing hub - built either way - needs
+## -e hub_agent_force_reinstall=true, or remove it first with
+## `cleanup.yaml --tags hub` from the repository root.
+##
+## Connected only. The disconnected hub (hubd) is still setup_cluster1.yaml
+## -e disconnected_install=true.
+
+- name: Setting Up Cluster1 (agent-based)
+  hosts: localhost
+  become: true
+  vars_files:
+    - ../vars.yaml
+    - ../vault.yaml
+  vars:
+    hub_kubeconfig: "{{ hub_install_folder }}/auth/kubeconfig"
+  tasks:
+  - name: Install cluster1 from an agent ISO
+    ansible.builtin.import_role:
+      name: setup-hub-cluster-agent
+
+  # The same wait the UPI playbook uses, so day 2 starts from the same state.
+  - name: Wait for ClusterOperators to be healthy before day-2 install
+    ansible.builtin.include_tasks:
+      file: ../roles/setup-hub-cluster/tasks/wait-for-cluster-operators.yml
+      apply:
+        tags: [hubagent, hubagentwait]
+    vars:
+      kubeconfig_path: "{{ hub_kubeconfig }}"
+    when: hub_agent_wait_for_install | default(true) | bool
+    tags: [hubagent, hubagentwait]
+
+  # LVM Storage as part of the build: the cluster comes up with a default
+  # StorageClass (lvms-vg1) on the workers' storage_worker<N>.qcow2 disks.
+  # Off on the Ceph path (use_lvm_storage: false).
+  - ansible.builtin.import_role:
+      name: setup-lvm-storage
+    when:
+      - use_lvm_storage | bool
+      - hub_agent_wait_for_install | default(true) | bool
+    environment:
+      KUBECONFIG: "{{ hub_kubeconfig }}"
+    tags:
+      - lvm
+
+  - name: Next step
+    ansible.builtin.debug:
+      msg: >-
+        cluster1 is up ({{ hub_kubeconfig }}), default gateway
+        {{ lab_node_gateway | default(lab_network_prefix ~ '.1') }}.
+        {{ 'Wire it into the fabric from ../udn-bgp-evpn/: ansible-playbook -i ../inventory/hosts setup_udn_bgp_lab.yaml --ask-vault-pass --tags evpn -e clab_topology=evpn -e udn_bgp_cluster=hub'
+           if (clab_fabric_uplink | default('secondary')) == 'primary' else
+           'To make it a hosted-control-plane hub: cd ../acm && ansible-playbook -i ../inventory/hosts setup_acm.yaml --ask-vault-pass' }}

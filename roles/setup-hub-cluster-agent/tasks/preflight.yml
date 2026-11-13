@@ -1,0 +1,271 @@
+---
+# Everything that can be known before anything is built.
+
+- name: Check for libvirt tooling
+  ansible.builtin.command:
+    cmd: "which virsh qemu-img virt-install"
+  register: hub_agent_virsh
+  changed_when: false
+  failed_when: false
+
+- name: Fail if this is not the libvirt host
+  ansible.builtin.assert:
+    that: hub_agent_virsh.rc == 0
+    fail_msg: >-
+      virsh, qemu-img or virt-install is missing, so this is not the lab's
+      libvirt host. This role builds VMs and must run ON the hypervisor.
+    success_msg: "libvirt tooling is present."
+
+# `agent create image` runs nmstatectl on THIS host to validate every host's
+# networkConfig before it builds anything.
+- name: Check for nmstatectl
+  ansible.builtin.command:
+    cmd: "which nmstatectl"
+  register: hub_agent_nmstatectl
+  changed_when: false
+  failed_when: false
+
+- name: Fail if nmstatectl is missing
+  ansible.builtin.assert:
+    that: hub_agent_nmstatectl.rc == 0
+    fail_msg: >-
+      nmstatectl is not installed on this host. openshift-install validates
+      each node's network configuration with it before it will build the ISO.
+      Install the nmstate package (it is in basic_packages, so
+      setup_bm_host.yaml installs it on a fresh host).
+    success_msg: "nmstatectl is present."
+
+- name: Fail if this is a disconnected run
+  ansible.builtin.assert:
+    that: not (disconnected_install | default(false) | bool)
+    fail_msg: >-
+      disconnected_install is true, and this role only does the connected
+      install. The disconnected hub (hubd) is still built by
+      setup_cluster1.yaml -e disconnected_install=true, the UPI way.
+    success_msg: "Connected install."
+
+- name: Fail if the pull secret is not available
+  ansible.builtin.assert:
+    that:
+      - pull_secret is defined
+      - (pull_secret | trim | length) > 0
+    fail_msg: >-
+      pull_secret is not set. This is a connected install, so the nodes pull
+      their release payload from quay.io and cannot start without it. It lives
+      in vault.yaml - run the playbook with --ask-vault-pass.
+    success_msg: "Pull secret is available."
+
+- name: Work out which ip_list keys this cluster needs
+  ansible.builtin.set_fact:
+    hub_agent_required_keys: >-
+      {{ (hub_agent_nodes | map(attribute='ip_key') | list) + [hub_agent_lb_key] }}
+
+- name: Fail if a node or the load balancer has no address in ip_list
+  ansible.builtin.assert:
+    that: hub_agent_required_keys | reject('in', ip_list) | list | length == 0
+    fail_msg: >-
+      ip_list in vars.yaml has no entry for
+      {{ hub_agent_required_keys | reject('in', ip_list) | list | join(', ') }}.
+      This role reuses the hub's own addresses - master1-3, worker1-3 and
+      hublb - and adds none.
+    success_msg: "Every node and the load balancer have an address in ip_list."
+
+- name: Fail unless there are three masters
+  ansible.builtin.assert:
+    that:
+      - hub_agent_nodes | selectattr('role', 'equalto', 'master') | list | length == 3
+      - hub_agent_nodes | rejectattr('role', 'in', ['master', 'worker']) | list | length == 0
+      - hub_agent_nodes[0].role == 'master'
+    fail_msg: >-
+      hub_agent_nodes must hold exactly three nodes with role master, the
+      first entry among them (it is the rendezvous host), and every other node
+      with role worker. Got
+      {{ hub_agent_nodes | map(attribute='role') | list }}.
+    success_msg: >-
+      {{ hub_agent_nodes | selectattr('role', 'equalto', 'master') | list | length }} masters,
+      {{ hub_agent_nodes | selectattr('role', 'equalto', 'worker') | list | length }} workers.
+
+# The MAC scheme uses the octet's decimal digits as the MAC's last byte,
+# zero-padded, so a node's octet has to fit in two digits. .1 is libvirt.
+- name: Fail if an octet cannot form a valid MAC
+  vars:
+    hub_agent_octets: "{{ hub_agent_nodes | map(attribute='ip_key') | map('extract', ip_list) | map('int') | list }}"
+    hub_agent_bad_octets: >-
+      {{ (hub_agent_octets | select('lt', 2) | list) + (hub_agent_octets | select('gt', 99) | list) }}
+  ansible.builtin.assert:
+    that: hub_agent_bad_octets | length == 0
+    fail_msg: >-
+      {{ hub_agent_bad_octets | join(', ') }} cannot form a MAC. This lab
+      builds MACs as {{ hub_agent_mac_prefix }}:<octet, zero-padded>, so every
+      node's octet has to be between 2 and 99.
+    success_msg: "Every node's octet forms a well-formed MAC."
+
+- name: Read the lab ssh public key
+  ansible.builtin.shell:
+    cmd: "cat {{ hub_agent_ssh_public_key_file }}"
+  register: hub_agent_ssh_out
+  changed_when: false
+
+- name: Record the cluster-wide addressing
+  ansible.builtin.set_fact:
+    hub_agent_lb_ip: "{{ lab_network_prefix }}.{{ ip_list[hub_agent_lb_key] }}"
+    hub_agent_ssh_key: "{{ hub_agent_ssh_out.stdout }}"
+    hub_agent_hosts: []
+
+# One record per node with everything the templates and the VM step need, so
+# neither has to re-derive an address or a MAC - and so they cannot disagree.
+- name: Record each node's addressing
+  ansible.builtin.set_fact:
+    hub_agent_hosts: >-
+      {{ hub_agent_hosts + [{
+           'hostname': item.hostname,
+           'domain': item.domain,
+           'role': item.role,
+           'ip': lab_network_prefix ~ '.' ~ ip_list[item.ip_key],
+           'mac': (hub_agent_mac_prefix ~ ':' ~ ('%02d' | format(ip_list[item.ip_key] | int))) | lower
+         }] }}
+  loop: "{{ hub_agent_nodes }}"
+  loop_control:
+    label: "{{ item.hostname }}"
+
+- name: Record the rendezvous host
+  ansible.builtin.set_fact:
+    hub_agent_rendezvous_ip: "{{ hub_agent_hosts[0].ip }}"
+
+- name: Show the plan
+  ansible.builtin.debug:
+    msg: "{{ hub_agent_plan.splitlines() }}"
+  vars:
+    hub_agent_plan: |-
+      cluster       {{ hub_name }}.{{ base_domain }}  (platform none, agent-based)
+      api, api-int  {{ hub_agent_lb_ip }}  (helper haproxy -> masters)
+      *.apps        {{ hub_agent_lb_ip }}  (helper haproxy -> workers)
+      gateway       {{ hub_agent_gateway }}  {{ '(the border leaf: br-ex faces the fabric)'
+                                                 if hub_agent_gateway != lab_network_prefix ~ '.1'
+                                                 else '(libvirt)' }}
+      resolver      {{ hub_agent_dns_server }}
+      {% for h in hub_agent_hosts %}
+      {{ '%-9s' | format(h.hostname) }} {{ '%-7s' | format(h.role) }} {{ h.ip }}  {{ hub_agent_primary_nic }} {{ h.mac }}  ({{ h.domain }})
+      {% endfor %}
+
+# The installer's `agent wait-for` resolves api.<cluster>.<base_domain> from
+# this host, and every node resolves api, api-int and *.apps before the agent
+# will install it.
+- name: Check that the cluster's API name resolves
+  ansible.builtin.command:
+    cmd: "getent hosts api.{{ hub_domain }}"
+  register: hub_agent_api_dns
+  changed_when: false
+  failed_when: false
+
+- name: Fail if the cluster's DNS zone is not being served
+  ansible.builtin.assert:
+    that: >-
+      not (hub_agent_require_dns | bool)
+      or (hub_agent_api_dns.rc == 0
+          and (hub_agent_api_dns.stdout.split() | first) == hub_agent_lb_ip)
+    fail_msg: |-
+      {% if hub_agent_api_dns.rc != 0 %}
+      api.{{ hub_domain }} does not resolve.
+      {% else %}
+      api.{{ hub_domain }} resolves to {{ hub_agent_api_dns.stdout.split() | first }},
+      not to the helper's load balancer {{ hub_agent_lb_ip }} - a stale /etc/hosts entry or zone.
+      {% endif %}
+
+      The agent checks api, api-int and *.apps from every node before it
+      installs anything, so this stops here rather than an hour in. Render the
+      zone and the load balancer first, from the repository root:
+        ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags dns,lb \
+          --ask-vault-pass
+
+      To build the ISO anyway, pass -e hub_agent_require_dns=false.
+    success_msg: "api.{{ hub_domain }} -> {{ hub_agent_api_dns.stdout }}"
+
+# haproxy binds its frontends whether or not a backend is up, so a refused
+# connection here means the helper or its haproxy is down - not that the
+# cluster does not exist yet.
+- name: Check the helper's load balancer is listening for the API
+  ansible.builtin.wait_for:
+    host: "{{ hub_agent_lb_ip }}"
+    port: 6443
+    timeout: 5
+  register: hub_agent_lb
+  failed_when: false
+
+- name: Fail if the load balancer is not there
+  ansible.builtin.assert:
+    that: not (hub_agent_require_lb | bool) or (hub_agent_lb.state | default('')) == 'started'
+    fail_msg: >-
+      Nothing is listening on {{ hub_agent_lb_ip }}:6443. With platform none
+      there is no API VIP: api and api-int ARE that address, held by the
+      helper's haproxy. Bring it up first, from the repository root:
+        ansible-playbook -i inventory/hosts setup_bm_host.yaml --tags lb --ask-vault-pass
+      To build anyway, pass -e hub_agent_require_lb=false.
+    success_msg: >-
+      {{ ("The helper's haproxy is listening on " ~ hub_agent_lb_ip ~ ":6443.")
+         if (hub_agent_lb.state | default('')) == 'started' else
+         ("NOT listening on " ~ hub_agent_lb_ip ~ ":6443 - carrying on because hub_agent_require_lb is false.") }}
+
+# Only when the gateway is not libvirt's own address. Then it is the border
+# leaf, a container in the containerlab fabric, and it has to exist before the
+# nodes boot: a connected install pulls its release payload through it.
+- name: Ping the nodes' default gateway
+  ansible.builtin.command:
+    cmd: "ping -c2 -W2 {{ hub_agent_gateway }}"
+  register: hub_agent_gw_ping
+  changed_when: false
+  failed_when: false
+  when: hub_agent_gateway != lab_network_prefix ~ '.1'
+
+- name: Fail if the default gateway does not answer
+  ansible.builtin.assert:
+    that: not (hub_agent_require_gateway | bool) or hub_agent_gw_ping.rc == 0
+    fail_msg: >-
+      The nodes' default gateway {{ hub_agent_gateway }} does not answer.
+      clab_fabric_uplink is '{{ clab_fabric_uplink | default('secondary') }}',
+      so that address is the border leaf's leg on the lab network, and the
+      fabric has to be built BEFORE this cluster: the nodes reach quay.io
+      through it. From udn-bgp-evpn/:
+        ansible-playbook -i ../inventory/hosts setup_udn_bgp_lab.yaml \
+          --ask-vault-pass --tags fabric -e clab_topology=evpn
+      To build anyway, pass -e hub_agent_require_gateway=false.
+    success_msg: >-
+      {{ ("The default gateway " ~ hub_agent_gateway ~ " answers.")
+         if hub_agent_gw_ping.rc == 0 else
+         ("The default gateway " ~ hub_agent_gateway ~ " does NOT answer - carrying on because hub_agent_require_gateway is false.") }}
+  when: hub_agent_gateway != lab_network_prefix ~ '.1'
+
+- name: Check whether any of the cluster's VMs already exist
+  ansible.builtin.shell:
+    cmd: "virsh dominfo {{ item.domain }} 2>/dev/null | awk '/State/ {print $2}'"
+  register: hub_agent_vm_state
+  changed_when: false
+  loop: "{{ hub_agent_hosts }}"
+  loop_control:
+    label: "{{ item.domain }}"
+
+- name: Record which VMs already exist
+  ansible.builtin.set_fact:
+    hub_agent_existing_vms: >-
+      {{ hub_agent_vm_state.results | selectattr('stdout', '!=', '')
+         | map(attribute='item.domain') | list }}
+
+# These are the UPI hub's domain names too, on purpose - it is the same
+# cluster. So a hub built either way is refused here unless asked for.
+#
+# Only when this run builds something. --tags hubagentwait waits on the VMs
+# that are already there.
+- name: Fail rather than rebuild over an existing hub
+  when: ansible_run_tags | intersect(['all', 'hubagent', 'hubagentimage', 'hubagentvm']) | length > 0
+  ansible.builtin.assert:
+    that: hub_agent_existing_vms | length == 0 or (hub_agent_force_reinstall | bool)
+    fail_msg: >-
+      libvirt domains already exist: {{ hub_agent_existing_vms | join(', ') }}.
+      Rebuilding wipes the generated state in {{ hub_install_folder }}, which
+      holds auth/kubeconfig - the only copy of this cluster's admin
+      credentials. Remove the cluster first, from the repository root:
+        ansible-playbook -i inventory/hosts cleanup.yaml --tags hub
+      or rebuild in place with -e hub_agent_force_reinstall=true.
+    success_msg: >-
+      {% if hub_agent_existing_vms %}Rebuilding {{ hub_agent_existing_vms | join(', ') }} as requested.
+      {% else %}No existing hub VMs; building fresh.{% endif %}

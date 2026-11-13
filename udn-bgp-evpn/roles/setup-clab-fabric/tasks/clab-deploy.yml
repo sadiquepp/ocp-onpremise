@@ -9,6 +9,10 @@
   ansible.builtin.set_fact:
     clab_bridge_for_topology: >-
       {{ clab_guest_bridge if clab_deploy_mode == 'vm' else clab_fabric_bridge }}
+    # The lab network's bridge as this host sees it, for leaf1's leg on it
+    # (clab_fabric_uplink: primary). Unused, and harmless, otherwise.
+    clab_uplink_bridge_for_topology: >-
+      {{ clab_uplink_guest_bridge if clab_deploy_mode == 'vm' else clab_uplink_bridge }}
 
 - name: Create the lab directory
   ansible.builtin.file:

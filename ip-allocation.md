@@ -100,7 +100,8 @@ rebuild.
 | `.35` | VM | hub (hub1) worker2 | `ip_list.worker2` |  |
 | `.36` | VM | hub (hub1) worker3 | `ip_list.worker3` |  |
 | `.37` | VM | hcp-cluster2-d worker3 | `ip_list.c2dworker3` |  |
-| `.38`–`.39` |  |  |  |  |
+| `.38` | address | leaf1's leg on the lab network: the cluster nodes' default gateway and BGP peer when `clab_fabric_uplink: primary` ([primary-uplink.md](udn-bgp-evpn/primary-uplink.md)). A container interface, not a VM: no MAC of the lab's scheme, no DHCP reservation. Unused otherwise | `ip_list.fabric_gw` |  |
+| `.39` |  |  |  |  |
 | `.40` | VM | containerlab VM (UDN/BGP/EVPN fabric: leaf1, spine, leaf2) | `ip_list.clab` |  |
 | `.41` | VM | hcp-cluster1 worker1 | `ip_list.c1worker1` |  |
 | `.42` | VM | hcp-cluster1 worker2 | `ip_list.c1worker2` |  |

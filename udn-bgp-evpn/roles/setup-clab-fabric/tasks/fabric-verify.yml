@@ -104,7 +104,7 @@
   until: >-
     clab_leaf1_bgp.rc == 0 and
     (clab_fabric_nodes | map(attribute='ip_key') | map('extract', ip_list)
-      | map('string') | map('regex_replace', '^', clab_fabric_prefix ~ '.')
+      | map('string') | map('regex_replace', '^', clab_node_prefix ~ '.')
       | reject('in', clab_leaf1_bgp.stdout) | list | length) == 0
   retries: "{{ clab_leaf1_bgp_retries }}"
   delay: "{{ clab_leaf1_bgp_delay }}"
@@ -113,10 +113,10 @@
   ansible.builtin.assert:
     that:
       - clab_leaf1_bgp.rc == 0
-      - (clab_fabric_prefix ~ '.' ~ ip_list[item.ip_key]) in clab_leaf1_bgp.stdout
+      - (clab_node_prefix ~ '.' ~ ip_list[item.ip_key]) in clab_leaf1_bgp.stdout
     fail_msg: >-
       leaf1 has no BGP neighbour for
-      {{ clab_fabric_prefix }}.{{ ip_list[item.ip_key] }} ({{ item.ip_key }}).
+      {{ clab_node_prefix }}.{{ ip_list[item.ip_key] }} ({{ item.ip_key }}).
       leaf1 reports: {{ clab_leaf1_bgp.stdout | default(clab_leaf1_bgp.stderr, true) }}
       -- "Configuration file[/etc/frr/frr.conf] processing failure: N" means
       the FRR daemons are not running: vtysh starts anyway, cannot push the
@@ -128,17 +128,78 @@
       {{ clab_leaf1_bgp_retries | int * clab_leaf1_bgp_delay | int }}s, so a
       node still missing here is not a slow start. Two commands separate the
       remaining causes. `docker exec clab-{{ clab_lab_name }}-leaf1 vtysh -c
-      'show running-config' | grep "neighbor {{ clab_fabric_prefix }}"` - if a
+      'show running-config' | grep "neighbor {{ clab_node_prefix }}"` - if a
       node is absent there, FRR never accepted its lines, and
       `docker logs clab-{{ clab_lab_name }}-leaf1 | tail -40` says why. If the
       lines ARE in the running config but not in the summary, bgpd holds the
       configuration and the session itself is the problem.
     success_msg: >-
-      leaf1 is peering with {{ clab_fabric_prefix }}.{{ ip_list[item.ip_key] }}
+      leaf1 is peering with {{ clab_node_prefix }}.{{ ip_list[item.ip_key] }}
       ({{ item.ip_key }}).
   loop: "{{ clab_fabric_nodes }}"
   loop_control:
     label: "{{ item.ip_key }}"
+
+# clab_fabric_uplink 'primary': leaf1's leg on the lab network. Three things,
+# each of which fails differently and none of which the BGP summary shows:
+# the address, the default route the nodes' traffic leaves by, and that the
+# lab host actually answers leaf1 across the bridge chain.
+- name: Read the border leaf's lab-network interface
+  ansible.builtin.shell:
+    cmd: |
+      docker exec clab-{{ clab_lab_name }}-leaf1 ip -o -4 addr show dev eth2
+      docker exec clab-{{ clab_lab_name }}-leaf1 ip -4 route show default
+  register: clab_leaf1_uplink
+  changed_when: false
+  failed_when: false
+  when: clab_uplink_primary | bool
+
+- name: Fail if the border leaf is not the nodes' gateway
+  ansible.builtin.assert:
+    that:
+      - clab_leaf1_uplink.rc == 0
+      - (clab_node_prefix ~ '.' ~ clab_node_router_octet ~ '/') in clab_leaf1_uplink.stdout
+      - ('default via ' ~ lab_network_prefix ~ '.1 dev eth2') in clab_leaf1_uplink.stdout
+    fail_msg: >-
+      leaf1 should hold {{ clab_node_prefix }}.{{ clab_node_router_octet }} on
+      eth2 and route by default via {{ lab_network_prefix }}.1 on it - that is
+      what makes it the nodes' gateway (clab_fabric_uplink: primary). It
+      reports: {{ clab_leaf1_uplink.stdout | default(clab_leaf1_uplink.stderr, true) }}
+      -- No eth2 at all means the topology was rendered without the uplink
+      (was the fabric deployed before the switch was flipped? redeploy with
+      --tags clabdeploy), or the container restarted and lost its veths.
+    success_msg: >-
+      leaf1 holds {{ clab_node_prefix }}.{{ clab_node_router_octet }} on eth2
+      and forwards by {{ lab_network_prefix }}.1.
+  when: clab_uplink_primary | bool
+
+- name: Ping the lab host from the border leaf
+  ansible.builtin.command:
+    cmd: >-
+      docker exec clab-{{ clab_lab_name }}-leaf1
+      ping -c2 -W2 -I eth2 {{ lab_network_prefix }}.1
+  register: clab_leaf1_uplink_ping
+  changed_when: false
+  failed_when: false
+  when: clab_uplink_primary | bool
+
+- name: Fail if the border leaf cannot reach the lab network
+  ansible.builtin.assert:
+    that: clab_leaf1_uplink_ping.rc == 0
+    fail_msg: >-
+      leaf1 has its address on eth2 and cannot reach
+      {{ lab_network_prefix }}.1 through it, so it is not on the lab network
+      and the nodes could neither peer with it nor route by it.
+      {{ ('In vm mode the path is leaf1:eth2 -> ' ~ clab_uplink_guest_bridge
+          ~ ' -> the VM NIC with MAC ' ~ clab_uplink_mac_prefix ~ ':' ~ ip_list.clab
+          ~ ' -> ' ~ clab_uplink_bridge ~ '. On the VM: `bridge link show` should list both that'
+          ~ ' NIC and leaf1-upl under ' ~ clab_uplink_guest_bridge
+          ~ '; on the lab host: `virsh domiflist ' ~ clab_vm_name ~ '`.')
+         if clab_deploy_mode == 'vm' else
+         ('In host mode leaf1-upl should be a port of ' ~ clab_uplink_bridge
+          ~ ': `bridge link show`.') }}
+    success_msg: "leaf1 reaches {{ lab_network_prefix }}.1 over the lab network."
+  when: clab_uplink_primary | bool
 
 - name: Read the fabric bridge's ports
   ansible.builtin.command:
