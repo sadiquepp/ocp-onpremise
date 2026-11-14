@@ -30,7 +30,8 @@ the sections for that path with the test and expected output after each one.
 faces the fabric instead of a second NIC. One switch in `vars.yaml`
 (`clab_fabric_uplink: primary`), EVPN only, with the hub built from an agent
 ISO so the border leaf can be the nodes' default gateway. Everything else in
-this README describes the default, second-NIC wiring.
+this README describes the default, second-NIC wiring. The workshop for it is
+**[workshop-primary-uplink.md](workshop-primary-uplink.md)**.
 
 **[real-fabric.md](real-fabric.md)** is for the other case: no containerlab at
 all, a real fabric the network team has already configured for the tenants.

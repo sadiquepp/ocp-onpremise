@@ -185,30 +185,31 @@ scripts/udn-xcluster-curl.sh <hub-kubeconfig> <sno-kubeconfig>
 
 ## What has and has not been tested
 
+**Run on a live lab with this wiring:** both clusters built and wired in, then
+`scripts/udn-web-demo.sh --proxy` and `scripts/udn-xcluster-curl.sh`. Both
+were clean: all nine ingress hostnames returned their own tenant's page,
+green and purple crossed between the clusters bridged, violet crossed routed,
+and no tenant reached another. So the agent-based hub behind the helper's
+haproxy, leaf1 as the nodes' gateway, and VXLAN arriving on `br-ex` for a
+`vtep0` address all work.
+
 Checked without a lab: every playbook passes a syntax check, every edited
 task file parses, and the templates were rendered in both modes. With the
 switch at `secondary` the fabric's rendered `frr.conf`, containerlab topology
 and bridge script are byte-identical to what they were before this page
 existed.
 
-Not checked - nothing here has run against real clusters:
+Not yet confirmed on a live lab:
 
-- **VXLAN arriving on `br-ex`.** A tunnel packet addressed to the node's
-  `vtep0` address now enters through the OVS bridge rather than a plain
-  kernel NIC. BGP over `br-ex` is the ordinary case; VXLAN to an address that
-  is not the node's own IP is the part to watch. A session that is
-  Established with `show evpn mac vni 400` empty on leaf2, or populated with
-  no traffic passing, points here: `ovs-ofctl dump-flows br-ex` on the node,
-  and `tcpdump -ni br-ex udp port 4789`.
-- **The agent install as `platform: none` behind the helper haproxy.** The
-  haproxy backends still list the UPI bootstrap address, which stays down and
-  is harmless; the rendezvous host serves the bootstrap API on a master's own
-  address.
-- **The uplink bridge in the containerlab VM**, including the ARP and DHCP
-  handling described above.
+- **The workshop's day 0.** `./build-lab.sh --workshop` on this wiring - the
+  `prep` step and the `check-hub` / `check-sno` steps in particular.
+- **Three expected outputs in
+  [workshop-primary-uplink.md](workshop-primary-uplink.md)** that were
+  written from the design rather than read off a lab: X5 (each VXLAN packet
+  seen twice on `virbr0`), X6 (no ICMP redirect from leaf1, so no `cache`
+  entry on the node) and X9 (six hub rows back at `NoNeg`).
+- **Live migration (Lab 12)** on this wiring.
 - **MTU.** A pod's 1400 bytes plus 50 of VXLAN fits in 1500. An external
   endpoint behind leaf2 sits on a 9000-byte link and can send a datagram that
   does not fit; TCP is clamped by the pod's MSS and is unaffected.
-- **The workshop.** `workshop.env` renders the right `LEAF1_IP` and
-  `FABRIC_CIDR` in this mode, but `workshop.md` describes the second-NIC
-  wiring throughout and has not been revised.
+- **The uplink bridge after a reboot of the containerlab VM.**

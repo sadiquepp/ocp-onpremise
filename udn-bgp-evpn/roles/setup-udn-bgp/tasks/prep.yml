@@ -127,7 +127,11 @@
   ansible.builtin.debug:
     msg: >-
       Cluster '{{ udn_bgp_cluster }}' is ready for the workshop: NMState is
-      installed, the fabric NICs are addressed and forwarding
+      installed,
+      {{ 'br-ex is the uplink to the fabric (no fabric NIC to address)'
+         if (udn_bgp_uplink_primary | default(false) | bool)
+         else 'the fabric NICs are addressed and forwarding' }}
       {{ '- and OpenShift Virtualization is Available' if udn_bgp_cluster in udn_workshop_cnv_clusters else '' }}.
       BGP is NOT enabled yet - that is Lab 1. `source {{ udn_workshop_env_file }}`
-      and continue in udn-bgp-evpn/workshop.md.
+      and continue in udn-bgp-evpn/{{ 'workshop-primary-uplink.md'
+         if (udn_bgp_uplink_primary | default(false) | bool) else 'workshop.md' }}.

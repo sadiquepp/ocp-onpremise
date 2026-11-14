@@ -220,8 +220,9 @@ list_steps() {
              Verified against the published checksum before it is moved
              into place, so a truncated download never becomes the image
 EOF
-    printf '\n  this run (--%s%s%s): %s\n' "$MODE" "$( (( WORKSHOP )) && echo ' --workshop')" \
-           "$( (( SNO2 )) && echo ', with sno2')" "${STEPS[*]}"
+    printf '\n  this run (--%s%s%s%s): %s\n' "$MODE" "$( (( WORKSHOP )) && echo ' --workshop')" \
+           "$( (( SNO2 )) && echo ', with sno2')" \
+           "$( [[ "$UPLINK" == "primary" ]] && echo ', br-ex uplink')" "${STEPS[*]}"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -333,7 +334,8 @@ if uplink_from_vars; then
     HUB_PLAYBOOK="../standard-cluster/setup_cluster1_agent.yaml"
     if [[ "$MODE" != "evpn" ]]; then
         echo "clab_fabric_uplink is 'primary' (br-ex faces the fabric), which is EVPN only." >&2
-        echo "Run without --$MODE, or set clab_fabric_uplink: secondary in vars.yaml." >&2
+        echo "Run without --$MODE, or set clab_fabric_uplink: secondary where it is set" >&2
+        echo "(vars.yaml, or this host's vars-metal.yaml) and rebuild." >&2
         exit 1
     fi
     # Swap the two steps where they stand, so the workshop's shorter list and

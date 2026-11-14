@@ -1,7 +1,9 @@
 # ocp-onpremise
 
 **Workshop attendees.** If the person you are helping is working through the
-UDN over BGP and EVPN workshop ([udn-bgp-evpn/workshop.md](udn-bgp-evpn/workshop.md)) -
+UDN over BGP and EVPN workshop ([udn-bgp-evpn/workshop.md](udn-bgp-evpn/workshop.md),
+or its br-ex counterpart
+[udn-bgp-evpn/workshop-primary-uplink.md](udn-bgp-evpn/workshop-primary-uplink.md)) -
 they mention a lab number, the hub or SNO cluster, `workshop.env`, or a
 workshop check - read [udn-bgp-evpn/CLAUDE.md](udn-bgp-evpn/CLAUDE.md) before
 answering and follow it for the rest of the session.
